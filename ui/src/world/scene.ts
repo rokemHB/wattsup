@@ -382,8 +382,8 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1)
         "#include <common>\nuniform sampler2D rockMap;\nuniform sampler2D scrubMap;\nuniform float detailAmount;\nuniform float rockScale;\nuniform float scrubScale;\nuniform vec3 rockMean;\nuniform vec3 scrubMean;\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;",
       )
       .replace(
-        "#include <map_fragment>",
-        `#include <map_fragment>
+        "#include <color_fragment>",
+        `#include <color_fragment>
 {
   // The photo carries its own shadows and glare: lift the shadows so our sun
   // does not darken them twice, take their blue cast out, and tame the glare
