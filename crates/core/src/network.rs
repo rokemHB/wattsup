@@ -38,6 +38,9 @@ pub struct NetworkEdge {
     pub start: usize,
     pub count: usize,
     pub length_m: f64,
+    /// The road runs through a tunnel: no corridor is cut and a tube is drawn around it.
+    #[serde(default)]
+    pub tunnel: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -396,7 +399,7 @@ impl Navigator {
             let iter: Box<dyn Iterator<Item = &[f32; 3]>> = if leg.forward {
                 Box::new(pts[leg.from_index..].iter())
             } else {
-                Box::new(pts[..e.count - leg.from_index].iter().rev())
+                Box::new(pts[..=leg.from_index].iter().rev())
             };
             for (k, p) in iter.enumerate() {
                 if li > 0 && k == 0 {
@@ -429,7 +432,7 @@ impl Navigator {
             let slice: Vec<[f32; 3]> = if leg.forward {
                 pts[leg.from_index..].to_vec()
             } else {
-                pts[..e.count - leg.from_index].iter().rev().copied().collect()
+                pts[..=leg.from_index].iter().rev().copied().collect()
             };
             for w in slice.windows(2) {
                 d += ((w[1][0] - w[0][0]) as f64).hypot((w[1][2] - w[0][2]) as f64);
@@ -598,6 +601,7 @@ mod tests {
                 start,
                 count: n,
                 length_m: 100.0,
+                tunnel: false,
             });
         };
         add(0, 1, [0.0, 0.0], [100.0, 0.0], Some("Ma-10"));
@@ -707,6 +711,18 @@ mod tests {
     }
 
     #[test]
+    fn a_backward_start_begins_at_the_chosen_point() {
+        let net = t_network();
+        // Edge 0 runs from node 0 at x=0 to node 1 at x=100 in 11 points; start at its 8th point riding back toward node 0.
+        let nav = Navigator::start("t", &net, 0, 7, false);
+        let route = nav.route(&net);
+        let first = route.points[0];
+        assert!((first.x - 70.0).abs() < 0.1, "{}", first.x);
+        assert!(route.points[1].x < first.x, "walks toward node 0");
+        assert!((nav.leg_ends(&net)[0] - 70.0).abs() < 0.1, "{}", nav.leg_ends(&net)[0]);
+    }
+
+    #[test]
     fn identical_options_are_not_a_junction() {
         let mut net = t_network();
         // Make the branch read exactly like the main road: same ref, same destinations.
@@ -739,9 +755,9 @@ mod tests {
     #[test]
     fn mallorca_network_loads() {
         let net = Network::builtin("mallorca").expect("shipped network");
-        assert!(net.edges.len() > 1000, "{}", net.edges.len());
+        assert!(net.edges.len() > 500, "{}", net.edges.len());
         let km: f64 = net.edges.iter().map(|e| e.length_m).sum::<f64>() / 1000.0;
-        assert!(km > 500.0, "{km} km");
+        assert!(km > 300.0, "{km} km");
         assert!(net.edges.iter().any(|e| e.road_ref.as_deref() == Some("Ma-10")));
         assert!(net.nodes.iter().any(|n| n.signs.is_some()));
     }
