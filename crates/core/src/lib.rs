@@ -8,3 +8,4 @@ pub mod gearing;
 pub mod physics;
 pub mod protocol;
 pub mod resistance;
+pub mod session;
