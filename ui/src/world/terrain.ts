@@ -8,6 +8,15 @@ export interface Grid {
   z0: number;
   spacing: number;
   data: Float32Array;
+  /** Aerial imagery, one image per block of the grid between the given vertex-index edges. */
+  ortho?: Ortho;
+}
+
+export interface Ortho {
+  rowEdges: number[];
+  colEdges: number[];
+  size: number;
+  images: ImageBitmap[][];
 }
 
 export interface WorldData {
@@ -25,6 +34,13 @@ interface GridMeta {
   x0: number;
   z0: number;
   spacing: number;
+  ortho?: { rowEdges: number[]; colEdges: number[]; size: number; files: string[][] };
+}
+
+async function loadImage(url: string): Promise<ImageBitmap> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  return createImageBitmap(await res.blob(), { colorSpaceConversion: "none" });
 }
 
 async function loadGrid(meta: GridMeta): Promise<Grid> {
@@ -32,7 +48,53 @@ async function loadGrid(meta: GridMeta): Promise<Grid> {
   if (!res.ok) throw new Error(`${meta.file}: ${res.status}`);
   const data = new Float32Array(await res.arrayBuffer());
   if (data.length !== meta.cols * meta.rows) throw new Error(`${meta.file}: ${data.length} samples, expected ${meta.cols * meta.rows}`);
-  return { ...meta, data };
+  const { ortho: o, ...rest } = meta;
+  const grid: Grid = { ...rest, data };
+  if (o) {
+    const images = await Promise.all(o.files.map((row) => Promise.all(row.map(loadImage))));
+    grid.ortho = { rowEdges: o.rowEdges, colEdges: o.colEdges, size: o.size, images };
+  }
+  return grid;
+}
+
+/** Reads colours out of a grid's imagery at world positions, through small sampling canvases. */
+export class OrthoSampler {
+  private pixels: { data: Uint8ClampedArray; size: number }[][] = [];
+  constructor(
+    private g: Grid,
+    private o: Ortho,
+    sampleSize = 512,
+  ) {
+    this.pixels = o.images.map((row) =>
+      row.map((img) => {
+        const c = document.createElement("canvas");
+        c.width = c.height = sampleSize;
+        const ctx = c.getContext("2d", { willReadFrequently: true })!;
+        ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
+        return { data: ctx.getImageData(0, 0, sampleSize, sampleSize).data, size: sampleSize };
+      }),
+    );
+  }
+
+  /** RGB in 0..1, or null outside the imagery. */
+  colorAt(x: number, z: number): [number, number, number] | null {
+    const g = this.g;
+    const fx = (x - g.x0) / g.spacing;
+    const fz = (z - g.z0) / g.spacing;
+    const { rowEdges, colEdges } = this.o;
+    if (fx < 0 || fz < 0 || fx > colEdges[colEdges.length - 1] || fz > rowEdges[rowEdges.length - 1]) return null;
+    let br = 0;
+    while (br < rowEdges.length - 2 && fz > rowEdges[br + 1]) br++;
+    let bc = 0;
+    while (bc < colEdges.length - 2 && fx > colEdges[bc + 1]) bc++;
+    const { data, size } = this.pixels[br][bc];
+    const u = (fx - colEdges[bc]) / (colEdges[bc + 1] - colEdges[bc]);
+    const v = (fz - rowEdges[br]) / (rowEdges[br + 1] - rowEdges[br]);
+    const px = Math.min(size - 1, Math.max(0, Math.floor(u * size)));
+    const py = Math.min(size - 1, Math.max(0, Math.floor(v * size)));
+    const i = (py * size + px) * 4;
+    return [data[i] / 255, data[i + 1] / 255, data[i + 2] / 255];
+  }
 }
 
 export async function loadWorld(id: string): Promise<WorldData> {

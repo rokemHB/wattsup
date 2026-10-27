@@ -41,6 +41,9 @@ export class World {
     this.sampler = new RouteSampler(route);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
+    this.renderer.debug.onShaderError = (gl, _program, vs, fs) => {
+      console.warn(`shader error: vertex: ${gl.getShaderInfoLog(vs)} fragment: ${gl.getShaderInfoLog(fs)}`);
+    };
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -111,6 +114,23 @@ export class World {
 
   stop() {
     this.running = false;
+  }
+
+  /** Raises `pos` until it is above the ground and sees `eye` without terrain in between. */
+  private clearTerrain(pos: THREE.Vector3, eye: THREE.Vector3) {
+    for (let pass = 0; pass < 3; pass++) {
+      let lift = Math.max(0, this.statics.heightAt(pos.x, pos.z) + 1.2 - pos.y);
+      for (let t = 0.12; t < 1; t += 0.08) {
+        const px = eye.x + (pos.x - eye.x) * t;
+        const pz = eye.z + (pos.z - eye.z) * t;
+        const py = eye.y + (pos.y - eye.y) * t;
+        const need = this.statics.heightAt(px, pz) + 1.0 - py;
+        // A blockage at fraction t needs the camera end raised by need / t.
+        if (need > 0) lift = Math.max(lift, need / t);
+      }
+      if (lift <= 0.01) return;
+      pos.y += lift;
+    }
   }
 
   /** Every two seconds: lower the render scale when frames are slow, raise it when there is headroom. */
@@ -190,22 +210,12 @@ export class World {
         wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-9.5)).add(up.clone().multiplyScalar(3.4));
         wantLook = rider.clone().add(this.heading.clone().multiplyScalar(8)).add(up.clone().multiplyScalar(1.1));
     }
-    // Keep the camera above the ground, and keep the line of sight to the
-    // rider clear of the terrain: on a road cut into a slope the ground
-    // between them can rise well above both.
-    const ground = this.statics.heightAt(wantPos.x, wantPos.z) + 1.2;
-    if (wantPos.y < ground) wantPos.y = ground;
+    // Keep the camera above the ground and its line of sight to the rider
+    // clear of the terrain: on a road cut into a slope the ground between
+    // them can rise well above both. Applied to the target and again to the
+    // smoothed position, which lags behind and would otherwise dip underground.
     const eye = rider.clone().add(up.clone().multiplyScalar(1.2));
-    let lift = 0;
-    for (let t = 0.15; t < 1; t += 0.1) {
-      const px = eye.x + (wantPos.x - eye.x) * t;
-      const pz = eye.z + (wantPos.z - eye.z) * t;
-      const py = eye.y + (wantPos.y - eye.y) * t;
-      const need = this.statics.heightAt(px, pz) + 1.0 - py;
-      // A blockage at fraction t needs the camera end raised by need / t.
-      if (need > 0) lift = Math.max(lift, need / t);
-    }
-    wantPos.y += lift;
+    this.clearTerrain(wantPos, eye);
     const k = Math.min(1, dt * 5);
     if (this.camPos.lengthSq() === 0) {
       this.camPos.copy(wantPos);
@@ -213,6 +223,7 @@ export class World {
     }
     this.camPos.lerp(wantPos, k);
     this.camLook.lerp(wantLook, k);
+    this.clearTerrain(this.camPos, eye);
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);
 

@@ -1,4 +1,4 @@
-// The milestone-1 debug screen: live values, gearing, mode, devices, log.
+// The ride screen (3D world + HUD) and the debug drawer: live values, gearing, mode, devices, log.
 import { api, insideTauri } from "./api";
 import { describeCommand, distance, duration, isTypingTarget, KIND_LABEL, num, shiftForKey, stateLabel } from "./format";
 import { Hud } from "./hud";

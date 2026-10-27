@@ -6,11 +6,14 @@ Inputs:
   --dem       Copernicus GLO-30 COG GeoTIFF covering the wide area (1 arcsec, pixel-is-point)
   --dem-fine  optional finer GeoTIFF in EPSG:4326 for the route and the near grid, e.g.
               Spain's IGN 5 m model from the IDEE WCS (see README)
+  --ortho     also fetch aerial imagery (Spain's PNOA through the IGN WMTS) as
+              textures aligned to the terrain grids
 Outputs (in the repo):
-  crates/core/routes/<id>.json      route for the Rust core (distance, x, y, z every 5 m)
-  ui/public/worlds/<id>.json        world metadata (origin, grids)
-  ui/public/worlds/<id>-near.bin    float32 heightmap, 15 m spacing, around the route
-  ui/public/worlds/<id>-far.bin     float32 heightmap, 150 m spacing, wide area
+  crates/core/routes/<id>.json          route for the Rust core (distance, x, y, z every 5 m)
+  ui/public/worlds/<id>.json            world metadata (origin, grids, textures)
+  ui/public/worlds/<id>-near.bin        float32 heightmap, 10 m spacing, around the route
+  ui/public/worlds/<id>-far.bin         float32 heightmap, 150 m spacing, wide area
+  ui/public/worlds/<id>/ortho-*.jpg     orthophoto textures (with --ortho)
 
 Local frame: x east, z south (so +x/+z is a right-handed frame with y up), metres,
 origin at the route's bounding-box centre. Elevations are metres above sea level.
@@ -19,9 +22,12 @@ Data: © OpenStreetMap contributors (ODbL); Copernicus DEM © ESA / Airbus (free
 """
 import argparse
 import heapq
+import io
 import json
 import math
 import struct
+import time
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -149,6 +155,62 @@ def chain_ways(elements, dem, start_lowest=True, cut_at_top=False):
     return [nodes[n] for n in path], elev[start], dem.sample(*nodes[path[-1]])
 
 
+WMTS = (
+    "https://www.ign.es/wmts/pnoa-ma?service=WMTS&request=GetTile&version=1.0.0&layer=OI.OrthoimageCoverage"
+    "&style=default&format=image/jpeg&tilematrixset=GoogleMapsCompatible&tilematrix={z}&tilerow={y}&tilecol={x}"
+)
+TILE = 256
+
+
+def mercator_tile(lat, lon, z):
+    """Fractional Web Mercator tile coordinates."""
+    n = 2**z
+    x = (lon + 180.0) / 360.0 * n
+    phi = math.radians(lat)
+    y = (1.0 - math.log(math.tan(phi) + 1.0 / math.cos(phi)) / math.pi) / 2.0 * n
+    return x, y
+
+
+class Ortho:
+    """Aerial imagery from a Web Mercator tile service, cut to geographic boxes."""
+
+    def __init__(self, cache):
+        self.cache = Path(cache)
+        self.cache.mkdir(parents=True, exist_ok=True)
+
+    def tile(self, z, x, y):
+        from PIL import Image
+
+        f = self.cache / f"{z}_{x}_{y}.jpg"
+        if not f.exists():
+            req = urllib.request.Request(WMTS.format(z=z, x=x, y=y), headers={"User-Agent": "WattsUp route builder"})
+            for attempt in range(10):
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as r:
+                        f.write_bytes(r.read())
+                    break
+                except Exception:  # noqa: BLE001  (the IGN tile server answers 502 now and then)
+                    if attempt == 9:
+                        raise
+                    time.sleep(min(30.0, 1.5 * 2**attempt))
+            time.sleep(0.05)
+        return Image.open(f).convert("RGB")
+
+    def image(self, lat_min, lat_max, lon_min, lon_max, z, size):
+        """A `size`x`size` image of the box, north up, lat/lon-aligned (locally indistinguishable from Mercator)."""
+        from PIL import Image
+
+        x0, y0 = mercator_tile(lat_max, lon_min, z)
+        x1, y1 = mercator_tile(lat_min, lon_max, z)
+        tx0, ty0, tx1, ty1 = int(math.floor(x0)), int(math.floor(y0)), int(math.floor(x1)), int(math.floor(y1))
+        mosaic = Image.new("RGB", ((tx1 - tx0 + 1) * TILE, (ty1 - ty0 + 1) * TILE))
+        for ty in range(ty0, ty1 + 1):
+            for tx in range(tx0, tx1 + 1):
+                mosaic.paste(self.tile(z, tx, ty), ((tx - tx0) * TILE, (ty - ty0) * TILE))
+        box = ((x0 - tx0) * TILE, (y0 - ty0) * TILE, (x1 - tx0) * TILE, (y1 - ty0) * TILE)
+        return mosaic.transform((size, size), Image.Transform.EXTENT, box, Image.Resampling.BILINEAR)
+
+
 def catmull_rom(p0, p1, p2, p3, t):
     t2, t3 = t * t, t * t * t
     return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
@@ -182,6 +244,36 @@ def resample(xz, spacing):
     return np.array(out)
 
 
+def bridge_crossings(xz, y, min_gap=20, max_dist_m=12.0, span=9):
+    """Where the road crosses over itself, carry the higher section straight across.
+
+    A terrain model shows the ground under a bridge, so the upper road dips
+    toward the lower one there. Samples of the higher section within `span`
+    samples of a crossing are replaced by a line between the ends of that
+    stretch. Returns the new elevations and the crossings found."""
+    y = y.copy()
+    n = len(y)
+    crossings = []
+    i = 0
+    while i < n:
+        hit = None
+        for j in range(i + min_gap, n):
+            if abs(xz[i][0] - xz[j][0]) + abs(xz[i][1] - xz[j][1]) > 2 * max_dist_m:
+                continue
+            if np.hypot(xz[i][0] - xz[j][0], xz[i][1] - xz[j][1]) < max_dist_m:
+                hit = j
+                break
+        if hit is None:
+            i += 1
+            continue
+        upper = i if y[i] > y[hit] else hit
+        a, b = max(upper - span, 0), min(upper + span, n - 1)
+        y[a : b + 1] = np.linspace(y[a], y[b], b - a + 1)
+        crossings.append((i, hit, float(abs(y[i] - y[hit]))))
+        i += span
+    return y, crossings
+
+
 def smooth(values, half_window):
     k = 2 * half_window + 1
     padded = np.pad(values, half_window, mode="edge")
@@ -200,6 +292,10 @@ def main():
     ap.add_argument("--near-spacing", type=float, default=10.0)
     ap.add_argument("--far-size", type=float, default=36000.0)
     ap.add_argument("--far-spacing", type=float, default=150.0)
+    ap.add_argument("--ortho", action="store_true", help="fetch PNOA aerial imagery as terrain textures (Spain)")
+    ap.add_argument("--ortho-zoom", type=int, default=16, help="Web Mercator zoom for the near textures (16 is about 1.8 m/px)")
+    ap.add_argument("--ortho-blocks", type=int, default=4, help="split the near grid into N x N textured blocks")
+    ap.add_argument("--cache", default=str(Path.home() / ".cache/wattsup/tiles"), help="tile cache directory")
     ap.add_argument("--cut-at-top", action="store_true", help="end the route at its highest point (a climb)")
     ap.add_argument("--smooth", type=int, default=12, help="elevation smoothing half-window in 5 m samples")
     ap.add_argument("--max-grade", type=float, default=14.0, help="cap on the grade in percent")
@@ -230,6 +326,9 @@ def main():
     step = np.clip(np.diff(y), args.min_grade / 100 * SPACING, args.max_grade / 100 * SPACING)
     y = np.concatenate([[y[0]], y[0] + np.cumsum(step)])
     y += np.linspace(0, smooth(raw, args.smooth)[-1] - y[-1], len(y))
+    y, crossings = bridge_crossings(xz, y)
+    for i, j, gap in crossings:
+        print(f"bridge: {i * SPACING:.0f} m crosses {j * SPACING:.0f} m, {gap:.1f} m apart")
     points = [{"distance_m": i * SPACING, "x": round(float(x), 2), "y": round(float(h), 2), "z": round(float(z), 2)} for i, ((x, z), h) in enumerate(zip(xz, y))]
     length = points[-1]["distance_m"]
     gain = float(np.sum(np.clip(np.diff(y), 0, None)))
@@ -241,19 +340,42 @@ def main():
     route = {"name": args.name, "points": points, "closed": False, "world": args.id}
     (repo / "crates/core/routes" / f"{args.id}.json").write_text(json.dumps(route, separators=(",", ":")))
 
-    def heightmap(center_x, center_z, half_w, half_h, spacing, suffix, source):
+    ortho = Ortho(args.cache) if args.ortho else None
+    ortho_dir = repo / "ui/public/worlds" / args.id
+    if ortho:
+        ortho_dir.mkdir(parents=True, exist_ok=True)
+
+    def heightmap(center_x, center_z, half_w, half_h, spacing, suffix, source, blocks, zoom, size):
         lat_max, lon_min = to_latlon(center_x - half_w, center_z - half_h)
         lat_min, lon_max = to_latlon(center_x + half_w, center_z + half_h)
         lats, lons, grid = source.grid(lat_min, lat_max, lon_min, lon_max, spacing, lat_ref, fallback=dem)
         x0, z0 = to_xz(lats[0], lons[0])
         (repo / "ui/public/worlds" / f"{args.id}-{suffix}.bin").write_bytes(struct.pack(f"<{grid.size}f", *grid.flatten().tolist()))
-        print(f"{suffix}: {grid.shape[1]}x{grid.shape[0]} at {spacing} m, {grid.min():.0f}..{grid.max():.0f} m")
-        return {"file": f"/worlds/{args.id}-{suffix}.bin", "cols": int(grid.shape[1]), "rows": int(grid.shape[0]), "x0": round(x0, 1), "z0": round(z0, 1), "spacing": spacing}
+        rows, cols = grid.shape
+        print(f"{suffix}: {cols}x{rows} at {spacing} m, {grid.min():.0f}..{grid.max():.0f} m")
+        meta = {"file": f"/worlds/{args.id}-{suffix}.bin", "cols": int(cols), "rows": int(rows), "x0": round(x0, 1), "z0": round(z0, 1), "spacing": spacing}
+        if ortho:
+            # Textures per block of the grid, each covering the vertex ranges between the edges.
+            row_edges = [round(k * (rows - 1) / blocks) for k in range(blocks + 1)]
+            col_edges = [round(k * (cols - 1) / blocks) for k in range(blocks + 1)]
+            files = []
+            for br in range(blocks):
+                files.append([])
+                for bc in range(blocks):
+                    r0, r1 = row_edges[br], row_edges[br + 1]
+                    c0, c1 = col_edges[bc], col_edges[bc + 1]
+                    img = ortho.image(float(lats[r1]), float(lats[r0]), float(lons[c0]), float(lons[c1]), zoom, size)
+                    name = f"ortho-{suffix}-{br}-{bc}.jpg"
+                    img.save(ortho_dir / name, quality=82, optimize=True)
+                    files[-1].append(f"/worlds/{args.id}/{name}")
+                    print(f"  {name}: {size}px over {(c1 - c0) * spacing:.0f} m")
+            meta["ortho"] = {"rowEdges": row_edges, "colEdges": col_edges, "size": size, "files": files}
+        return meta
 
     xs, zs = xz[:, 0], xz[:, 1]
     cx, cz = float((xs.max() + xs.min()) / 2), float((zs.max() + zs.min()) / 2)
-    near = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.near_margin, (zs.max() - zs.min()) / 2 + args.near_margin, args.near_spacing, "near", fine)
-    far = heightmap(cx, cz, args.far_size / 2, args.far_size / 2, args.far_spacing, "far", dem)
+    near = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.near_margin, (zs.max() - zs.min()) / 2 + args.near_margin, args.near_spacing, "near", fine, args.ortho_blocks, args.ortho_zoom, 1024)
+    far = heightmap(cx, cz, args.far_size / 2, args.far_size / 2, args.far_spacing, "far", dem, 1, args.ortho_zoom - 4, 2048)
     meta = {
         "id": args.id,
         "name": args.name,
@@ -262,7 +384,8 @@ def main():
         "far": far,
         "attribution": "Road data © OpenStreetMap contributors (ODbL). Elevation: "
         + ("IGN España MDT05 (CC BY 4.0) and " if args.dem_fine else "")
-        + "Copernicus DEM GLO-30 © ESA.",
+        + "Copernicus DEM GLO-30 © ESA."
+        + (" Aerial imagery: PNOA © IGN España (CC BY 4.0)." if args.ortho else ""),
     }
     (repo / "ui/public/worlds" / f"{args.id}.json").write_text(json.dumps(meta, indent=1))
 

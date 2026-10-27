@@ -155,7 +155,9 @@ Coll dels Reis on Mallorca, 10.2 km at 6.7 % average, built from open data:
 - elevation near the route from Spain's IGN 5 m terrain model MDT05 (CC BY 4.0),
   fetched through the IDEE INSPIRE WCS,
 - elevation for the wide surroundings from the Copernicus DEM GLO-30 (© ESA),
-  a 30 m surface model.
+  a 30 m surface model,
+- aerial imagery from Spain's PNOA (© IGN España, CC BY 4.0) through the IGN
+  WMTS, draped over the terrain.
 
 `tools/build_route.py` turns those into a route file for the Rust core
 (`crates/core/routes/<id>.json`, a point every 5 m with elevation) and two
@@ -173,8 +175,13 @@ curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_1
 # the 5 m model for the route and its surroundings (Spain only; a GeoTIFF in EPSG:4326)
 curl -A 'WattsUp route builder' -o ign5.tif 'https://servicios.idee.es/wcs-inspire/mdt?service=WCS&request=GetCoverage&version=2.0.1&coverageId=Elevacion4258_5&subset=Lat(39.800,39.880)&subset=Long(2.755,2.850)&format=image/tiff'
 .venv/bin/python tools/build_route.py --osm sa_calobra.json --dem dem.tif --dem-fine ign5.tif \
-  --id sa-calobra --name "Sa Calobra" --cut-at-top --smooth 5 --min-grade -6
+  --id sa-calobra --name "Sa Calobra" --cut-at-top --smooth 5 --min-grade -6 --ortho
 ```
+
+`--ortho` fetches about 300 map tiles (cached under `~/.cache/wattsup/tiles`)
+and writes 16 photo textures of 1024 px for the near grid plus one for the
+far grid, about 3.6 MB per route. The IGN tile server answers 502 now and
+then; the script retries with backoff.
 
 The script chains the OSM way segments into one path from the lowest to the
 highest end (`--cut-at-top` stops at the summit), resamples it every 5 m,

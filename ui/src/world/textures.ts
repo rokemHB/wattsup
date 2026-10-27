@@ -114,3 +114,21 @@ export function waterNormalTexture(): THREE.CanvasTexture {
   tex.colorSpace = THREE.NoColorSpace;
   return tex;
 }
+
+/** Neutral grey grain, multiplied over aerial imagery up close where the photo blurs. */
+export function detailTexture(): THREE.CanvasTexture {
+  const size = 256;
+  const rand = mulberry32(5);
+  const tex = canvasTexture(
+    size,
+    paintPixels(size, (u, v) => {
+      const n = fbmTile(u, v, 10, 71);
+      const fine = fbmTile(u, v, 40, 72);
+      const g = 200 + (n - 0.5) * 70 + (fine - 0.5) * 60 + (rand() - 0.5) * 20;
+      return [g, g, g];
+    }),
+    1,
+  );
+  tex.colorSpace = THREE.NoColorSpace;
+  return tex;
+}

@@ -4,8 +4,8 @@ import * as THREE from "three";
 import type { Route } from "../types";
 import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
-import { gridSample, gridSlope, type Grid, type WorldData } from "./terrain";
-import { asphaltTexture, cloudTexture, grassTexture, rockTexture, waterNormalTexture } from "./textures";
+import { gridSample, gridSlope, OrthoSampler, type Grid, type WorldData } from "./terrain";
+import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockTexture, waterNormalTexture } from "./textures";
 
 export const ROAD_WIDTH = 7;
 /** Height of the top road layer (the markings) above the route line. */
@@ -130,10 +130,30 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 
   const grass = grassTexture();
   const rockTex = rockTexture();
-  group.add(gridMesh(near, tucked, grass, 18));
-  group.add(corridorMesh(pts, index, heightAt, near, grass));
+  const detail = detailTexture();
   const inNear = (x: number, z: number) => gridSample(near, x, z) !== null;
-  group.add(gridMesh(far, (x, z) => (inNear(x, z) ? raw(x, z) - 6 : raw(x, z)), rockTex, 520));
+  const farHeight = (x: number, z: number) => (inNear(x, z) ? raw(x, z) - 6 : raw(x, z));
+  if (near.ortho) {
+    // Aerial imagery: one textured mesh per block of the near grid, photo on the far grid.
+    const { rowEdges, colEdges, images } = near.ortho;
+    for (let br = 0; br < rowEdges.length - 1; br++) {
+      for (let bc = 0; bc < colEdges.length - 1; bc++) {
+        const tex = imageTexture(images[br][bc]);
+        group.add(gridBlockMesh(near, tucked, [rowEdges[br], rowEdges[br + 1]], [colEdges[bc], colEdges[bc + 1]], tex, detail));
+      }
+    }
+    const sampler = new OrthoSampler(near, near.ortho);
+    group.add(corridorMesh(pts, index, heightAt, near, detail, (x, z) => sampler.colorAt(x, z)));
+    if (far.ortho) {
+      group.add(gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), null));
+    } else {
+      group.add(gridMesh(far, farHeight, rockTex, 520));
+    }
+  } else {
+    group.add(gridMesh(near, tucked, grass, 18));
+    group.add(corridorMesh(pts, index, heightAt, near, grass, null));
+    group.add(gridMesh(far, farHeight, rockTex, 520));
+  }
 
   const sea = seaMesh(FAR_SIZE * 2, (near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
   group.add(sea.mesh);
@@ -150,6 +170,8 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   return { group, heightAt, animate };
 }
 
+/** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
+const PHOTO_REFLECTANCE = 0.62;
 const SHOULDER = ROAD_WIDTH / 2 + 1.3;
 /** Metres either side of the road that the corridor shapes. */
 const CORRIDOR_REACH = 46;
@@ -184,7 +206,14 @@ function groundColor(out: THREE.Color, x: number, y: number, z: number, slope: n
  * shoulders are shaped properly. At hairpins each cross-section stops where
  * another part of the road is closer, so stacked sections never overlap.
  */
-function corridorMesh(pts: Route["points"], index: RouteIndex, heightAt: (x: number, z: number) => number, g: Grid, map: THREE.Texture): THREE.Mesh {
+function corridorMesh(
+  pts: Route["points"],
+  index: RouteIndex,
+  heightAt: (x: number, z: number) => number,
+  g: Grid,
+  map: THREE.Texture,
+  photo: ((x: number, z: number) => [number, number, number] | null) | null,
+): THREE.Mesh {
   const n = pts.length;
   const offsets = [...CORRIDOR_OFFSETS.slice(1).reverse().map((o) => -o), ...CORRIDOR_OFFSETS];
   const across = offsets.length;
@@ -192,14 +221,14 @@ function corridorMesh(pts: Route["points"], index: RouteIndex, heightAt: (x: num
   const uvs = new Float32Array(n * across * 2);
   const colors = new Float32Array(n * across * 3);
   const tmp = new THREE.Color();
-  for (let i = 0; i < n; i++) {
+  // Cross-section frames, and how far out each section owns the ground on
+  // each side before another part of the road is closer (hairpins).
+  const frames = pts.map((p, i) => {
     const a = pts[Math.max(i - 1, 0)];
     const b = pts[Math.min(i + 1, n - 1)];
     const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
     const nx = -(b.z - a.z) / l;
     const nz = (b.x - a.x) / l;
-    const p = pts[i];
-    // How far out this section owns the ground on each side.
     const reach = [-1, 1].map((side) => {
       let r = CORRIDOR_REACH;
       for (const o of CORRIDOR_OFFSETS) {
@@ -211,6 +240,16 @@ function corridorMesh(pts: Route["points"], index: RouteIndex, heightAt: (x: num
       }
       return r;
     });
+    return { nx, nz, reach };
+  });
+  // The reach may only change gradually along the road, or the strip tears into long thin triangles.
+  for (let side = 0; side < 2; side++) {
+    for (let i = 1; i < n; i++) frames[i].reach[side] = Math.min(frames[i].reach[side], frames[i - 1].reach[side] + 2.0);
+    for (let i = n - 2; i >= 0; i--) frames[i].reach[side] = Math.min(frames[i].reach[side], frames[i + 1].reach[side] + 2.0);
+  }
+  for (let i = 0; i < n; i++) {
+    const { nx, nz, reach } = frames[i];
+    const p = pts[i];
     for (let k = 0; k < across; k++) {
       const o = offsets[k];
       const side = o < 0 ? 0 : 1;
@@ -224,7 +263,9 @@ function corridorMesh(pts: Route["points"], index: RouteIndex, heightAt: (x: num
       verts[v + 2] = z;
       uvs[(i * across + k) * 2] = x / 18;
       uvs[(i * across + k) * 2 + 1] = z / 18;
-      groundColor(tmp, x, y, z, gridSlope(g, x, z));
+      const rgb = photo?.(x, z);
+      if (rgb) tmp.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
+      else groundColor(tmp, x, y, z, gridSlope(g, x, z));
       colors.set([tmp.r, tmp.g, tmp.b], v);
     }
   }
@@ -242,7 +283,69 @@ function corridorMesh(pts: Route["points"], index: RouteIndex, heightAt: (x: num
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, map, roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+  if (photo) mat.color.setScalar(PHOTO_REFLECTANCE * 1.28); // the grey grain averages below white
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function imageTexture(image: ImageBitmap): THREE.Texture {
+  const tex = new THREE.Texture(image);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Multiplies a world-space grain over the photo so it does not blur into mush up close. */
+function withDetail(mat: THREE.MeshStandardMaterial, detail: THREE.Texture) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.detailMap = { value: detail };
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vGroundPos;")
+      .replace("#include <worldpos_vertex>", "#include <worldpos_vertex>\nvGroundPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform sampler2D detailMap;\nvarying vec3 vGroundPos;")
+      .replace(
+        "#include <map_fragment>",
+        "#include <map_fragment>\n{ float d = texture2D(detailMap, vGroundPos.xz / 7.0).r; float d2 = texture2D(detailMap, vGroundPos.xz / 1.3).r; float d3 = texture2D(detailMap, vGroundPos.xz / 0.35).r; diffuseColor.rgb *= (0.6 + 0.5 * d) * (0.7 + 0.45 * d2) * (0.85 + 0.25 * d3); }",
+      );
+  };
+}
+
+/** A rectangular block of a heightmap grid with one photo stretched over it. */
+function gridBlockMesh(
+  g: Grid,
+  heightAt: (x: number, z: number) => number,
+  rows: [number, number],
+  cols: [number, number],
+  map: THREE.Texture,
+  detail: THREE.Texture | null,
+): THREE.Mesh {
+  const [r0, r1] = rows;
+  const [c0, c1] = cols;
+  const geo = new THREE.PlaneGeometry((c1 - c0) * g.spacing, (r1 - r0) * g.spacing, c1 - c0, r1 - r0);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  let i = 0;
+  for (let iz = r0; iz <= r1; iz++) {
+    for (let ix = c0; ix <= c1; ix++) {
+      const x = g.x0 + ix * g.spacing;
+      const z = g.z0 + iz * g.spacing;
+      pos.setXYZ(i, x, heightAt(x, z), z);
+      uv.setXY(i, (ix - c0) / (c1 - c0), 1 - (iz - r0) / (r1 - r0));
+      i++;
+    }
+  }
+  geo.computeVertexNormals();
+  // The photo already carries the sun's shading; lit again it blows out, so reflect less.
+  const mat = new THREE.MeshStandardMaterial({ map, roughness: 1, metalness: 0, color: new THREE.Color().setScalar(PHOTO_REFLECTANCE) });
+  if (detail) withDetail(mat, detail);
+  const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
 }
@@ -530,7 +633,7 @@ function vegetation(
         round: { geos: roundCrown, count: 900, palette: ["#3e8a3c", "#4f8f44", "#467a2f", "#5a9a44"] },
         cypress: { geos: [cypress], count: 350, palette: ["#24502a", "#2b5a30", "#1f4524"] },
       };
-  const bushes = { count: mediterranean ? 3500 : 1800, palette: mediterranean ? ["#7f8f3a", "#8d9a48", "#6f7f30"] : ["#5f8233", "#75903f", "#6a7f34"] };
+  const bushes = { count: mediterranean ? 2500 : 1800, palette: mediterranean ? ["#5a6b2e", "#66733a", "#4f5f28"] : ["#5f8233", "#75903f", "#6a7f34"] };
   const rocks = { count: mediterranean ? 1500 : 400 };
 
   const canPlace = (x: number, z: number, minRoad: number): { ok: boolean; near: number } => {
