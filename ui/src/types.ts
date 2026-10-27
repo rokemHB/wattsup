@@ -39,6 +39,7 @@ export interface SessionSnapshot {
   lap: number;
   finished: boolean;
   workout: WorkoutSnapshot | null;
+  trainer_offline: boolean;
   model_power_w: number;
   last_command: TrainerCommand | null;
   last_command_age_s: number | null;

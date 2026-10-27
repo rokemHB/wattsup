@@ -41,6 +41,7 @@ export class Hud {
   update(snap: EngineSnapshot) {
     const s = snap.session;
     this.updateWorkout(snap);
+    $("hud-offline").hidden = !s.trainer_offline;
     $("hud-power").textContent = num(s.power_w);
     $("hud-cadence").textContent = num(s.cadence_rpm);
     $("hud-hr").textContent = num(s.heart_rate_bpm);

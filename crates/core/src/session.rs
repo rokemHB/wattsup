@@ -220,6 +220,8 @@ pub struct SessionSnapshot {
     /// The end of an open route has been reached.
     pub finished: bool,
     pub workout: Option<WorkoutSnapshot>,
+    /// The trainer's link is down: the ride is held until it is back.
+    pub trainer_offline: bool,
     /// Pedal power the virtual road asks for at the current cadence, gear and
     /// grade. In SIM mode the trainer should make the rider produce about this
     /// much; the gap to `power_w` shows how far the [`TrainerProfile`] is off.
@@ -255,6 +257,9 @@ pub struct RideSession {
     /// A running workout, with the seconds of it ridden so far.
     workout: Option<(Workout, f64)>,
     workout_paused: bool,
+    trainer_offline: bool,
+    /// Seconds the ride clock has been held for an offline trainer.
+    held_s: f64,
     /// How long the cadence has been outside the auto-shift band, signed (+ = too fast).
     cadence_off_s: f64,
     last_auto_shift_at: f64,
@@ -286,6 +291,8 @@ impl RideSession {
             ride_start_s: 0.0,
             workout: None,
             workout_paused: false,
+            trainer_offline: false,
+            held_s: 0.0,
             cadence_off_s: 0.0,
             last_auto_shift_at: f64::MIN / 4.0,
             last_manual_shift_at: f64::MIN / 4.0,
@@ -428,10 +435,21 @@ impl RideSession {
         self.distance_m = 0.0;
         self.virtual_speed_mps = 0.0;
         self.ride_start_s = self.clock_s;
+        self.held_s = 0.0;
         if let Some(route) = &self.config.route {
             self.road_grade_pct = route.grade_at(0.0);
         }
         self.urgent = true;
+    }
+
+    /// The trainer's link dropped (or came back). While it is down the ride is
+    /// held: no distance, no ride clock, no workout clock; the bike coasts to a
+    /// stop. The last command is re-sent on reconnect by the device layer.
+    pub fn set_trainer_offline(&mut self, offline: bool) {
+        if offline != self.trainer_offline {
+            self.trainer_offline = offline;
+            self.urgent = true;
+        }
     }
 
     /// Starts an ERG workout from its first step. Empty workouts are ignored.
@@ -519,18 +537,30 @@ impl RideSession {
         self.clock_s += dt;
         let timeout = self.config.data_timeout_s;
         let now = self.clock_s;
-        let pedalling = self.cadence.fresh(now, timeout).is_some_and(|c| c >= 20.0);
+        let pedalling = !self.trainer_offline && self.cadence.fresh(now, timeout).is_some_and(|c| c >= 20.0);
         self.workout_step(dt, pedalling);
+        if self.trainer_offline {
+            // Held: the clock does not count and the rider brakes to a stop.
+            self.held_s += dt;
+            self.virtual_speed_mps = (self.virtual_speed_mps - 1.5 * dt).max(0.0);
+            self.cadence_off_s = 0.0;
+        }
 
-        let power = self.power.fresh(now, timeout).unwrap_or(0.0);
-        self.virtual_speed_mps = step_speed(
-            &self.config.rider,
-            self.virtual_speed_mps,
-            power,
-            self.road_grade_pct,
-            dt,
-        );
-        self.distance_m += self.virtual_speed_mps * dt;
+        let power = if self.trainer_offline {
+            0.0
+        } else {
+            self.power.fresh(now, timeout).unwrap_or(0.0)
+        };
+        if !self.trainer_offline {
+            self.virtual_speed_mps = step_speed(
+                &self.config.rider,
+                self.virtual_speed_mps,
+                power,
+                self.road_grade_pct,
+                dt,
+            );
+            self.distance_m += self.virtual_speed_mps * dt;
+        }
         if let Some(route) = &self.config.route {
             // Not urgent: the deadband and interval decide when the trainer hears about it.
             self.road_grade_pct = route.grade_at(self.distance_m);
@@ -608,7 +638,7 @@ impl RideSession {
             .as_ref()
             .is_some_and(|r| !r.closed && self.distance_m >= r.length_m());
         SessionSnapshot {
-            elapsed_s: now - self.ride_start_s,
+            elapsed_s: now - self.ride_start_s - self.held_s,
             mode: self.mode,
             erg_target_w: self.erg_target_w,
             road_grade_pct: self.road_grade_pct,
@@ -627,6 +657,7 @@ impl RideSession {
             lap,
             finished,
             workout: self.workout(),
+            trainer_offline: self.trainer_offline,
             model_power_w,
             last_command: self.last_command,
             last_command_age_s: self.last_command.map(|_| now - self.last_command_at),
@@ -967,6 +998,35 @@ mod tests {
         s.stop_workout();
         assert!(s.snapshot().workout.is_none());
         assert_eq!(s.snapshot().mode, ControlMode::Sim);
+    }
+
+    #[test]
+    fn offline_trainer_holds_the_ride() {
+        let mut s = RideSession::default();
+        run(&mut s, 20.0, 200.0, 90.0);
+        let before = s.snapshot();
+        assert!(before.distance_m > 50.0);
+        s.set_trainer_offline(true);
+        // Stale samples keep arriving from nowhere; the ride must not advance.
+        run(&mut s, 30.0, 200.0, 90.0);
+        let held = s.snapshot();
+        assert!(held.trainer_offline);
+        assert!(
+            (held.distance_m - before.distance_m).abs() < 1e-6,
+            "no distance while offline"
+        );
+        assert!((held.elapsed_s - before.elapsed_s).abs() < 1e-6, "ride clock held");
+        assert!(held.virtual_speed_kmh < 1.0, "the bike rolled out");
+        s.set_trainer_offline(false);
+        run(&mut s, 10.0, 200.0, 90.0);
+        let back = s.snapshot();
+        assert!(!back.trainer_offline);
+        assert!(back.distance_m > before.distance_m + 10.0);
+        assert!(
+            (back.elapsed_s - before.elapsed_s - 10.0).abs() < 0.3,
+            "{}",
+            back.elapsed_s - before.elapsed_s
+        );
     }
 
     #[test]

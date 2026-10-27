@@ -334,6 +334,10 @@ impl Engine {
     }
 
     pub async fn disconnect(&self, kind: DeviceKind) {
+        if kind == DeviceKind::Trainer {
+            // Taking the trainer away on purpose is not a dropped link.
+            self.inner.session.lock().unwrap().set_trainer_offline(false);
+        }
         let mut slots = self.inner.slots.lock().await;
         let device: Option<Arc<dyn wattsup_devices::Device>> = match kind {
             DeviceKind::Trainer => slots.trainer.take().map(|d| d as _),
@@ -497,6 +501,11 @@ async fn event_loop(inner: Arc<Inner>, mut rx: EventReceiver) {
                 if current.as_ref() == Some(&id) {
                     if let ConnectionState::Reconnecting(why) | ConnectionState::Failed(why) = &state {
                         inner.log(&name, why.clone());
+                    }
+                    if kind == DeviceKind::Trainer {
+                        // A trainer that was connected and dropped holds the ride until it is back.
+                        let offline = matches!(state, ConnectionState::Reconnecting(_) | ConnectionState::Failed(_));
+                        inner.session.lock().unwrap().set_trainer_offline(offline);
                     }
                     inner.set_status(kind, Some(id), Some(name), state);
                 }
