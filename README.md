@@ -4,9 +4,24 @@ A gamified indoor cycling app for smart trainers. Bluetooth FTMS, heart rate
 and virtual shifting on Linux, Windows and macOS. Zwift Cog support without a
 paid subscription. You might even fly.
 
-**Status: milestone 1, the foundation.** The device layer, the virtual gearbox
-and a debug screen work; there is no game yet. See [HARDWARE_TESTING.md](HARDWARE_TESTING.md)
-for checking it against real hardware.
+**Status: early, but rideable.** Bluetooth devices, virtual gearing, ERG
+workouts, a 3D world with the real Sa Calobra climb built from open data, a
+start screen, menu, rider profile and settings. See
+[HARDWARE_TESTING.md](HARDWARE_TESTING.md) for checking it against real
+hardware and [TODO.md](TODO.md) for what is next.
+
+![Sa Calobra from the road](docs/screenshots/sa-calobra.jpg)
+
+| | |
+| --- | --- |
+| ![The hairpins of Sa Calobra from above](docs/screenshots/hairpins.jpg) | ![Looking back at the Port de Sa Calobra](docs/screenshots/port.jpg) |
+| ![Start screen](docs/screenshots/start.jpg) | ![Main menu with routes and workouts](docs/screenshots/menu.jpg) |
+
+The terrain is Spain's 5 m elevation model with the PNOA aerial photo draped
+over it, the road is OpenStreetMap's Ma-2141 cut into it with stone
+parapets where the ground drops away, and close-up surfaces are patches of
+the same imagery at 10 cm per pixel. Everything in the pictures is built
+from open data by `tools/build_route.py`; no hand-made assets yet.
 
 ## What it does
 
@@ -17,7 +32,9 @@ for checking it against real hardware.
   5.0 in equal percentage steps, by steering the trainer's resistance.
 - Simulates a rider on a virtual road (gravity, rolling resistance, aero) and
   reports virtual speed and distance.
-- Runs an ERG mode (fixed target power) for workouts later.
+- Runs ERG workouts: interval protocols with presets in percent of FTP or
+  your own steps, the trainer holding each step's watts, the clock only
+  running while you pedal.
 - Comes with simulated devices, so everything can be developed and tested
   without a trainer.
 
