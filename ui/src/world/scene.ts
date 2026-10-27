@@ -97,8 +97,12 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   const group = new THREE.Group();
   const { near, far, band } = world;
 
-  const raw = (x: number, z: number) =>
-    (band ? gridSample(band, x, z) : null) ?? gridSample(near, x, z) ?? gridSample(far, x, z) ?? SEA_LEVEL - 10;
+  // Where the elevation model says sea, drop the ground a few metres so the
+  // sea surface draws above it instead of fighting with the photo's water.
+  const raw = (x: number, z: number) => {
+    const h = (band ? gridSample(band, x, z) : null) ?? gridSample(near, x, z) ?? gridSample(far, x, z) ?? SEA_LEVEL - 10;
+    return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
+  };
   const box = {
     x0: Math.min(...pts.map((p) => p.x)) - 60,
     x1: Math.max(...pts.map((p) => p.x)) + 60,
@@ -154,7 +158,7 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     photo = (x, z) => sampler.colorAt(x, z);
     group.add(corridorMesh(pts, index, heightAt, near, detail.grain, photo, detail));
     if (far.ortho) {
-      group.add(gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), null));
+      group.add(gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), detail, 0));
     } else {
       group.add(gridMesh(far, farHeight, rockTex, 520));
     }
@@ -181,7 +185,7 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 }
 
 /** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
-const PHOTO_REFLECTANCE = 0.58;
+const PHOTO_REFLECTANCE = 0.52;
 const SHOULDER = REAL_ROAD_WIDTH / 2 + 0.9;
 /** Metres either side of the road that the corridor shapes. */
 const CORRIDOR_REACH = 46;
@@ -311,6 +315,8 @@ function corridorMesh(
 
 function imageTexture(image: ImageBitmap): THREE.Texture {
   const tex = new THREE.Texture(image);
+  // ImageBitmaps upload as they are (flipY is ignored), so row 0 of the image is v = 0.
+  tex.flipY = false;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
   tex.generateMipmaps = true;
@@ -332,10 +338,11 @@ interface Detail {
  * stretch), scrub and earth on flatter ground, and a fine grain. The detail
  * textures average mid-grey, so the photo keeps its colour.
  */
-function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail) {
+function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.rockMap = { value: detail.rock };
     shader.uniforms.scrubMap = { value: detail.scrub };
+    shader.uniforms.detailAmount = { value: amount };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;")
       .replace(
@@ -345,12 +352,21 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail) {
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        "#include <common>\nuniform sampler2D rockMap;\nuniform sampler2D scrubMap;\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;",
+        "#include <common>\nuniform sampler2D rockMap;\nuniform sampler2D scrubMap;\nuniform float detailAmount;\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;",
       )
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
 {
+  // The photo carries its own shadows and glare: lift the shadows so our sun
+  // does not darken them twice, take their blue cast out, and tame the glare
+  // on bare limestone so it does not read as snow. A touch of warmth overall.
+  float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+  vec3 lifted = pow(diffuseColor.rgb, vec3(0.7));
+  diffuseColor.rgb = mix(diffuseColor.rgb, lifted, 0.7 * (1.0 - smoothstep(0.15, 0.45, lum)));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(lum) * vec3(1.04, 1.0, 0.92), 0.3 * (1.0 - smoothstep(0.1, 0.4, lum)));
+  diffuseColor.rgb *= 1.0 - 0.3 * smoothstep(0.45, 0.85, lum);
+  diffuseColor.rgb *= vec3(1.03, 1.0, 0.94);
   vec3 n = normalize(vGroundNormal);
   float rockScale = 3.2;
   // Rock sampled on the ground plane and on the dominant vertical plane, so cliffs do not stretch.
@@ -360,7 +376,7 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail) {
   vec3 scrub = texture2D(scrubMap, vGroundPos.xz / 2.6).rgb;
   float steep = smoothstep(0.30, 0.62, 1.0 - n.y);
   vec3 det = mix(scrub, rock, steep);
-  diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, mix(0.3, 0.5, steep));
+  diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, detailAmount * mix(0.3, 0.5, steep));
 }`,
       );
   };
@@ -374,6 +390,7 @@ function gridBlockMesh(
   cols: [number, number],
   map: THREE.Texture,
   detail: Detail | null,
+  detailAmount = 1,
 ): THREE.Mesh {
   const [r0, r1] = rows;
   const [c0, c1] = cols;
@@ -387,7 +404,8 @@ function gridBlockMesh(
       const x = g.x0 + ix * g.spacing;
       const z = g.z0 + iz * g.spacing;
       pos.setXYZ(i, x, heightAt(x, z), z);
-      uv.setXY(i, (ix - c0) / (c1 - c0), 1 - (iz - r0) / (r1 - r0));
+      // Image row 0 is the north edge, which is the first grid row.
+      uv.setXY(i, (ix - c0) / (c1 - c0), (iz - r0) / (r1 - r0));
       i++;
     }
   }
@@ -395,12 +413,14 @@ function gridBlockMesh(
   // The photo already carries the sun's shading; lit again it blows out, so reflect less.
   const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.95, metalness: 0, color: new THREE.Color().setScalar(PHOTO_REFLECTANCE) });
   if (detail) {
-    withDetail(mat, detail);
-    const normal = detail.normal.clone();
-    normal.needsUpdate = true;
-    normal.repeat.set(((c1 - c0) * g.spacing) / 7.0, ((r1 - r0) * g.spacing) / 7.0);
-    mat.normalMap = normal;
-    mat.normalScale.set(0.35, 0.35);
+    withDetail(mat, detail, detailAmount);
+    if (detailAmount > 0) {
+      const normal = detail.normal.clone();
+      normal.needsUpdate = true;
+      normal.repeat.set(((c1 - c0) * g.spacing) / 7.0, ((r1 - r0) * g.spacing) / 7.0);
+      mat.normalMap = normal;
+      mat.normalScale.set(0.35, 0.35);
+    }
   }
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
@@ -438,15 +458,14 @@ function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THRE
 
 function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mesh; animate: (dt: number) => void } {
   const normals = waterNormalTexture();
-  normals.repeat.set(size / 45, size / 45);
+  normals.repeat.set(size / 28, size / 28);
   const mat = new THREE.MeshStandardMaterial({
-    color: "#1c6ea6",
-    roughness: 0.18,
+    color: "#2878a8",
+    roughness: 0.45,
     metalness: 0.0,
     normalMap: normals,
-    normalScale: new THREE.Vector2(0.35, 0.35),
-    transparent: true,
-    opacity: 0.96,
+    normalScale: new THREE.Vector2(0.9, 0.9),
+    envMapIntensity: 0.3,
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
   mesh.rotation.x = -Math.PI / 2;
@@ -766,7 +785,7 @@ function vegetation(
 
   const kinds = mediterranean
     ? {
-        pine: { geos: [aleppo], count: 3000, palette: ["#2f4d2c", "#38582f", "#2a4529", "#405f35", "#33502d"] },
+        pine: { geos: [aleppo], count: 3000, palette: ["#263f24", "#2d4a28", "#213822", "#345430", "#2a4327", "#3b5a33"] },
         round: { geos: roundCrown, count: 250, palette: ["#3d5a2e", "#46632f", "#35502a"] },
         cypress: { geos: [cypress], count: 60, palette: ["#24502a", "#2b5a30", "#1f4524"] },
       }

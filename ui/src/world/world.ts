@@ -69,11 +69,11 @@ export class World {
     this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
     this.scene.environmentIntensity = 0.4;
     envScene.clear();
-    this.scene.fog = new THREE.Fog("#c6d9ec", 500, 9000);
+    this.scene.fog = new THREE.Fog("#bccfe4", 900, 10000);
 
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 30000);
-    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 0.7));
-    this.sun = new THREE.DirectionalLight("#fff1d6", 3.4);
+    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 0.9));
+    this.sun = new THREE.DirectionalLight("#fff1d6", 3.0);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1536, 1536);
     const s = 110;
@@ -143,7 +143,7 @@ export class World {
   /** Every two seconds: lower the render scale when frames are slow, raise it when there is headroom. */
   private adaptResolution(dt: number) {
     this.frameTimes.push(dt);
-    if (this.frameTimes.length < 120) return;
+    if (this.frameTimes.length < 45) return;
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const median = sorted[sorted.length >> 1];
     this.frameTimes = [];

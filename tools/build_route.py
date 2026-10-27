@@ -302,6 +302,7 @@ def main():
     ap.add_argument("--smooth", type=int, default=12, help="elevation smoothing half-window in 5 m samples")
     ap.add_argument("--max-grade", type=float, default=14.0, help="cap on the grade in percent")
     ap.add_argument("--min-grade", type=float, default=-14.0, help="cap on descents in percent (use e.g. -6 for a pure climb)")
+    ap.add_argument("--edge-offset", type=float, default=2.5, help="metres toward the outside of bends to sample elevation at")
     args = ap.parse_args()
 
     dem = Dem(args.dem)
@@ -317,7 +318,16 @@ def main():
     to_latlon = lambda x, z: (lat_ref - z / EARTH_LAT_M, lon_ref + x / kx)
 
     xz = resample([to_xz(*p) for p in latlon], SPACING)
-    ll = np.array([to_latlon(x, z) for x, z in xz])
+    # Sample the elevation a little toward the outside of each bend: at a
+    # hairpin the inside of the road is within one DEM cell of the other leg.
+    d = np.gradient(xz, axis=0)
+    d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    turn = np.gradient(d[:, 0]) * d[:, 1] - np.gradient(d[:, 1]) * d[:, 0]
+    turn = np.convolve(np.pad(turn, 6, mode="edge"), np.ones(13) / 13, mode="valid")
+    normal = np.stack([-d[:, 1], d[:, 0]], axis=1)
+    outside = -np.sign(turn)[:, None] * normal * args.edge_offset
+    xz_sample = xz + outside * (np.abs(turn)[:, None] > 0.002)
+    ll = np.array([to_latlon(x, z) for x, z in xz_sample])
     raw = fine.sample_many(ll[:, 0], ll[:, 1])
     if np.isnan(raw).any():
         raise SystemExit("the fine DEM does not cover the whole route")

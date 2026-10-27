@@ -142,6 +142,8 @@ While riding, type `u` / `d` (shift), `erg <W>`, `sim`, `grade <%>` or `q`.
 | `--raw` | `WATTSUP_RAW=1` | `--raw` | Log every Bluetooth packet as hex |
 | `--auto-sim` | `WATTSUP_AUTO_SIM=1` | | Connect the simulated trainer, strap and controller at startup |
 | `--route <id>` | `WATTSUP_ROUTE=<id>` | | Built-in route to ride: `sa-calobra` (default) or `lakeside` |
+| `--start <m>` | `WATTSUP_START_M=<m>` | | Start that many metres along the route (to look at a spot) |
+| `--camera <mode>` | `WATTSUP_CAMERA=<mode>` | | Start in the `chase`, `side`, `front` or `drone` view |
 
 The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
 
