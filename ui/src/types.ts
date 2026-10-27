@@ -117,6 +117,7 @@ export interface NetworkEdge {
   start: number;
   count: number;
   length_m: number;
+  tunnel?: boolean;
 }
 
 export interface Place {

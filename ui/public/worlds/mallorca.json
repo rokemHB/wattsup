@@ -2,16 +2,16 @@
  "id": "mallorca",
  "name": "Mallorca",
  "origin": {
-  "lat": 39.71910715,
-  "lon": 2.8165319
+  "lat": 39.761531399999996,
+  "lon": 2.78337775
  },
  "network": true,
  "far": {
   "file": "/worlds/mallorca-far.bin",
-  "cols": 686,
+  "cols": 685,
   "rows": 553,
-  "x0": -44228.5,
-  "z0": -31059.4,
+  "x0": -41364.2,
+  "z0": -26368.4,
   "spacing": 150.0,
   "ortho": {
    "rowEdges": [
@@ -20,7 +20,7 @@
    ],
    "colEdges": [
     0,
-    685
+    684
    ],
    "size": 2048,
    "files": [

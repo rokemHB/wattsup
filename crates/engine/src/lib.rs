@@ -674,7 +674,7 @@ mod tests {
         assert!(s.session.distance_m > 200.0, "{}", s.session.distance_m);
         assert!(!s.session.finished);
         assert!(engine.network_info("mallorca").is_some());
-        assert!(engine.network_points("mallorca").unwrap().len() > 1_000_000);
+        assert!(engine.network_points("mallorca").unwrap().len() > 100_000);
         assert!(!engine.choose_turn(usize::MAX).await, "nonsense edges are refused");
         engine.set_route("flat").await.unwrap();
         assert!(engine.snapshot().junction.is_none());

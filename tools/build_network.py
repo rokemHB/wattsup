@@ -27,11 +27,13 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_route import EARTH_LAT_M, EARTH_LON_M, Dem, Ortho, mercator_tile  # noqa: E402
 
 SPACING = 10.0
+MAX_GRADE = 0.14
 ROAD_KINDS = {"primary": 0, "secondary": 1, "tertiary": 2, "unclassified": 3, "primary_link": 1, "secondary_link": 2, "tertiary_link": 3}
 
 
@@ -115,6 +117,109 @@ def resample(xz, spacing):
     return np.array(out)
 
 
+def way_length_m(way):
+    g = way["geometry"]
+    lat = math.radians(g[0]["lat"])
+    return sum(math.hypot((b["lon"] - a["lon"]) * EARTH_LON_M * math.cos(lat), (b["lat"] - a["lat"]) * EARTH_LAT_M) for a, b in zip(g, g[1:]))
+
+
+def select_roads(ways, refs):
+    """The ways carrying one of `refs`, plus the ref-less roundabouts and short links that connect them.
+
+    Roundabouts and slip roads in OSM usually carry no ref, and two climbs
+    often meet through a few metres of a third road; without those pieces a
+    whitelisted road breaks at every roundabout."""
+    def refs_of(w):
+        return {r.strip() for r in (w["tags"].get("ref") or "").split(";") if r.strip()}
+
+    keep = [w for w in ways if refs_of(w) & refs]
+    nodes = {n for w in keep for n in w["nodes"]}
+    # Roundabouts and short pieces of any road join the whitelisted ones: the
+    # few metres of another ref that tie two climbs together in a town.
+    candidates = [w for w in ways if w["tags"].get("junction") == "roundabout" or way_length_m(w) < 400]
+    for _ in range(3):
+        added = False
+        for w in candidates:
+            if w in keep or not any(n in nodes for n in w["nodes"]):
+                continue
+            keep.append(w)
+            nodes.update(w["nodes"])
+            added = True
+        if not added:
+            break
+    # Whitelisted roads that do not touch the main component get joined to it
+    # along the shortest run of other roads (a few streets through a town);
+    # what cannot be joined within 6 km is dropped.
+    parent = {}
+
+    def find(a):
+        while parent.get(a, a) != a:
+            a = parent[a]
+        return a
+
+    def union_ways(ws):
+        for w in ws:
+            for n in w["nodes"][1:]:
+                parent[find(n)] = find(w["nodes"][0])
+
+    union_ways(keep)
+    comp_len = collections.Counter()
+    for w in keep:
+        comp_len[find(w["nodes"][0])] += way_length_m(w)
+    main_comp = comp_len.most_common(1)[0][0]
+    # Node graph over every road, for the joins.
+    adj = collections.defaultdict(list)
+    way_of = {}
+    for w in ways:
+        g = w["geometry"]
+        lat = math.radians(g[0]["lat"])
+        for a, b, ga, gb in zip(w["nodes"], w["nodes"][1:], g, g[1:]):
+            d = math.hypot((gb["lon"] - ga["lon"]) * EARTH_LON_M * math.cos(lat), (gb["lat"] - ga["lat"]) * EARTH_LAT_M)
+            adj[a].append((b, d))
+            adj[b].append((a, d))
+            way_of[(a, b)] = way_of[(b, a)] = w
+    kept_ids = {w["id"] for w in keep}
+    for comp in [c for c in comp_len if c != main_comp]:
+        inside = {n for w in keep if find(w["nodes"][0]) == comp for n in w["nodes"]}
+        dist = {n: 0.0 for n in inside}
+        prev = {}
+        heap = [(0.0, n) for n in inside]
+        heapq.heapify(heap)
+        hit = None
+        while heap:
+            d, n = heapq.heappop(heap)
+            if d > dist.get(n, math.inf) or d > 6000:
+                continue
+            if n not in inside and find(n) == find(main_comp):
+                hit = n
+                break
+            for m, w in adj[n]:
+                nd = d + w
+                if nd < dist.get(m, math.inf):
+                    dist[m] = nd
+                    prev[m] = n
+                    heapq.heappush(heap, (nd, m))
+        if hit is None:
+            continue
+        path = [hit]
+        while path[-1] in prev:
+            path.append(prev[path[-1]])
+        joined = []
+        for a, b in zip(path, path[1:]):
+            w = way_of[(a, b)]
+            if w["id"] not in kept_ids:
+                kept_ids.add(w["id"])
+                keep.append(w)
+                joined.append(w)
+        union_ways(joined)
+        names = sorted({w["tags"].get("ref") or w["tags"].get("name") or "?" for w in joined})
+        print(f"joined a {comp_len[comp] / 1000:.1f} km component through {', '.join(names)} ({dist[hit]:.0f} m)")
+    dropped = [w for w in keep if find(w["nodes"][0]) != find(main_comp)]
+    if dropped:
+        print(f"dropping {len(dropped)} disconnected ways ({sum(way_length_m(w) for w in dropped) / 1000:.1f} km)")
+    return [w for w in keep if find(w["nodes"][0]) == find(main_comp)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--osm", required=True)
@@ -127,12 +232,17 @@ def main():
     ap.add_argument("--far-spacing", type=float, default=150.0)
     ap.add_argument("--ortho", action="store_true")
     ap.add_argument("--cache", default=str(Path.home() / ".cache/wattsup/tiles"))
+    ap.add_argument("--refs", help="comma-separated road refs to keep (plus the unnamed links and roundabouts that join them); default: every road")
     args = ap.parse_args()
     repo = Path(args.repo)
 
     osm = json.load(open(args.osm))
     ways = [e for e in osm["elements"] if e["type"] == "way" and e["tags"].get("highway") in ROAD_KINDS]
+    # Long road tunnels (the Sóller tunnel) are closed to bicycles.
+    ways = [w for w in ways if not (w["tags"].get("tunnel") == "yes" and way_length_m(w) >= 1000)]
     places = [e for e in osm["elements"] if e["type"] == "node" and "place" in e.get("tags", {})]
+    if args.refs:
+        ways = select_roads(ways, {r.strip() for r in args.refs.split(",") if r.strip()})
     print(f"{len(ways)} ways, {len(places)} places")
 
     # Local frame: origin at the centre of the roads' bounding box.
@@ -180,7 +290,7 @@ def main():
         by_end[piece[-1]].append(i)
     used = [False] * len(raw_edges)
     merged = []
-    key = lambda t: (t.get("ref"), t.get("name"), t.get("highway"))
+    key = lambda t: (t.get("ref"), t.get("name"), t.get("highway"), t.get("tunnel") == "yes")
     for i, (piece, tags) in enumerate(raw_edges):
         if used[i]:
             continue
@@ -220,11 +330,15 @@ def main():
                 x, z = to_xz(lat, lon)
                 nodes_out.append({"osm": n, "x": round(float(x), 1), "z": round(float(z), 1), "y": 0.0})
 
-    # Geometry and elevation per edge.
+    # Geometry and elevation per edge: the 5 m model sampled every 10 m,
+    # smoothed over 60 m with the grade capped; tunnels run straight between
+    # their portals. Every junction gets one height, the mean of what its
+    # edges see there, and each edge is pinned to its two junction heights so
+    # the road never steps where edges meet.
     dem = DemChunks(args.dem_dir)
-    points = []
-    edges_out = []
     missing = 0
+    prepared = []
+    node_samples = collections.defaultdict(list)
     for nodes, tags in merged:
         xz = np.array([to_xz(*coords[n]) for n in nodes])
         if len(xz) < 2:
@@ -235,12 +349,23 @@ def main():
         if np.isnan(y).any():
             missing += int(np.isnan(y).sum())
             y = np.where(np.isnan(y), np.nanmean(y) if not np.isnan(y).all() else 0.0, y)
-        y = smooth(y, 3)
-        # Cap the grade: a 5 m surface model is off on stacked hairpins.
-        step = np.clip(np.diff(y), -0.2 * SPACING, 0.2 * SPACING)
-        y = np.concatenate([[y[0]], y[0] + np.cumsum(step)])
-        if len(y) > 1:
-            y += np.linspace(0, float(smooth(dem.sample_many(ll[-1:, 0], ll[-1:, 1]), 0)[0] - y[-1]) if False else 0, len(y))
+        tunnel = tags.get("tunnel") == "yes"
+        y = smooth(y, 6)
+        node_samples[node_ids[nodes[0]]].append(float(y[0]))
+        node_samples[node_ids[nodes[-1]]].append(float(y[-1]))
+        prepared.append((nodes, tags, pts, y, tunnel))
+    node_y = {ni: float(np.mean(v)) for ni, v in node_samples.items()}
+    points = []
+    edges_out = []
+    for nodes, tags, pts, y, tunnel in prepared:
+        ya = node_y[node_ids[nodes[0]]]
+        yb = node_y[node_ids[nodes[-1]]]
+        if tunnel or len(y) < 3:
+            y = np.linspace(ya, yb, len(y))
+        else:
+            step = np.clip(np.diff(y), -MAX_GRADE * SPACING, MAX_GRADE * SPACING)
+            y = np.concatenate([[y[0]], y[0] + np.cumsum(step)])
+            y += np.linspace(ya - y[0], yb - y[-1], len(y))
         start = len(points)
         for (x, z), h in zip(pts, y):
             points.append((float(x), float(h), float(z)))
@@ -256,6 +381,7 @@ def main():
             "length_m": round(length, 1),
             "destination": tags.get("destination"),
             "destination_ref": tags.get("destination:ref"),
+            "tunnel": tunnel,
         })
     # Node heights from their edges.
     for e in edges_out:
@@ -358,6 +484,13 @@ def main():
         img.save(world_dir / "ortho-far-0-0.jpg", quality=82, optimize=True)
         far_meta["ortho"] = {"rowEdges": [0, far.shape[0] - 1], "colEdges": [0, far.shape[1] - 1], "size": 2048, "files": [[f"/worlds/{args.id}/ortho-far-0-0.jpg"]]}
         img = ortho.image(lat_min, lat_max, lon_min, lon_max, 12, 2560)
+        # Open sea has no tiles at this zoom and comes out black; paint it the colour of the sea that is there.
+        px = np.asarray(img.convert("RGB")).astype(np.int16)
+        sea = (px[..., 2] > px[..., 0] + 10) & (px[..., 2] > 20) & (px[..., 2] < 90)
+        missing = px.max(axis=2) < 12
+        if sea.any():
+            px[missing] = np.median(px[sea], axis=0).astype(np.int16)
+        img = Image.fromarray(px.astype(np.uint8))
         img.save(world_dir / "map.jpg", quality=84, optimize=True)
         print("far ortho and map written")
 
