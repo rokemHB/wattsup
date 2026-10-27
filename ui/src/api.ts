@@ -42,6 +42,7 @@ export const api = {
   setRoadGrade: (grade: number) => invoke<void>("set_road_grade", { grade }),
   setAutoShift: (enabled: boolean) => invoke<void>("set_auto_shift", { enabled }),
   setTargetCadence: (rpm: number) => invoke<void>("set_target_cadence", { rpm }),
+  setVirtualGearing: (on: boolean) => invoke<void>("set_virtual_gearing", { on }),
   pressButton: (button: ControllerButton) => invoke<void>("press_button", { button }),
   quit: () => getCurrentWindow().close(),
   toggleFullscreen: async () => {

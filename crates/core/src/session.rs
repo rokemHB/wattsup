@@ -207,6 +207,9 @@ pub struct SessionSnapshot {
     pub gear_ratio: f64,
     pub auto_shift: bool,
     pub target_cadence_rpm: f64,
+    /// Virtual gears on (single-speed drive like the Zwift Cog). Off: the
+    /// trainer gets the road grade as it is and the rider shifts a real cassette.
+    pub virtual_gearing: bool,
     pub power_w: Option<f64>,
     pub cadence_rpm: Option<f64>,
     pub trainer_speed_kmh: Option<f64>,
@@ -260,6 +263,7 @@ pub struct RideSession {
     trainer_offline: bool,
     /// Seconds the ride clock has been held for an offline trainer.
     held_s: f64,
+    virtual_gearing: bool,
     /// How long the cadence has been outside the auto-shift band, signed (+ = too fast).
     cadence_off_s: f64,
     last_auto_shift_at: f64,
@@ -293,6 +297,7 @@ impl RideSession {
             workout_paused: false,
             trainer_offline: false,
             held_s: 0.0,
+            virtual_gearing: true,
             cadence_off_s: 0.0,
             last_auto_shift_at: f64::MIN / 4.0,
             last_manual_shift_at: f64::MIN / 4.0,
@@ -301,6 +306,15 @@ impl RideSession {
 
     pub fn auto_shift(&self) -> &AutoShift {
         &self.auto_shift
+    }
+
+    /// Turns virtual gearing on or off. Off, shifts do nothing and the trainer
+    /// simulates the road grade directly, for riders with a real cassette.
+    pub fn set_virtual_gearing(&mut self, on: bool) {
+        if on != self.virtual_gearing {
+            self.virtual_gearing = on;
+            self.urgent = true;
+        }
     }
 
     pub fn set_auto_shift(&mut self, enabled: bool) {
@@ -341,6 +355,9 @@ impl RideSession {
     /// Shifts one gear by hand. Returns false at the end of the range.
     /// Pauses automatic shifting for a while so the rider's choice sticks.
     pub fn shift(&mut self, dir: ShiftDirection) -> bool {
+        if !self.virtual_gearing {
+            return false;
+        }
         self.last_manual_shift_at = self.clock_s;
         self.cadence_off_s = 0.0;
         let changed = self.gearbox.shift(dir);
@@ -357,6 +374,7 @@ impl RideSession {
             return;
         };
         if !a.enabled
+            || !self.virtual_gearing
             || self.mode != ControlMode::Sim
             || now - self.last_manual_shift_at < a.manual_pause_s
             || now - self.last_auto_shift_at < a.interval_s
@@ -597,6 +615,25 @@ impl RideSession {
 
     fn wanted_command(&self, cadence: f64, trainer_speed_mps: f64) -> TrainerCommand {
         match self.mode {
+            ControlMode::Sim if !self.virtual_gearing => {
+                // A real drivetrain: the trainer simulates the road as it is.
+                let t = &self.config.trainer;
+                let grade = self.road_grade_pct.clamp(t.min_grade_pct, t.max_grade_pct);
+                TrainerCommand::Simulation(crate::resistance::SimTarget {
+                    grade_pct: grade,
+                    crr: t.sim_crr,
+                    cw_kg_per_m: t.sim_cw,
+                    wind_mps: 0.0,
+                    desired_grade_pct: self.road_grade_pct,
+                    clamped: if self.road_grade_pct > t.max_grade_pct {
+                        Some(crate::resistance::Clamp::High)
+                    } else if self.road_grade_pct < t.min_grade_pct {
+                        Some(crate::resistance::Clamp::Low)
+                    } else {
+                        None
+                    },
+                })
+            }
             ControlMode::Sim => TrainerCommand::Simulation(virtual_gear_sim(
                 &self.config.rider,
                 &self.config.trainer,
@@ -647,6 +684,7 @@ impl RideSession {
             gear_ratio: self.gearbox.ratio(),
             auto_shift: self.auto_shift.enabled,
             target_cadence_rpm: self.auto_shift.target_cadence_rpm,
+            virtual_gearing: self.virtual_gearing,
             power_w: self.power.fresh(now, t),
             cadence_rpm: self.cadence.fresh(now, t),
             trainer_speed_kmh: self.trainer_speed.fresh(now, t),
@@ -1027,6 +1065,29 @@ mod tests {
             "{}",
             back.elapsed_s - before.elapsed_s
         );
+    }
+
+    #[test]
+    fn without_virtual_gearing_the_trainer_gets_the_road_grade() {
+        let mut s = RideSession::default();
+        s.set_road_grade(6.0);
+        riding(&mut s, 200.0, 90.0);
+        let geared = grade(s.tick(0.25));
+        assert!(
+            (geared - 6.0).abs() > 0.2,
+            "virtual gear 12 is not the trainer's own drive: {geared}"
+        );
+        s.set_virtual_gearing(false);
+        assert_eq!(grade(s.tick(0.25)), 6.0);
+        assert!(!s.shift(ShiftDirection::Up), "shifts do nothing");
+        s.set_auto_shift(true);
+        run(&mut s, 20.0, 200.0, 120.0);
+        assert_eq!(s.snapshot().gear, 12, "no automatic shifting either");
+        s.set_road_grade(25.0);
+        let cmd = s.tick(0.25);
+        assert_eq!(grade(cmd), 20.0, "clamped to the trainer's range");
+        assert!(matches!(cmd, Some(TrainerCommand::Simulation(t)) if t.clamped.is_some()));
+        assert!(!s.snapshot().virtual_gearing);
     }
 
     #[test]

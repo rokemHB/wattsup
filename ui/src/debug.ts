@@ -49,6 +49,9 @@ export function renderDebug(snap: EngineSnapshot) {
   const erg = $<HTMLInputElement>("erg-target");
   if (document.activeElement !== erg) erg.value = String(s.erg_target_w);
   for (const id of ["auto-shift", "settings-auto-shift"]) $<HTMLInputElement>(id).checked = s.auto_shift;
+  $<HTMLInputElement>("settings-virtual-gearing").checked = s.virtual_gearing;
+  // Without virtual gears there is no gear to show and nothing to auto-shift.
+  document.body.classList.toggle("no-gears", !s.virtual_gearing);
   for (const id of ["target-cadence", "settings-target-cadence"]) {
     const target = $<HTMLInputElement>(id);
     if (document.activeElement !== target) target.value = String(s.target_cadence_rpm);
@@ -143,6 +146,15 @@ function renderFound(d: DiscoveredDevice) {
   );
 }
 
+/** Applies the stored drivetrain choice at startup. */
+export function applyStoredDrivetrain() {
+  try {
+    if (localStorage.getItem("wattsup.virtualGearing") === "0") api.setVirtualGearing(false).catch(showError);
+  } catch {
+    // storage may be unavailable
+  }
+}
+
 export async function scan() {
   const button = $<HTMLButtonElement>("scan");
   button.disabled = true;
@@ -182,6 +194,15 @@ export function wireDebug() {
     const auto = $<HTMLInputElement>(id);
     auto.onchange = () => api.setAutoShift(auto.checked).catch(showError);
   }
+  const gearing = $<HTMLInputElement>("settings-virtual-gearing");
+  gearing.onchange = () => {
+    try {
+      localStorage.setItem("wattsup.virtualGearing", gearing.checked ? "1" : "0");
+    } catch {
+      // storage may be unavailable
+    }
+    api.setVirtualGearing(gearing.checked).catch(showError);
+  };
   for (const id of ["target-cadence", "settings-target-cadence"]) {
     const target = $<HTMLInputElement>(id);
     target.onchange = () => api.setTargetCadence(Number(target.value)).catch(showError);

@@ -1,7 +1,7 @@
 // The app's screens: start, main menu, rider, settings, the ride with its HUD
 // and minimap, pause and finish. The 3D world runs behind all of them.
 import { api, insideTauri } from "./api";
-import { latest, renderDebug, scan, showError, wireDebug } from "./debug";
+import { applyStoredDrivetrain, latest, renderDebug, scan, showError, wireDebug } from "./debug";
 import { $, el } from "./dom";
 import { duration, isTypingTarget, num, shiftForKey } from "./format";
 import { drawWorkout, Hud } from "./hud";
@@ -733,6 +733,7 @@ async function start() {
     return;
   }
   wire();
+  applyStoredDrivetrain();
   applyProfile(profile);
   const startup = await api.startupInfo();
   routes = await api.routes();

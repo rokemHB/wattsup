@@ -195,6 +195,12 @@ fn set_target_cadence(state: State<'_, AppState>, rpm: f64) {
 }
 
 #[tauri::command]
+async fn set_virtual_gearing(state: State<'_, AppState>, on: bool) -> CmdResult<()> {
+    state.engine.set_virtual_gearing(on).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn press_button(state: State<'_, AppState>, button: Button) -> CmdResult<()> {
     state.engine.press(button).await.map_err(|e| e.to_string())
 }
@@ -273,6 +279,7 @@ fn main() {
             set_road_grade,
             set_auto_shift,
             set_target_cadence,
+            set_virtual_gearing,
             press_button
         ])
         .run(tauri::generate_context!())

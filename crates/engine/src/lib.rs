@@ -382,6 +382,12 @@ impl Engine {
         self.publish();
     }
 
+    /// Virtual gears (Zwift Cog style) on or off; off, the trainer gets the road grade as it is.
+    pub async fn set_virtual_gearing(&self, on: bool) {
+        self.inner.session.lock().unwrap().set_virtual_gearing(on);
+        self.inner.send_now().await;
+    }
+
     /// Presses a button on the connected (simulated) controller.
     pub async fn press(&self, button: Button) -> Result<(), DeviceError> {
         let controller = self

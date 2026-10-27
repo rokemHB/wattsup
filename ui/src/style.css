@@ -177,3 +177,5 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 .hud-offline { margin-top: 10px; align-self: center; width: min(640px, 100%); background: rgba(90, 30, 30, 0.9); border: 2px solid var(--bad); border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
 .hud-offline b { font-size: 20px; color: #ffd0d0; }
 .hud-offline span { color: #f5dede; font-size: 14px; }
+
+body.no-gears .tile.gear, body.no-gears .hud-control, body.no-gears .gears { display: none; }
