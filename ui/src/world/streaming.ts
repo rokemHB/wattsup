@@ -17,7 +17,7 @@ import {
   type Land,
   lerp,
   parapets,
-  REAL_ROAD_WIDTH,
+  ROAD_CLASS,
   roadMeshes,
   SEA_LEVEL,
   SHOULDER,
@@ -26,7 +26,9 @@ import {
   tunnelMesh,
   vegetation,
 } from "./scene";
-import { faceCamera, signPost, type SignPost } from "./signs";
+import { confirmationPost, faceCamera, signPost, type SignPost } from "./signs";
+
+const cls_width = (kind: number) => ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, kind)].width;
 import { gridSample, gridSlope, type Grid } from "./terrain";
 import { parseGeoTiff } from "./tiff";
 import { asphaltTexture } from "./textures";
@@ -417,12 +419,15 @@ export class TileManager {
       let runStart = 0;
       const flush = () => {
         if (run.length >= 2) {
-          group.add(...roadMeshes(run, false, REAL_ROAD_WIDTH, true, this.asphalt));
+          const cls = ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, e.kind)];
+          // Numbered tertiary roads (the Ma-10 itself, Sa Calobra) are marked like main roads.
+          const lines = e.kind === 2 && e.ref ? "centre" : cls.lines;
+          group.add(...roadMeshes(run, false, cls.width, true, this.asphalt, lines));
           if (e.tunnel) {
             group.add(tunnelMesh(run, this.detail.rock));
           } else {
             group.add(corridorMesh(run, this.index, this.heightAt, null, this.detail.grain, photo.colorAt, this.detail, ei, e.start + runStart));
-            group.add(parapets(run, this.heightAt, REAL_ROAD_WIDTH, this.detail.rock));
+            group.add(parapets(run, this.heightAt, cls.width, this.detail.rock));
           }
         }
         run = [];
@@ -437,6 +442,28 @@ export class TileManager {
         }
       }
       flush();
+    }
+
+    // Confirmation signs along the roads: on the right of the direction they serve.
+    for (const ei of edges) {
+      const e = this.index.edge(ei);
+      for (const m of e.markers ?? []) {
+        // The two directions' signs stand 150 m apart, each on the right of its own traffic.
+        const i = e.start + m.at + (m.toward_b ? 0 : 30);
+        if (i < e.start + 2 || i >= e.start + e.count - 2) continue;
+        const xyz = this.net.xyz;
+        if (!inside(xyz[i * 3], xyz[i * 3 + 2])) continue;
+        const [i0, i1] = m.toward_b ? [i - 2, i + 2] : [i + 2, i - 2];
+        const dx = xyz[i1 * 3] - xyz[i0 * 3];
+        const dz = xyz[i1 * 3 + 2] - xyz[i0 * 3 + 2];
+        const l = Math.hypot(dx, dz) || 1;
+        // Right of travel in an x-east, z-south frame is (−dz, dx).
+        const px = xyz[i * 3] + (-dz / l) * (cls_width(e.kind) / 2 + 1.6);
+        const pz = xyz[i * 3 + 2] + (dx / l) * (cls_width(e.kind) / 2 + 1.6);
+        const post = confirmationPost(m.to, px, pz, this.heightAt(px, pz), -dx / l, -dz / l);
+        group.add(post.group);
+        t.posts.push(post);
+      }
     }
 
     // Signs: one post per approach at every junction inside the tile, but not

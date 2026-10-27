@@ -545,14 +545,23 @@ export function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mes
   };
 }
 
-export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false, asphalt = asphaltTexture()): THREE.Mesh[] {
+/** Road width and markings by network class (0 primary .. 3 unclassified): main roads get edge lines and a dashed centre, lanes get nothing. */
+export const ROAD_CLASS: { width: number; lines: "centre" | "edge" | "none" }[] = [
+  { width: 6.6, lines: "centre" },
+  { width: 6.0, lines: "centre" },
+  { width: 5.6, lines: "edge" },
+  { width: 4.6, lines: "none" },
+];
+
+export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false, asphalt = asphaltTexture(), lines: "centre" | "edge" | "none" | "test" = mountain ? "edge" : "test"): THREE.Mesh[] {
   const meshes = [
     // Shoulder: a wide sandy verge on the test course, a narrow gravel edge on a mountain road.
     ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"),
     ribbon(pts, closed, width, 0.05, mountain ? "#454341" : "#55585f", { map: asphalt }),
-    ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }),
   ];
-  if (!mountain) meshes.push(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }));
+  if (lines !== "none") meshes.push(ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }));
+  if (lines === "test") meshes.push(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }));
+  if (lines === "centre") meshes.push(ribbon(pts, closed, 0.12, 0.08, "#dcd9cf", { dashed: true }));
   return meshes;
 }
 

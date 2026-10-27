@@ -93,6 +93,50 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
   return { group, boards };
 }
 
+/** A confirmation sign between junctions: the next towns ahead with their distance in km, one board per town. */
+export function confirmationPost(to: [string, number][], x: number, z: number, y: number, facingDx: number, facingDz: number): SignPost {
+  const group = new THREE.Group();
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
+  post.position.set(0, 1.5, 0);
+  post.castShadow = true;
+  group.add(post);
+  const c = document.createElement("canvas");
+  c.width = 1024;
+  c.height = 110 + 100 * Math.min(2, to.length);
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#f4f2ea";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = 8;
+  ctx.strokeRect(4, 4, c.width - 8, c.height - 8);
+  ctx.fillStyle = "#111";
+  ctx.textBaseline = "middle";
+  to.slice(0, 2).forEach(([name, km], i) => {
+    const yy = 60 + i * 100;
+    ctx.font = "bold 70px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(name, 40, yy);
+    ctx.textAlign = "right";
+    ctx.fillText(km >= 10 ? km.toFixed(0) : km.toFixed(1), c.width - 40, yy);
+  });
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const h = (c.height / 1024) * BOARD_W;
+  // The board faces the riders it is for and shows a grey back to everyone else; it does not turn.
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 }));
+  board.position.set(0, 3.0 - h / 2, 0);
+  board.rotation.y = Math.atan2(facingDx, facingDz);
+  board.castShadow = true;
+  group.add(board);
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, h), new THREE.MeshStandardMaterial({ color: "#7a7d80", roughness: 0.8 }));
+  back.position.copy(board.position);
+  back.rotation.y = board.rotation.y + Math.PI;
+  group.add(back);
+  group.position.set(x, y, z);
+  return { group, boards: [] };
+}
+
 /** Turns the boards to face the camera around the vertical axis. */
 export function faceCamera(posts: SignPost[], camera: THREE.Vector3) {
   for (const p of posts) {
