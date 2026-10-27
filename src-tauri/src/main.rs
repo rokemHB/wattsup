@@ -270,6 +270,7 @@ fn main() {
             start_on_network,
             choose_turn,
             tiles::fetch_cached,
+            tiles::cache_fetch,
             scan,
             connect,
             disconnect,

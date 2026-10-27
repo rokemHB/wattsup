@@ -32,6 +32,8 @@ export const api = {
   chooseTurn: (edge: number) => invoke<boolean>("choose_turn", { edge }),
   /** Map data bytes through the app's disk cache. */
   fetchCached: (url: string) => invoke<ArrayBuffer>("fetch_cached", { url }),
+  /** Downloads a map data URL into the disk cache without sending it to the UI; answers its size in bytes. */
+  cacheFetch: (url: string) => invoke<number>("cache_fetch", { url }),
   stopWorkout: () => invoke<void>("stop_workout"),
   scan: (seconds: number) => invoke<ScanResult>("scan", { seconds }),
   connect: (id: string, kind: DeviceKind) => invoke<void>("connect", { id, kind }),

@@ -5,6 +5,7 @@
 //! afterwards.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -17,6 +18,7 @@ const USER_AGENT: &str = "WattsUp (https://github.com/rokemHB/wattsup)";
 
 pub struct Tiles {
     cache: PathBuf,
+    counter: AtomicU64,
     client: reqwest::Client,
 }
 
@@ -33,7 +35,11 @@ impl Tiles {
             .timeout(Duration::from_secs(120))
             .build()
             .expect("http client");
-        Self { cache, client }
+        Self {
+            cache,
+            client,
+            counter: AtomicU64::new(0),
+        }
     }
 
     fn path_for(&self, url: &str) -> PathBuf {
@@ -74,9 +80,13 @@ impl Tiles {
                     if bytes.is_empty() {
                         last = "empty response".into();
                     } else {
-                        let tmp = path.with_extension("part");
+                        // A private temp name: two tiles sharing a WMTS tile fetch it at the same time.
+                        let n = self.counter.fetch_add(1, Ordering::Relaxed);
+                        let tmp = path.with_extension(format!("part{n}"));
                         tokio::fs::write(&tmp, &bytes).await.map_err(|e| e.to_string())?;
-                        tokio::fs::rename(&tmp, &path).await.map_err(|e| e.to_string())?;
+                        if tokio::fs::rename(&tmp, &path).await.is_err() {
+                            let _ = tokio::fs::remove_file(&tmp).await;
+                        }
                         return Ok(bytes);
                     }
                 }
@@ -88,6 +98,14 @@ impl Tiles {
         }
         Err(format!("{url}: {last}"))
     }
+}
+
+/// Fetches a map data URL into the cache (for downloading a region ahead of
+/// time) and answers with its size, so nothing is copied to the web view.
+#[tauri::command]
+pub async fn cache_fetch(app: AppHandle, url: String) -> Result<u64, String> {
+    let tiles = app.state::<Tiles>();
+    Ok(tiles.fetch(&url).await?.len() as u64)
 }
 
 /// Raw bytes of a map data URL, cached on disk. The web view gets an ArrayBuffer.

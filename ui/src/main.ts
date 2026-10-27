@@ -9,7 +9,7 @@ import { Minimap, type NetworkView } from "./minimap";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
 import type { EngineSnapshot, Junction, Place, Route, RouteInfo, Turn, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
-import { Frame } from "./world/streaming";
+import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
@@ -296,6 +296,10 @@ async function openMap() {
     $(id).textContent = "Ride";
   }
   $("map-hint").textContent = "Click a road to start there. Scroll to zoom, drag to pan.";
+  if (!downloading) {
+    const est = worldDownloadEstimate(network!, networkWorld!);
+    $("map-download-text").textContent = `Terrain streams in as you ride and is kept on disk. The whole region is about ${Math.round(est.bytes / 1e6)} MB (${est.files} files).`;
+  }
   show("map");
 }
 
@@ -403,6 +407,34 @@ function directionLabel(edge: number, towardB: boolean): string {
   return `${road} ${dirs[idx]}`;
 }
 
+let downloading: { cancelled: boolean } | null = null;
+
+/** Fetches the whole region's terrain into the disk cache, with progress on the map screen; a second click cancels. */
+async function downloadTerrain() {
+  if (!network || !networkWorld) return;
+  const button = $<HTMLButtonElement>("map-download");
+  const bar = $<HTMLProgressElement>("map-download-bar");
+  const text = $("map-download-text");
+  if (downloading) {
+    downloading.cancelled = true;
+    return;
+  }
+  downloading = { cancelled: false };
+  button.textContent = "Cancel";
+  bar.hidden = false;
+  bar.value = 0;
+  const mb = (b: number) => (b / 1e6).toFixed(0);
+  const failed = await prefetchWorld(network, networkWorld, (done, total, bytes) => {
+    bar.value = done / total;
+    text.textContent = `Downloading terrain: ${done} of ${total} files, ${mb(bytes)} MB so far.`;
+  }, downloading);
+  const cancelled = downloading.cancelled;
+  downloading = null;
+  button.textContent = "Download all terrain";
+  bar.hidden = true;
+  text.textContent = cancelled ? "Download stopped. Click again to continue; what is already here stays." : failed ? `Done, but ${failed} files could not be fetched. Click again to retry them.` : "All terrain is on disk. Rides in this region work offline now.";
+}
+
 /** One redraw per frame, however many wheel or mouse events arrive. */
 let mapDrawQueued = false;
 function scheduleMapDraw() {
@@ -464,6 +496,7 @@ function wireMap() {
   });
   $("map-ride-a").onclick = () => startNetworkRide(true).catch(showError);
   $("map-ride-b").onclick = () => startNetworkRide(false).catch(showError);
+  $("map-download").onclick = () => downloadTerrain().catch(showError);
   window.addEventListener("resize", () => screen === "map" && drawMap());
 }
 
@@ -810,8 +843,10 @@ async function start() {
       await startNetworkRide(forward);
       if (startup.camera && world) world.setCamera(startup.camera);
     }
-  } else if (startup.screen === "map") {
+  } else if (startup.screen === "map" || startup.screen === "map-download") {
     await openMap();
+    // For testing the download: start it right away.
+    if (startup.screen === "map-download") downloadTerrain().catch(showError);
   }
   if (startup.screen === "workout-ride") {
     // For looking at the workout HUD: ride the first preset on the flat road.

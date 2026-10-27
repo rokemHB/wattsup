@@ -74,6 +74,88 @@ function mercator(lat: number, lon: number, z: number): [number, number] {
   return [x, y];
 }
 
+/** The terrain tiles a network world needs: every tile whose centre is within the load radius of a road. */
+export function worldTiles(net: RoadNetwork, meta: NetworkWorldMeta): { i: number; j: number }[] {
+  const frame = new Frame(meta.origin.lat, meta.origin.lon);
+  const { dlat, dlon } = meta.tiles;
+  const out = new Map<string, { i: number; j: number }>();
+  for (let p = 0; p < net.points; p += 2) {
+    const x = net.xyz[p * 3];
+    const z = net.xyz[p * 3 + 2];
+    const [lat, lon] = frame.toLatLon(x, z);
+    const i0 = Math.floor(lat / dlat);
+    const j0 = Math.floor(lon / dlon);
+    for (let i = i0 - 2; i <= i0 + 2; i++) {
+      for (let j = j0 - 2; j <= j0 + 2; j++) {
+        const key = `${i}_${j}`;
+        if (out.has(key)) continue;
+        const [cx, cz] = frame.toXZ((i + 0.5) * dlat, (j + 0.5) * dlon);
+        if (Math.hypot(cx - x, cz - z) <= LOAD_RADIUS_M) out.set(key, { i, j });
+      }
+    }
+  }
+  return [...out.values()];
+}
+
+/** Every URL (elevation and imagery) behind a tile. */
+export function tileUrls(meta: NetworkWorldMeta, i: number, j: number): string[] {
+  const { dlat, dlon, dem, ortho, orthoZoom } = meta.tiles;
+  const lat0 = i * dlat;
+  const lat1 = (i + 1) * dlat;
+  const lon0 = j * dlon;
+  const lon1 = (j + 1) * dlon;
+  const urls = [dem.replace("{lat0}", lat0.toFixed(5)).replace("{lat1}", lat1.toFixed(5)).replace("{lon0}", lon0.toFixed(5)).replace("{lon1}", lon1.toFixed(5))];
+  const [mx0, my0] = mercator(lat1, lon0, orthoZoom);
+  const [mx1, my1] = mercator(lat0, lon1, orthoZoom);
+  for (let ty = Math.floor(my0); ty <= Math.floor(my1); ty++) {
+    for (let tx = Math.floor(mx0); tx <= Math.floor(mx1); tx++) {
+      urls.push(ortho.replace("{z}", String(orthoZoom)).replace("{x}", String(tx)).replace("{y}", String(ty)));
+    }
+  }
+  return urls;
+}
+
+/** Rough size of a whole world's terrain, from typical tile sizes (elevation ~490 KB, an imagery tile ~17 KB). */
+export function worldDownloadEstimate(net: RoadNetwork, meta: NetworkWorldMeta): { files: number; bytes: number } {
+  let files = 0;
+  let bytes = 0;
+  for (const t of worldTiles(net, meta)) {
+    const n = tileUrls(meta, t.i, t.j).length;
+    files += n;
+    bytes += 490_000 + (n - 1) * 17_000;
+  }
+  return { files, bytes };
+}
+
+/**
+ * Downloads a world's whole terrain into the disk cache, a few files at a
+ * time, so rides work offline afterwards. Files already cached are quick.
+ * Resolves with the number of files that could not be fetched.
+ */
+export async function prefetchWorld(net: RoadNetwork, meta: NetworkWorldMeta, onProgress: (done: number, total: number, bytes: number) => void, cancel: { cancelled: boolean }): Promise<number> {
+  const urls = worldTiles(net, meta).flatMap((t) => tileUrls(meta, t.i, t.j));
+  const seen = new Set<string>();
+  const queue = urls.filter((u) => !seen.has(u) && seen.add(u));
+  let done = 0;
+  let bytes = 0;
+  let failed = 0;
+  const worker = async () => {
+    while (queue.length && !cancel.cancelled) {
+      const url = queue.shift()!;
+      try {
+        bytes += await api.cacheFetch(url);
+      } catch (e) {
+        failed++;
+        console.warn(`prefetch ${url}: ${e}`);
+      }
+      done++;
+      onProgress(done, seen.size, bytes);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return failed;
+}
+
 interface Tile {
   key: string;
   i: number;
