@@ -1,0 +1,19 @@
+[package]
+name = "wattsup-cli"
+description = "Terminal tool for WattsUp: scan, connect and ride without the UI. Used for hardware checks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "wattsup-cli"
+path = "src/main.rs"
+
+[dependencies]
+wattsup-core = { path = "../core" }
+wattsup-devices = { path = "../devices" }
+wattsup-engine = { path = "../engine" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-std", "io-util", "signal"] }
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
