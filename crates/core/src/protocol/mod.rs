@@ -6,6 +6,7 @@
 
 pub mod ftms;
 pub mod hrs;
+pub mod zwift;
 
 use std::fmt;
 
