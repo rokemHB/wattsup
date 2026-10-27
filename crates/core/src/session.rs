@@ -12,6 +12,7 @@ use crate::gearing::{implied_ratio, GearSet, Gearbox, ShiftDirection};
 use crate::physics::{kmh_to_mps, mps_to_kmh, step_speed, RiderParams};
 use crate::protocol::ftms::ControlRequest;
 use crate::resistance::{virtual_gear_power, virtual_gear_sim, SimTarget, TrainerProfile};
+use crate::route::Route;
 
 /// How the trainer's resistance is controlled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +52,8 @@ pub struct SessionConfig {
     pub rider: RiderParams,
     pub trainer: TrainerProfile,
     pub gears: GearSet,
+    /// The road the rider moves along. Its grade overrides [`RideSession::set_road_grade`].
+    pub route: Option<Route>,
     /// Zero-based starting gear.
     pub start_gear: usize,
     /// Minimum time between trainer commands in steady riding.
@@ -74,6 +77,7 @@ impl Default for SessionConfig {
             rider: RiderParams::default(),
             trainer: TrainerProfile::default(),
             gears,
+            route: None,
             start_gear,
             command_interval_s: 0.25,
             resend_after_s: 5.0,
@@ -130,6 +134,10 @@ pub struct SessionSnapshot {
     pub heart_rate_bpm: Option<f64>,
     pub virtual_speed_kmh: f64,
     pub distance_m: f64,
+    /// Distance within the current lap of the route (equals `distance_m` without a route).
+    pub route_position_m: f64,
+    /// Zero-based lap count on a closed route.
+    pub lap: u32,
     /// Pedal power the virtual road asks for at the current cadence, gear and
     /// grade. In SIM mode the trainer should make the rider produce about this
     /// much; the gap to `power_w` shows how far the [`TrainerProfile`] is off.
@@ -229,10 +237,17 @@ impl RideSession {
         self.urgent = true;
     }
 
-    /// Sets the virtual road's grade (the game world will drive this later).
+    /// Sets the virtual road's grade by hand. Ignored while a route is set.
     pub fn set_road_grade(&mut self, grade_pct: f64) {
+        if self.config.route.is_some() {
+            return;
+        }
         self.road_grade_pct = grade_pct.clamp(-25.0, 25.0);
         self.urgent = true;
+    }
+
+    pub fn route(&self) -> Option<&Route> {
+        self.config.route.as_ref()
     }
 
     /// Advances time by `dt` seconds. Returns a command when the trainer needs a new one.
@@ -250,6 +265,10 @@ impl RideSession {
             dt,
         );
         self.distance_m += self.virtual_speed_mps * dt;
+        if let Some(route) = &self.config.route {
+            // Not urgent: the deadband and interval decide when the trainer hears about it.
+            self.road_grade_pct = route.grade_at(self.distance_m);
+        }
 
         let cadence = self.cadence.fresh(now, timeout);
         let trainer_speed = self.trainer_speed.fresh(now, timeout).map(kmh_to_mps);
@@ -311,6 +330,11 @@ impl RideSession {
         let t = self.config.data_timeout_s;
         let cadence = self.cadence.fresh(now, t).unwrap_or(0.0);
         let model_power_w = virtual_gear_power(&self.config.rider, cadence, self.gearbox.ratio(), self.road_grade_pct);
+        let (route_position_m, lap) = self
+            .config
+            .route
+            .as_ref()
+            .map_or((self.distance_m, 0), |r| r.lap_position(self.distance_m));
         SessionSnapshot {
             elapsed_s: now,
             mode: self.mode,
@@ -325,6 +349,8 @@ impl RideSession {
             heart_rate_bpm: self.heart_rate.fresh(now, t),
             virtual_speed_kmh: mps_to_kmh(self.virtual_speed_mps),
             distance_m: self.distance_m,
+            route_position_m,
+            lap,
             model_power_w,
             last_command: self.last_command,
             last_command_age_s: self.last_command.map(|_| now - self.last_command_at),
@@ -498,6 +524,31 @@ mod tests {
             s.tick(0.25);
         }
         assert_eq!(s.snapshot().model_power_w, 0.0, "cadence expired");
+    }
+
+    #[test]
+    fn route_drives_the_grade_and_laps() {
+        let mut s = RideSession::new(SessionConfig {
+            route: Some(Route::demo()),
+            ..SessionConfig::default()
+        });
+        s.set_road_grade(12.0);
+        riding(&mut s, 250.0, 90.0);
+        s.tick(0.25);
+        assert!(
+            s.snapshot().road_grade_pct.abs() < 3.0,
+            "start of the loop is nearly flat"
+        );
+        let mut seen_climb = false;
+        for _ in 0..(20 * 60 * 4) {
+            riding(&mut s, 250.0, 90.0);
+            s.tick(0.25);
+            seen_climb |= s.snapshot().road_grade_pct > 5.0;
+        }
+        let snap = s.snapshot();
+        assert!(seen_climb);
+        assert!(snap.lap >= 1, "20 min at 250 W covers more than one lap: {snap:?}");
+        assert!(snap.route_position_m < Route::demo().length_m());
     }
 
     #[test]

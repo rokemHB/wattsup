@@ -33,6 +33,8 @@ export interface SessionSnapshot {
   heart_rate_bpm: number | null;
   virtual_speed_kmh: number;
   distance_m: number;
+  route_position_m: number;
+  lap: number;
   model_power_w: number;
   last_command: TrainerCommand | null;
   last_command_age_s: number | null;
@@ -79,6 +81,19 @@ export interface DiscoveredDevice {
 export interface ScanResult {
   devices: DiscoveredDevice[];
   errors: string[];
+}
+
+export interface RoutePoint {
+  distance_m: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Route {
+  name: string;
+  points: RoutePoint[];
+  closed: boolean;
 }
 
 export interface StartupInfo {

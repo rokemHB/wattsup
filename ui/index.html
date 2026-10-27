@@ -7,83 +7,108 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <header>
-      <h1>WattsUp <span class="sub">debug</span></h1>
-      <div id="providers" class="providers"></div>
-      <div class="clock"><span id="elapsed">00:00</span> · <span id="distance">0 m</span></div>
-    </header>
+    <canvas id="world"></canvas>
+
+    <div id="hud" hidden>
+      <div class="hud-top">
+        <div class="tile"><label>Power</label><b id="hud-power">–</b><small>W</small></div>
+        <div class="tile"><label>Cadence</label><b id="hud-cadence">–</b><small>rpm</small></div>
+        <div class="tile"><label>Heart rate</label><b id="hud-hr">–</b><small>bpm</small></div>
+        <div class="tile"><label>Speed</label><b id="hud-speed">–</b><small>km/h</small></div>
+        <div class="tile gear"><label>Gear</label><b id="hud-gear">–</b><small id="hud-gear-ratio"></small></div>
+      </div>
+      <div class="hud-route">
+        <b id="hud-route-name"></b> · lap <span id="hud-lap">1</span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+      </div>
+      <div class="hud-bottom"><canvas id="profile"></canvas></div>
+      <div class="hud-hints">
+        <span>↑ ↓ shift · C camera · F11 fullscreen</span>
+        <button id="toggle-debug" class="small">Debug (D)</button>
+      </div>
+    </div>
+
     <div id="not-tauri" class="banner" hidden>
       This page needs the WattsUp app around it. Start it with <code>npm run tauri dev</code>.
     </div>
 
-    <main>
-      <section class="metrics">
-        <div class="metric big"><label>Power</label><span id="power">–</span><small id="power-model">W</small></div>
-        <div class="metric big"><label>Cadence</label><span id="cadence">–</span><small>rpm</small></div>
-        <div class="metric big"><label>Speed</label><span id="speed">–</span><small>km/h</small></div>
-        <div class="metric big"><label>Heart rate</label><span id="hr">–</span><small>bpm</small></div>
-        <div class="metric big gear"><label>Gear</label><span id="gear">–</span><small id="gear-ratio"></small></div>
-        <div class="metric"><label>Trainer speed</label><span id="trainer-speed">–</span><small>km/h</small></div>
-        <div class="metric"><label>Road grade</label><span id="road-grade">0.0</span><small>%</small></div>
-        <div class="metric wide">
-          <label>Sent to trainer</label><span id="sent">nothing yet</span><small id="sent-age"></small>
-          <div id="sent-warning" class="warning" hidden></div>
-        </div>
-        <div class="metric"><label>Measured drive ratio</label><span id="drive-ratio">–</span><small id="drive-teeth"></small></div>
-      </section>
+    <div id="debug" class="drawer" hidden>
+      <header>
+        <h1>WattsUp <span class="sub">debug</span></h1>
+        <div id="providers" class="providers"></div>
+        <div class="clock"><span id="elapsed">00:00</span> · <span id="distance">0 m</span></div>
+        <button id="close-debug" class="small">Back to the ride (D)</button>
+      </header>
 
-      <section class="gears" id="gear-strip" aria-label="Virtual gears"></section>
+      <main>
+        <section class="metrics">
+          <div class="metric big"><label>Power</label><span id="power">–</span><small id="power-model">W</small></div>
+          <div class="metric big"><label>Cadence</label><span id="cadence">–</span><small>rpm</small></div>
+          <div class="metric big"><label>Speed</label><span id="speed">–</span><small>km/h</small></div>
+          <div class="metric big"><label>Heart rate</label><span id="hr">–</span><small>bpm</small></div>
+          <div class="metric big gear"><label>Gear</label><span id="gear">–</span><small id="gear-ratio"></small></div>
+          <div class="metric"><label>Trainer speed</label><span id="trainer-speed">–</span><small>km/h</small></div>
+          <div class="metric"><label>Road grade</label><span id="road-grade">0.0</span><small>%</small></div>
+          <div class="metric wide">
+            <label>Sent to trainer</label><span id="sent">nothing yet</span><small id="sent-age"></small>
+            <div id="sent-warning" class="warning" hidden></div>
+          </div>
+          <div class="metric"><label>Measured drive ratio</label><span id="drive-ratio">–</span><small id="drive-teeth"></small></div>
+        </section>
 
-      <section class="controls">
-        <div class="group">
-          <h2>Mode</h2>
-          <div class="segmented" role="radiogroup">
-            <button id="mode-sim" data-mode="sim">SIM · virtual gears</button>
-            <button id="mode-erg" data-mode="erg">ERG · target power</button>
-          </div>
-          <div class="row" id="erg-row">
-            <button data-erg="-10">−10</button>
-            <input id="erg-target" type="number" min="0" max="1500" step="5" value="150" />
-            <span>W</span>
-            <button data-erg="10">+10</button>
-          </div>
-        </div>
-        <div class="group">
-          <h2>Shift</h2>
-          <div class="row">
-            <button id="shift-down" class="shift">− easier</button>
-            <button id="shift-up" class="shift">harder +</button>
-          </div>
-          <p class="hint">Keyboard: ↑ / ] harder · ↓ / [ easier</p>
-          <div class="row" id="sim-click-row" hidden>
-            <span class="hint">Simulated controller:</span>
-            <button data-press="minus">Click −</button>
-            <button data-press="plus">Click +</button>
-          </div>
-        </div>
-        <div class="group">
-          <h2>Virtual road</h2>
-          <input id="grade" type="range" min="-10" max="15" step="0.5" value="0" />
-          <div class="row"><span class="hint">−10 %</span><span class="spacer"></span><span class="hint">+15 %</span></div>
-        </div>
-      </section>
+        <section class="gears" id="gear-strip" aria-label="Virtual gears"></section>
 
-      <section class="devices">
-        <h2>Devices</h2>
-        <div id="device-slots"></div>
-        <div class="row scan-row">
-          <button id="scan">Scan</button>
-          <label class="check"><input type="checkbox" id="show-sim" checked /> show simulated devices</label>
-          <span id="scan-status" class="hint"></span>
-        </div>
-        <div id="scan-results"></div>
-      </section>
+        <section class="controls">
+          <div class="group">
+            <h2>Mode</h2>
+            <div class="segmented" role="radiogroup">
+              <button id="mode-sim" data-mode="sim">SIM · virtual gears</button>
+              <button id="mode-erg" data-mode="erg">ERG · target power</button>
+            </div>
+            <div class="row" id="erg-row">
+              <button data-erg="-10">−10</button>
+              <input id="erg-target" type="number" min="0" max="1500" step="5" value="150" />
+              <span>W</span>
+              <button data-erg="10">+10</button>
+            </div>
+          </div>
+          <div class="group">
+            <h2>Shift</h2>
+            <div class="row">
+              <button id="shift-down" class="shift">− easier</button>
+              <button id="shift-up" class="shift">harder +</button>
+            </div>
+            <p class="hint">Keyboard: ↑ / ] harder · ↓ / [ easier</p>
+            <div class="row" id="sim-click-row" hidden>
+              <span class="hint">Simulated controller:</span>
+              <button data-press="minus">Click −</button>
+              <button data-press="plus">Click +</button>
+            </div>
+          </div>
+          <div class="group">
+            <h2>Virtual road</h2>
+            <input id="grade" type="range" min="-10" max="15" step="0.5" value="0" />
+            <div class="row"><span class="hint">−10 %</span><span class="spacer"></span><span class="hint">+15 %</span></div>
+            <p class="hint" id="grade-hint" hidden>The route sets the grade while riding a course.</p>
+          </div>
+        </section>
 
-      <section class="log">
-        <h2>Log</h2>
-        <ol id="log"></ol>
-      </section>
-    </main>
+        <section class="devices">
+          <h2>Devices</h2>
+          <div id="device-slots"></div>
+          <div class="row scan-row">
+            <button id="scan">Scan</button>
+            <label class="check"><input type="checkbox" id="show-sim" checked /> show simulated devices</label>
+            <span id="scan-status" class="hint"></span>
+          </div>
+          <div id="scan-results"></div>
+        </section>
+
+        <section class="log">
+          <h2>Log</h2>
+          <ol id="log"></ol>
+        </section>
+      </main>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

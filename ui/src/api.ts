@@ -1,11 +1,13 @@
 // Typed wrappers around the Tauri commands in src-tauri/src/main.rs.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   ControlMode,
   ControllerButton,
   DeviceKind,
   EngineSnapshot,
+  Route,
   ScanResult,
   ShiftDirection,
   StartupInfo,
@@ -16,6 +18,7 @@ export const insideTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 export const api = {
   startupInfo: () => invoke<StartupInfo>("startup_info"),
   snapshot: () => invoke<EngineSnapshot>("snapshot"),
+  route: () => invoke<Route | null>("route"),
   scan: (seconds: number) => invoke<ScanResult>("scan", { seconds }),
   connect: (id: string, kind: DeviceKind) => invoke<void>("connect", { id, kind }),
   disconnect: (kind: DeviceKind) => invoke<void>("disconnect", { kind }),
@@ -24,6 +27,10 @@ export const api = {
   setErgTarget: (watts: number) => invoke<void>("set_erg_target", { watts }),
   setRoadGrade: (grade: number) => invoke<void>("set_road_grade", { grade }),
   pressButton: (button: ControllerButton) => invoke<void>("press_button", { button }),
+  toggleFullscreen: async () => {
+    const win = getCurrentWindow();
+    await win.setFullscreen(!(await win.isFullscreen()));
+  },
   onSnapshot: (handler: (s: EngineSnapshot) => void): Promise<UnlistenFn> =>
     listen<EngineSnapshot>("snapshot", (e) => handler(e.payload)),
 };

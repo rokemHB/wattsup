@@ -14,6 +14,7 @@ use tokio::sync::{watch, Mutex as AsyncMutex};
 use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
+use wattsup_core::route::Route;
 use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot};
 use wattsup_devices::sim::{SimConfig, SimProvider};
 use wattsup_devices::{
@@ -169,6 +170,11 @@ impl Engine {
 
     pub fn snapshot(&self) -> EngineSnapshot {
         self.inner.snapshots.borrow().clone()
+    }
+
+    /// The route the session rides, for UIs that draw it.
+    pub fn route(&self) -> Option<Route> {
+        self.inner.session.lock().unwrap().route().cloned()
     }
 
     /// Scans every provider at once. One failing provider does not hide the others.

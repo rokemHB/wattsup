@@ -10,6 +10,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
+use wattsup_core::route::Route;
 use wattsup_core::session::ControlMode;
 use wattsup_devices::{DeviceId, DeviceKind};
 use wattsup_engine::{Engine, EngineConfig, EngineSnapshot, ScanResult};
@@ -52,6 +53,11 @@ fn startup_info(state: State<'_, AppState>) -> StartupInfo {
 #[tauri::command]
 fn snapshot(state: State<'_, AppState>) -> EngineSnapshot {
     state.engine.snapshot()
+}
+
+#[tauri::command]
+fn route(state: State<'_, AppState>) -> Option<Route> {
+    state.engine.route()
 }
 
 #[tauri::command]
@@ -114,6 +120,7 @@ fn main() {
                 sim: startup.sim,
                 ..EngineConfig::default()
             };
+            config.session.route = Some(Route::demo());
             config.ble_config.log_raw = startup.raw_logging;
             // Engine::start spawns its loops, so it must run inside Tauri's Tokio runtime.
             let engine = tauri::async_runtime::block_on(async { Engine::start(config) });
@@ -150,6 +157,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             startup_info,
             snapshot,
+            route,
             scan,
             connect,
             disconnect,

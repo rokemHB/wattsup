@@ -1,7 +1,9 @@
 // The milestone-1 debug screen: live values, gearing, mode, devices, log.
 import { api, insideTauri } from "./api";
 import { describeCommand, distance, duration, isTypingTarget, KIND_LABEL, num, shiftForKey, stateLabel } from "./format";
+import { Hud } from "./hud";
 import type { ControllerButton, DeviceKind, DeviceStatus, DiscoveredDevice, EngineSnapshot, ScanResult } from "./types";
+import { World } from "./world/world";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const COG_TEETH = 14;
@@ -184,14 +186,42 @@ function wire() {
   const grade = $<HTMLInputElement>("grade");
   grade.oninput = () => api.setRoadGrade(Number(grade.value));
 
+  $("toggle-debug").onclick = toggleDebug;
+  $("close-debug").onclick = toggleDebug;
+
   window.addEventListener("keydown", (e) => {
     if (isTypingTarget(e.target) || e.repeat) return;
     const dir = shiftForKey(e.key);
     if (dir) {
       e.preventDefault();
       api.shift(dir);
+      return;
     }
+    if (e.key === "d" || e.key === "D") toggleDebug();
+    else if ((e.key === "c" || e.key === "C") && world) world.cycleCamera();
+    else if (e.key === "F11") {
+      e.preventDefault();
+      api.toggleFullscreen().catch(showError);
+    } else if (e.key === "Escape" && !$("debug").hidden) toggleDebug();
   });
+}
+
+let world: World | null = null;
+let hud: Hud | null = null;
+
+function toggleDebug() {
+  const drawer = $("debug");
+  drawer.hidden = !drawer.hidden;
+}
+
+async function startWorld() {
+  const route = await api.route();
+  if (!route) return;
+  world = new World($<HTMLCanvasElement>("world"), route);
+  hud = new Hud(world.sampler);
+  $("hud").hidden = false;
+  $("grade").hidden = true;
+  $("grade-hint").hidden = false;
 }
 
 async function start() {
@@ -200,8 +230,14 @@ async function start() {
     return;
   }
   wire();
-  await api.onSnapshot(render);
-  render(await api.snapshot());
+  await startWorld();
+  const onSnap = (snap: EngineSnapshot) => {
+    render(snap);
+    world?.update(snap);
+    hud?.update(snap);
+  };
+  await api.onSnapshot(onSnap);
+  onSnap(await api.snapshot());
   await scan();
 }
 
