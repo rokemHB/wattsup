@@ -6,6 +6,8 @@
 //! ([`Trainer`], [`HeartRateMonitor`], [`Controller`]). The rest of the app
 //! never knows whether a device is real.
 
+#[cfg(feature = "ble")]
+pub mod ble;
 pub mod sim;
 mod types;
 

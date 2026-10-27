@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-default = []
+default = ["ble"]
 # Real Bluetooth via btleplug. Off for quick builds on machines without a BLE stack.
 ble = ["dep:btleplug", "dep:uuid", "dep:futures"]
 
