@@ -158,3 +158,18 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 .hud-workout-text b { font-size: 28px; color: var(--text); }
 .hud-workout-text .paused { color: var(--busy); font-weight: 600; }
 #hud-workout-bar { display: block; width: 100%; height: 54px; margin-top: 6px; }
+
+/* --- map and junctions ----------------------------------------------------- */
+.panel.wide .panel-head, .panel.wide .panel-body { max-width: 1400px; }
+.map-body { flex: 1; min-height: 0; }
+.map-canvas { width: 100%; height: calc(100vh - 220px); display: block; border-radius: 12px; background: #0b0d14; cursor: crosshair; }
+.hud-junction { margin-top: 10px; align-self: center; width: min(760px, 100%); background: rgba(15, 18, 27, 0.82); border-radius: 12px; padding: 10px 14px; }
+.hud-junction-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.hud-junction-head b { font-size: 18px; }
+.hud-junction-options { display: flex; gap: 8px; }
+.hud-junction-options button { pointer-events: auto; flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; border: 2px solid #2d3550; }
+.hud-junction-options button.on { border-color: var(--accent); background: rgba(255, 196, 0, 0.12); }
+.hud-junction-options .arrow { font-size: 26px; line-height: 1; }
+.hud-junction-options .road { font-weight: 600; }
+.hud-junction-options .to { color: var(--muted); font-size: 13px; }
+.hud-route.windowed .lap { display: none; }

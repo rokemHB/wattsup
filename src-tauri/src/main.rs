@@ -39,6 +39,8 @@ struct StartupInfo {
     camera: Option<String>,
     /// Screen to open at startup (start, menu, rider, settings, ride), for looking at one.
     screen: Option<String>,
+    /// "lat,lon[,back]": start the island ride at that spot (for looking at a place).
+    island_at: Option<String>,
 }
 
 /// `--sim-only`, `--no-sim`, `--raw`, `--auto-sim`, or the same as
@@ -64,6 +66,7 @@ fn startup_from_env() -> StartupInfo {
             .unwrap_or(0.0),
         camera: value("--camera", "WATTSUP_CAMERA"),
         screen: value("--screen", "WATTSUP_SCREEN"),
+        island_at: value("--island-at", "WATTSUP_ISLAND_AT"),
     }
 }
 

@@ -42,7 +42,7 @@
   "dlon": 0.025,
   "dem": "https://servicios.idee.es/wcs-inspire/mdt?service=WCS&request=GetCoverage&version=2.0.1&coverageId=Elevacion4258_5&subset=Lat({lat0},{lat1})&subset=Long({lon0},{lon1})&format=image/tiff",
   "ortho": "https://www.ign.es/wmts/pnoa-ma?service=WMTS&request=GetTile&version=1.0.0&layer=OI.OrthoimageCoverage&style=default&format=image/jpeg&tilematrixset=GoogleMapsCompatible&tilematrix={z}&tilerow={y}&tilecol={x}",
-  "orthoZoom": 15
+  "orthoZoom": 16
  },
  "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0)."
 }

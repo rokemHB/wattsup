@@ -67,11 +67,70 @@ export interface LogLine {
   message: string;
 }
 
+export type Turn = "sharp_left" | "left" | "straight" | "right" | "sharp_right" | "u_turn";
+
+export interface TurnOption {
+  edge: number;
+  turn: Turn;
+  angle_deg: number;
+  ref: string | null;
+  to: string[];
+  chosen: boolean;
+}
+
+export interface Junction {
+  node: number;
+  at_m: number;
+  options: TurnOption[];
+}
+
 export interface EngineSnapshot {
   session: SessionSnapshot;
   devices: DeviceStatus[];
   providers: string[];
   log: LogLine[];
+  route_version: number;
+  junction: Junction | null;
+}
+
+export interface Sign {
+  edge: number;
+  ref: string | null;
+  to: string[];
+}
+
+export interface NetworkNode {
+  x: number;
+  z: number;
+  y: number;
+  signs: Sign[] | null;
+}
+
+export interface NetworkEdge {
+  a: number;
+  b: number;
+  ref: string | null;
+  name: string | null;
+  kind: number;
+  start: number;
+  count: number;
+  length_m: number;
+}
+
+export interface Place {
+  name: string;
+  kind: string;
+  x: number;
+  z: number;
+}
+
+export interface NetworkInfo {
+  name: string;
+  origin: { lat: number; lon: number };
+  nodes: NetworkNode[];
+  edges: NetworkEdge[];
+  places: Place[];
+  points: number;
 }
 
 export interface DiscoveredDevice {
@@ -144,4 +203,5 @@ export interface StartupInfo {
   start_m: number;
   camera: string | null;
   screen: string | null;
+  island_at: string | null;
 }

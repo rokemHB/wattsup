@@ -7,6 +7,8 @@ export interface Grid {
   x0: number;
   z0: number;
   spacing: number;
+  /** Row spacing when it differs from the column spacing (a grid square in degrees is not square in metres). */
+  spacingZ?: number;
   data: Float32Array;
   /** Aerial imagery, one image per block of the grid between the given vertex-index edges. */
   ortho?: Ortho;
@@ -59,6 +61,51 @@ async function loadGrid(meta: GridMeta): Promise<Grid> {
     grid.ortho = { rowEdges: o.rowEdges, colEdges: o.colEdges, size: o.size, images };
   }
   return grid;
+}
+
+/** A world that streams terrain tiles around a road network (see streaming.ts). */
+export interface NetworkWorldData {
+  id: string;
+  name: string;
+  attribution: string;
+  origin: { lat: number; lon: number };
+  far: Grid;
+  tiles: { dlat: number; dlon: number; dem: string; ortho: string; orthoZoom: number };
+  map: { image: ImageBitmap; lat_min: number; lat_max: number; lon_min: number; lon_max: number } | null;
+  details?: { rock: ImageBitmap; scrub: ImageBitmap; metres: number };
+}
+
+export async function loadNetworkWorld(id: string): Promise<NetworkWorldData> {
+  const res = await fetch(`/worlds/${id}.json`);
+  if (!res.ok) throw new Error(`world ${id}: ${res.status}`);
+  const meta = (await res.json()) as {
+    id: string;
+    name: string;
+    attribution: string;
+    origin: { lat: number; lon: number };
+    far: GridMeta;
+    tiles: NetworkWorldData["tiles"];
+    map: { file: string; lat_min: number; lat_max: number; lon_min: number; lon_max: number } | null;
+    details?: { rock: string; scrub: string; metres: number };
+  };
+  // Close-up patches: this world's own, or the ones cut for Sa Calobra, which is the same limestone.
+  const details = meta.details ?? { rock: "/worlds/sa-calobra/detail-rock.jpg", scrub: "/worlds/sa-calobra/detail-scrub.jpg", metres: 110 };
+  const [far, mapImage, rock, scrub] = await Promise.all([
+    loadGrid(meta.far),
+    meta.map ? loadImage(meta.map.file) : Promise.resolve(null),
+    loadImage(details.rock).catch(() => null),
+    loadImage(details.scrub).catch(() => null),
+  ]);
+  return {
+    id: meta.id,
+    name: meta.name,
+    attribution: meta.attribution,
+    origin: meta.origin,
+    far,
+    tiles: meta.tiles,
+    map: meta.map && mapImage ? { image: mapImage, ...meta.map } : null,
+    details: rock && scrub ? { rock, scrub, metres: details.metres } : undefined,
+  };
 }
 
 /** Mean RGB of an image in 0..1, through a small canvas. */
@@ -144,7 +191,7 @@ export async function loadWorld(id: string): Promise<WorldData> {
 /** Bilinear height, or null outside the grid. */
 export function gridSample(g: Grid, x: number, z: number): number | null {
   const fx = (x - g.x0) / g.spacing;
-  const fz = (z - g.z0) / g.spacing;
+  const fz = (z - g.z0) / (g.spacingZ ?? g.spacing);
   if (fx < 0 || fz < 0 || fx > g.cols - 1 || fz > g.rows - 1) return null;
   const ix = Math.min(Math.floor(fx), g.cols - 2);
   const iz = Math.min(Math.floor(fz), g.rows - 2);
@@ -160,10 +207,11 @@ export function gridSample(g: Grid, x: number, z: number): number | null {
 /** Magnitude of the terrain gradient (rise over run) from the grid. */
 export function gridSlope(g: Grid, x: number, z: number): number {
   const e = g.spacing;
+  const ez = g.spacingZ ?? g.spacing;
   const a = gridSample(g, x - e, z);
   const b = gridSample(g, x + e, z);
-  const c = gridSample(g, x, z - e);
-  const d = gridSample(g, x, z + e);
+  const c = gridSample(g, x, z - ez);
+  const d = gridSample(g, x, z + ez);
   if (a === null || b === null || c === null || d === null) return 0;
-  return Math.hypot((b - a) / (2 * e), (d - c) / (2 * e));
+  return Math.hypot((b - a) / (2 * e), (d - c) / (2 * ez));
 }

@@ -56,6 +56,15 @@
       </div>
     </section>
 
+    <!-- Map: pick a start on the island -->
+    <section id="screen-map" class="screen panel wide" hidden>
+      <header class="panel-head"><h2 id="map-title">Mallorca</h2><span class="row"><button id="map-ride-a" class="primary" disabled>Ride</button><button id="map-ride-b" class="primary" disabled>Ride</button><button class="back" data-back>Back</button></span></header>
+      <div class="panel-body map-body">
+        <canvas id="map-canvas" class="map-canvas"></canvas>
+        <p class="hint" id="map-hint">Click a road to start there. Scroll to zoom, drag to pan.</p>
+      </div>
+    </section>
+
     <!-- Workout editor -->
     <section id="screen-workout" class="screen panel" hidden>
       <header class="panel-head"><h2>Workout</h2><span class="row"><button id="workout-start" class="primary">Start</button><button id="workout-save">Save</button><button id="workout-delete" class="small">Delete</button><button class="back" data-back>Back</button></span></header>
@@ -129,7 +138,11 @@
         <div class="tile rider-badge"><span class="avatar" id="hud-avatar">🚴</span><b id="hud-name">Rider</b></div>
       </div>
       <div class="hud-route">
-        <b id="hud-route-name"></b> · lap <span id="hud-lap">1</span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+        <b id="hud-route-name"></b><span class="lap"> · lap <span id="hud-lap">1</span></span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+      </div>
+      <div id="hud-junction" class="hud-junction" hidden>
+        <div class="hud-junction-head"><b id="hud-junction-dist">Junction in 300 m</b><span class="hint">← → choose</span></div>
+        <div id="hud-junction-options" class="hud-junction-options"></div>
       </div>
       <div id="hud-workout" class="hud-workout" hidden>
         <div class="hud-workout-text"><b id="hud-workout-watts">250 W</b><span id="hud-workout-step">interval 1 / 8</span><span id="hud-workout-left">4:32 left</span><span id="hud-workout-next">next 120 W</span><span id="hud-workout-paused" class="paused" hidden>pedal to start</span></div>
@@ -140,7 +153,7 @@
         <div class="hud-profile"><canvas id="profile"></canvas></div>
       </div>
       <div class="hud-hints">
-        <span>Esc menu · ↑ ↓ shift · C camera · F11 fullscreen · <span id="fps"></span><br /><span id="attribution" class="attribution"></span></span>
+        <span>Esc menu · ↑ ↓ shift · C camera · F11 fullscreen · <span id="fps"></span> <span id="hud-tiles" class="hint"></span><br /><span id="attribution" class="attribution"></span></span>
         <label class="hud-control">
           <input type="checkbox" id="auto-shift" /> Auto shift (A) at
           <input type="number" id="target-cadence" min="50" max="130" step="1" value="88" /> rpm

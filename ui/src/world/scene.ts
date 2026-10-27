@@ -15,10 +15,10 @@ export const ROAD_WIDTH = 7;
 export const ROAD_LIFT = 0.08;
 const TERRAIN_SIZE = 3400;
 const TERRAIN_SEGMENTS = 240;
-const FAR_SIZE = 18000;
+export const FAR_SIZE = 18000;
 const FAR_SEGMENTS = 180;
 const LAKE_RADIUS = 300;
-const SEA_LEVEL = 0;
+export const SEA_LEVEL = 0;
 
 export interface WorldStatics {
   group: THREE.Group;
@@ -28,8 +28,13 @@ export interface WorldStatics {
   animate: (dt: number) => void;
 }
 
+/** Anything that can answer "nearest road point": a route's own index or the network's. */
+export interface RoadIndex {
+  nearest(x: number, z: number, radius: number): { d: number; y: number; i: number; edge?: number };
+}
+
 /** Nearest route sample within a few hundred metres, through a coarse grid. */
-class RouteIndex {
+export class RouteIndex implements RoadIndex {
   private cells = new Map<string, number[]>();
   private cell = 60;
   constructor(private pts: Route["points"]) {
@@ -69,14 +74,14 @@ class RouteIndex {
   }
 }
 
-const smoothstep = (a: number, b: number, t: number) => {
+export const smoothstep = (a: number, b: number, t: number) => {
   const x = Math.min(Math.max((t - a) / (b - a), 0), 1);
   return x * x * (3 - 2 * x);
 };
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /** Where the land is in a procedural world versus a real one. */
-interface Land {
+export interface Land {
   /** Raw ground before the road is cut in. */
   height: (x: number, z: number) => number;
   /** Sea or lake: nothing grows here. */
@@ -196,13 +201,13 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 }
 
 /** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
-const PHOTO_REFLECTANCE = 0.46;
-const SHOULDER = REAL_ROAD_WIDTH / 2 + 0.9;
+export const PHOTO_REFLECTANCE = 0.46;
+export const SHOULDER = REAL_ROAD_WIDTH / 2 + 0.9;
 /** Metres either side of the road that the corridor shapes. */
-const CORRIDOR_REACH = 46;
+export const CORRIDOR_REACH = 46;
 /** Rise over run of the cut bank above the road and the fill bank below it. */
-const CUT_SLOPE = 2.4;
-const FILL_SLOPE = 0.9;
+export const CUT_SLOPE = 2.4;
+export const FILL_SLOPE = 0.9;
 /** Lateral offsets of the corridor strip's cross-section, shoulder outwards. */
 const CORRIDOR_OFFSETS = [0, SHOULDER, SHOULDER + 1.5, SHOULDER + 3.5, SHOULDER + 6.5, SHOULDER + 11, 24, 33, CORRIDOR_REACH];
 
@@ -231,14 +236,16 @@ function groundColor(out: THREE.Color, x: number, y: number, z: number, slope: n
  * shoulders are shaped properly. At hairpins each cross-section stops where
  * another part of the road is closer, so stacked sections never overlap.
  */
-function corridorMesh(
+export function corridorMesh(
   pts: Route["points"],
-  index: RouteIndex,
+  index: RoadIndex,
   heightAt: (x: number, z: number) => number,
-  g: Grid,
+  g: Grid | null,
   map: THREE.Texture,
   photo: ((x: number, z: number) => [number, number, number] | null) | null,
   detail: Detail | null,
+  edgeId = -1,
+  startIndex = 0,
 ): THREE.Mesh {
   const n = pts.length;
   const offsets = [...CORRIDOR_OFFSETS.slice(1).reverse().map((o) => -o), ...CORRIDOR_OFFSETS];
@@ -259,7 +266,8 @@ function corridorMesh(
       let r = CORRIDOR_REACH;
       for (const o of CORRIDOR_OFFSETS) {
         const q = index.nearest(p.x + nx * o * side, p.z + nz * o * side, CORRIDOR_REACH);
-        if (q.i >= 0 && Math.abs(q.i - i) > 12 && q.d < o * 0.95) {
+        const other = q.edge !== undefined && edgeId >= 0 ? q.edge !== edgeId || Math.abs(q.i - (startIndex + i)) > 12 : Math.abs(q.i - i) > 12;
+        if (q.i >= 0 && other && q.d < o * 0.95) {
           r = Math.max(SHOULDER, o - 0.5 * (o - q.d));
           break;
         }
@@ -291,7 +299,7 @@ function corridorMesh(
       uvs[(i * across + k) * 2 + 1] = z / 18;
       const rgb = photo?.(x, z);
       if (rgb) tmp.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
-      else groundColor(tmp, x, y, z, gridSlope(g, x, z));
+      else groundColor(tmp, x, y, z, g ? gridSlope(g, x, z) : 0);
       colors.set([tmp.r, tmp.g, tmp.b], v);
     }
   }
@@ -317,7 +325,7 @@ function corridorMesh(
   return mesh;
 }
 
-function imageTexture(image: ImageBitmap): THREE.Texture {
+export function imageTexture(image: ImageBitmap): THREE.Texture {
   const tex = new THREE.Texture(image);
   // ImageBitmaps upload as they are (flipY is ignored), so row 0 of the image is v = 0.
   tex.flipY = false;
@@ -329,7 +337,7 @@ function imageTexture(image: ImageBitmap): THREE.Texture {
   return tex;
 }
 
-interface Detail {
+export interface Detail {
   grain: THREE.Texture;
   rock: THREE.Texture;
   scrub: THREE.Texture;
@@ -343,7 +351,7 @@ interface Detail {
 }
 
 /** A photo patch as a seamless detail texture: mirrored repeats hide the seams. */
-function patchTexture(image: ImageBitmap): THREE.Texture {
+export function patchTexture(image: ImageBitmap): THREE.Texture {
   const tex = new THREE.Texture(image);
   tex.flipY = false;
   tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
@@ -361,7 +369,7 @@ function patchTexture(image: ImageBitmap): THREE.Texture {
  * stretch), scrub and earth on flatter ground, and a fine grain. The detail
  * textures average mid-grey, so the photo keeps its colour.
  */
-function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1) {
+export function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.rockMap = { value: detail.rock };
     shader.uniforms.scrubMap = { value: detail.scrub };
@@ -414,7 +422,7 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1)
 }
 
 /** A rectangular block of a heightmap grid with one photo stretched over it. */
-function gridBlockMesh(
+export function gridBlockMesh(
   g: Grid,
   heightAt: (x: number, z: number) => number,
   rows: [number, number],
@@ -425,7 +433,8 @@ function gridBlockMesh(
 ): THREE.Mesh {
   const [r0, r1] = rows;
   const [c0, c1] = cols;
-  const geo = new THREE.PlaneGeometry((c1 - c0) * g.spacing, (r1 - r0) * g.spacing, c1 - c0, r1 - r0);
+  const sz = g.spacingZ ?? g.spacing;
+  const geo = new THREE.PlaneGeometry((c1 - c0) * g.spacing, (r1 - r0) * sz, c1 - c0, r1 - r0);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const uv = geo.attributes.uv as THREE.BufferAttribute;
@@ -433,7 +442,7 @@ function gridBlockMesh(
   for (let iz = r0; iz <= r1; iz++) {
     for (let ix = c0; ix <= c1; ix++) {
       const x = g.x0 + ix * g.spacing;
-      const z = g.z0 + iz * g.spacing;
+      const z = g.z0 + iz * sz;
       pos.setXYZ(i, x, heightAt(x, z), z);
       // Image row 0 is the north edge, which is the first grid row.
       uv.setXY(i, (ix - c0) / (c1 - c0), (iz - r0) / (r1 - r0));
@@ -451,7 +460,7 @@ function gridBlockMesh(
 }
 
 /** One terrain mesh per heightmap grid, coloured by height and slope. */
-function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THREE.Texture, uvScale: number): THREE.Mesh {
+export function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THREE.Texture, uvScale: number): THREE.Mesh {
   const w = (g.cols - 1) * g.spacing;
   const h = (g.rows - 1) * g.spacing;
   const geo = new THREE.PlaneGeometry(w, h, g.cols - 1, g.rows - 1);
@@ -479,7 +488,7 @@ function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THRE
   return mesh;
 }
 
-function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mesh; animate: (dt: number) => void } {
+export function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mesh; animate: (dt: number) => void } {
   const normals = waterNormalTexture();
   normals.repeat.set(size / 28, size / 28);
   const mat = new THREE.MeshStandardMaterial({
@@ -502,8 +511,7 @@ function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mesh; anim
   };
 }
 
-function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false): THREE.Mesh[] {
-  const asphalt = asphaltTexture();
+export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false, asphalt = asphaltTexture()): THREE.Mesh[] {
   const meshes = [
     // Shoulder: a wide sandy verge on the test course, a narrow gravel edge on a mountain road.
     ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"),
@@ -518,7 +526,7 @@ function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, m
  * Low stone parapets along the road wherever the ground falls away beside it,
  * the way mountain roads are built. One box strip per continuous stretch.
  */
-function parapets(pts: Route["points"], heightAt: (x: number, z: number) => number, width: number, stone: THREE.Texture): THREE.Mesh {
+export function parapets(pts: Route["points"], heightAt: (x: number, z: number) => number, width: number, stone: THREE.Texture): THREE.Mesh {
   const n = pts.length;
   const offset = width / 2 + 0.75;
   const wallW = 0.4;
@@ -582,7 +590,7 @@ function parapets(pts: Route["points"], heightAt: (x: number, z: number) => numb
   return mesh;
 }
 
-function cloudLayers(cx: number, cz: number): { meshes: THREE.Mesh[]; animate: (dt: number) => void } {
+export function cloudLayers(cx: number, cz: number): { meshes: THREE.Mesh[]; animate: (dt: number) => void } {
   const meshes: THREE.Mesh[] = [];
   const speeds: number[] = [];
   for (const [alt, coverage, seed, rep, speed] of [
@@ -747,14 +755,15 @@ function buildProceduralWorld(route: Route): WorldStatics {
 }
 
 /** Pines, round trees, cypresses, bushes and rocks, instanced per kind. */
-function vegetation(
-  index: RouteIndex,
+export function vegetation(
+  index: RoadIndex,
   heightAt: (x: number, z: number) => number,
   land: Land,
   region: { x0: number; z0: number; w: number; h: number },
   sampler: RouteSampler,
   mediterranean: boolean,
   photo: ((x: number, z: number) => [number, number, number] | null) | null,
+  scale = 1,
 ): THREE.Group {
   const g = new THREE.Group();
   /** How much the aerial photo says "trees" here: dark green pixels. 0..1. */
@@ -831,7 +840,8 @@ function vegetation(
   const terrainOk = (x: number, z: number, y: number, maxSlope: number) =>
     !mediterranean || (land.slope(x, z) < maxSlope && rand() > smoothstep(450, 950, y));
 
-  const place = (geos: THREE.BufferGeometry[], count: number, palette: string[], withTrunk: boolean, density: (near: number, x: number, z: number) => number, sizeRange: [number, number], minRoad: number, mat = leafMat, shadows = true) => {
+  const place = (geos: THREE.BufferGeometry[], count0: number, palette: string[], withTrunk: boolean, density: (near: number, x: number, z: number) => number, sizeRange: [number, number], minRoad: number, mat = leafMat, shadows = true) => {
+    const count = Math.max(1, Math.round(count0 * scale));
     const meshes = geos.map((geo) => new THREE.InstancedMesh(geo, mat, count));
     const trunks = withTrunk ? new THREE.InstancedMesh(trunk, trunkMat, count) : null;
     let placed = 0;

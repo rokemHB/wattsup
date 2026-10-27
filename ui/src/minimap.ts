@@ -1,8 +1,19 @@
 // A top-down map of the route in the corner of the ride screen: the aerial
 // photo as background where there is one, the road, and the rider.
 import type { EngineSnapshot, Route } from "./types";
-import type { WorldData } from "./world/terrain";
+import type { NetworkIndex } from "./world/network";
+import { Frame } from "./world/streaming";
+import type { NetworkWorldData, WorldData } from "./world/terrain";
 import { RouteSampler } from "./world/route";
+
+/** A map window following the rider over a road network. */
+export interface NetworkView {
+  data: NetworkWorldData;
+  index: NetworkIndex;
+}
+
+/** Half the width of the window the minimap shows around the rider, in metres. */
+const WINDOW_M = 1600;
 
 export class Minimap {
   private canvas: HTMLCanvasElement;
@@ -11,10 +22,16 @@ export class Minimap {
   private box: { x0: number; z0: number; w: number; h: number };
   private size = 0;
   private lastDistance = -1;
+  private network: NetworkView | null = null;
+  private frame: Frame = new Frame(0, 0);
 
-  constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData) {
+  constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData, network?: NetworkView) {
     this.canvas = canvas;
     this.sampler = new RouteSampler(route);
+    if (network) {
+      this.network = network;
+      this.frame = new Frame(network.data.origin.lat, network.data.origin.lon);
+    }
     const pts = route.points;
     const xs = pts.map((p) => p.x);
     const zs = pts.map((p) => p.z);
@@ -51,7 +68,16 @@ export class Minimap {
     return c;
   }
 
+  setRoute(route: Route) {
+    this.sampler = new RouteSampler(route);
+    this.lastDistance = -1;
+  }
+
   update(snap: EngineSnapshot) {
+    if (this.network) {
+      this.updateWindow(snap);
+      return;
+    }
     const d = snap.session.route_position_m;
     const size = this.canvas.clientWidth;
     if (size === 0) return;
@@ -108,6 +134,91 @@ export class Minimap {
     ctx.lineWidth = 2;
     ctx.stroke();
     // North arrow.
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    ctx.font = "bold 11px sans-serif";
+    ctx.fillText("N", size - 16, 16);
+    ctx.restore();
+  }
+
+  /** The map window around the rider on a road network: island image, roads, the planned road, the rider. */
+  private updateWindow(snap: EngineSnapshot) {
+    const d = snap.session.route_position_m;
+    const size = this.canvas.clientWidth;
+    if (size === 0) return;
+    if (Math.abs(d - this.lastDistance) < 3 && size === this.size) return;
+    this.lastDistance = d;
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    if (this.size !== size) {
+      this.size = size;
+      this.canvas.width = this.canvas.height = size * dpr;
+    }
+    const ctx = this.canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    const pose = this.sampler.pose(d);
+    const x0 = pose.x - WINDOW_M;
+    const z0 = pose.z - WINDOW_M;
+    const toMap = (x: number, z: number) => [((x - x0) / (2 * WINDOW_M)) * size, ((z - z0) / (2 * WINDOW_M)) * size] as const;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(0, 0, size, size, 14);
+    ctx.clip();
+    const { data, index } = this.network!;
+    if (data.map) {
+      const m = data.map;
+      const [latA, lonA] = this.frame.toLatLon(x0, z0);
+      const [latB, lonB] = this.frame.toLatLon(x0 + 2 * WINDOW_M, z0 + 2 * WINDOW_M);
+      const px = (lon: number) => ((lon - m.lon_min) / (m.lon_max - m.lon_min)) * m.image.width;
+      const py = (lat: number) => ((m.lat_max - lat) / (m.lat_max - m.lat_min)) * m.image.height;
+      ctx.drawImage(m.image, px(lonA), py(latA), px(lonB) - px(lonA), py(latB) - py(latA), 0, 0, size, size);
+      ctx.fillStyle = "rgba(10, 14, 24, 0.3)";
+      ctx.fillRect(0, 0, size, size);
+    } else {
+      ctx.fillStyle = "rgba(15, 18, 27, 0.8)";
+      ctx.fillRect(0, 0, size, size);
+    }
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    for (const ei of index.edgesIn(x0, z0, x0 + 2 * WINDOW_M, z0 + 2 * WINDOW_M, 100)) {
+      const e = index.edge(ei);
+      const xyz = index.net.xyz;
+      ctx.beginPath();
+      for (let i = e.start; i < e.start + e.count; i++) {
+        const [mx, my] = toMap(xyz[i * 3], xyz[i * 3 + 2]);
+        if (i === e.start) ctx.moveTo(mx, my);
+        else ctx.lineTo(mx, my);
+      }
+      ctx.strokeStyle = e.kind <= 1 ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.55)";
+      ctx.lineWidth = e.kind <= 1 ? 2.5 : 1.5;
+      ctx.stroke();
+    }
+    const pts = this.sampler.route.points;
+    const from = Math.max(0, Math.round(d / this.sampler.spacing));
+    const to = Math.min(pts.length - 1, from + Math.round((WINDOW_M * 1.5) / this.sampler.spacing));
+    ctx.beginPath();
+    for (let i = from; i <= to; i++) {
+      const [mx, my] = toMap(pts[i].x, pts[i].z);
+      if (i === from) ctx.moveTo(mx, my);
+      else ctx.lineTo(mx, my);
+    }
+    ctx.strokeStyle = "#ffc400";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    const [rx, ry] = toMap(pose.x, pose.z);
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(Math.atan2(pose.dz, pose.dx) + Math.PI / 2);
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(6, 6);
+    ctx.lineTo(-6, 6);
+    ctx.closePath();
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = "#0f121b";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = "rgba(255,255,255,0.8)";
     ctx.font = "bold 11px sans-serif";
     ctx.fillText("N", size - 16, 16);

@@ -38,16 +38,27 @@ ROAD_KINDS = {"primary": 0, "secondary": 1, "tertiary": 2, "unclassified": 3, "p
 class DemChunks:
     """The 5 m model as many chunk files, opened on demand."""
 
+    STEP = 0.05
+
     def __init__(self, directory):
         self.files = {}
         for f in Path(directory).glob("dem5_*.tif"):
             _, lat, lon = f.stem.split("_")
             self.files[(round(float(lat), 2), round(float(lon), 2))] = f
+        if not self.files:
+            raise SystemExit(f"no dem5_*.tif chunks in {directory}")
+        # The chunk lattice starts wherever fetch_dem.py started, not at multiples of the step.
+        self.lat_base = min(k[0] for k in self.files)
+        self.lon_base = min(k[1] for k in self.files)
         self.open = {}
 
+    def key(self, lat, lon):
+        i = math.floor((lat - self.lat_base) / self.STEP + 1e-9)
+        j = math.floor((lon - self.lon_base) / self.STEP + 1e-9)
+        return (round(self.lat_base + i * self.STEP, 2), round(self.lon_base + j * self.STEP, 2))
+
     def chunk(self, lat, lon):
-        key = (math.floor(lat / 0.05) * 0.05, math.floor(lon / 0.05) * 0.05)
-        key = (round(key[0], 2), round(key[1], 2))
+        key = self.key(lat, lon)
         if key not in self.open:
             f = self.files.get(key)
             self.open[key] = Dem(f) if f else None
@@ -57,7 +68,7 @@ class DemChunks:
         out = np.full(len(lats), np.nan)
         groups = collections.defaultdict(list)
         for i, (lat, lon) in enumerate(zip(lats, lons)):
-            groups[(round(math.floor(lat / 0.05) * 0.05, 2), round(math.floor(lon / 0.05) * 0.05, 2))].append(i)
+            groups[self.key(lat, lon)].append(i)
         for key, idx in groups.items():
             dem = self.chunk(key[0] + 0.001, key[1] + 0.001)
             if dem is None:
@@ -213,6 +224,7 @@ def main():
     dem = DemChunks(args.dem_dir)
     points = []
     edges_out = []
+    missing = 0
     for nodes, tags in merged:
         xz = np.array([to_xz(*coords[n]) for n in nodes])
         if len(xz) < 2:
@@ -221,6 +233,7 @@ def main():
         ll = np.array([to_latlon(x, z) for x, z in pts])
         y = dem.sample_many(ll[:, 0], ll[:, 1])
         if np.isnan(y).any():
+            missing += int(np.isnan(y).sum())
             y = np.where(np.isnan(y), np.nanmean(y) if not np.isnan(y).all() else 0.0, y)
         y = smooth(y, 3)
         # Cap the grade: a 5 m surface model is off on stacked hairpins.
@@ -248,7 +261,7 @@ def main():
     for e in edges_out:
         nodes_out[e["a"]]["y"] = round(points[e["start"]][1], 1)
         nodes_out[e["b"]]["y"] = round(points[e["start"] + e["count"] - 1][1], 1)
-    print(f"{len(points)} points, {sum(e['length_m'] for e in edges_out) / 1000:.0f} km of road")
+    print(f"{len(points)} points, {sum(e['length_m'] for e in edges_out) / 1000:.0f} km of road, {missing} points without elevation")
 
     # Places and sign destinations: for every edge end, the nearest towns reached along the graph.
     place_list = []
@@ -360,7 +373,7 @@ def main():
             "dlon": 0.025,
             "dem": "https://servicios.idee.es/wcs-inspire/mdt?service=WCS&request=GetCoverage&version=2.0.1&coverageId=Elevacion4258_5&subset=Lat({lat0},{lat1})&subset=Long({lon0},{lon1})&format=image/tiff",
             "ortho": "https://www.ign.es/wmts/pnoa-ma?service=WMTS&request=GetTile&version=1.0.0&layer=OI.OrthoimageCoverage&style=default&format=image/jpeg&tilematrixset=GoogleMapsCompatible&tilematrix={z}&tilerow={y}&tilecol={x}",
-            "orthoZoom": 15,
+            "orthoZoom": 16,
         },
         "attribution": "Road data © OpenStreetMap contributors (ODbL). Elevation: IGN España MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 © ESA. Aerial imagery: PNOA © IGN España (CC BY 4.0).",
     }

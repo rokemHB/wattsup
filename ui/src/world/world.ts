@@ -5,15 +5,20 @@ import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
 import { Rider, TYRE_BULGE } from "./rider";
 import { RouteSampler } from "./route";
-import { buildWorld, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, type WorldStatics } from "./scene";
-import type { WorldData } from "./terrain";
+import type { RoadNetwork } from "./network";
+import { buildWorld, cloudLayers, type Detail, FAR_SIZE, gridBlockMesh, imageTexture, patchTexture, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, seaMesh, type WorldStatics } from "./scene";
+import { TileManager } from "./streaming";
+import { gridSample as gridSampleOr, imageMean, type NetworkWorldData, type WorldData } from "./terrain";
+import { detailTexture, rockDetailTexture, rockNormalTexture, scrubDetailTexture } from "./textures";
 
 export type CameraMode = "chase" | "side" | "front" | "drone" | "orbit";
 /** The modes the C key cycles through; orbit is for the menus. */
 const MODES: CameraMode[] = ["chase", "side", "front", "drone"];
 
 export class World {
-  readonly sampler: RouteSampler;
+  sampler: RouteSampler;
+  /** Present when the world streams tiles around a road network. */
+  tiles: TileManager | null = null;
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
@@ -41,7 +46,7 @@ export class World {
   private pixelRatio = Math.min(window.devicePixelRatio, 1.5);
   private frameTimes: number[] = [];
 
-  constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData) {
+  constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData, network?: { data: NetworkWorldData; net: RoadNetwork }) {
     this.sampler = new RouteSampler(route);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
@@ -89,8 +94,8 @@ export class World {
     this.sunDir = sunDir;
     this.scene.add(this.sun, this.sun.target);
 
-    this.statics = buildWorld(route, world);
-    this.laneOffset = (world ? REAL_ROAD_WIDTH : ROAD_WIDTH) * 0.22;
+    this.statics = network ? this.buildNetworkWorld(network.data, network.net) : buildWorld(route, world);
+    this.laneOffset = (world || network ? REAL_ROAD_WIDTH : ROAD_WIDTH) * 0.22;
     this.scene.add(this.statics.group, this.rider.group);
 
     this.resize();
@@ -104,6 +109,51 @@ export class World {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+  }
+
+  /** The far layer, sea and clouds once; the rest streams in around the rider. */
+  private buildNetworkWorld(data: NetworkWorldData, net: RoadNetwork): WorldStatics {
+    const group = new THREE.Group();
+    const detail: Detail = data.details
+      ? {
+          grain: detailTexture(),
+          rock: patchTexture(data.details.rock),
+          scrub: patchTexture(data.details.scrub),
+          normal: rockNormalTexture(),
+          rockScale: data.details.metres,
+          scrubScale: data.details.metres,
+          rockMean: imageMean(data.details.rock),
+          scrubMean: imageMean(data.details.scrub),
+        }
+      : { grain: detailTexture(), rock: rockDetailTexture(), scrub: scrubDetailTexture(), normal: rockNormalTexture(), rockScale: 3.2, scrubScale: 2.6, rockMean: [0.5, 0.5, 0.5], scrubMean: [0.5, 0.5, 0.5] };
+    const far = data.far;
+    const farHeight = (x: number, z: number) => gridSampleOr(far, x, z) ?? -10;
+    let farMesh: THREE.Mesh | null = null;
+    if (far.ortho) {
+      farMesh = gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), detail, 0);
+      group.add(farMesh);
+    }
+    const cx = far.x0 + (far.cols * far.spacing) / 2;
+    const cz = far.z0 + (far.rows * (far.spacingZ ?? far.spacing)) / 2;
+    const sea = seaMesh(FAR_SIZE * 8, cx, cz);
+    group.add(sea.mesh);
+    const clouds = cloudLayers(cx, cz);
+    group.add(...clouds.meshes);
+    const tiles = new TileManager(group, data, net, far, farMesh, detail);
+    this.tiles = tiles;
+    return {
+      group,
+      heightAt: tiles.heightAt,
+      animate: (dt) => {
+        sea.animate(dt);
+        clouds.animate(dt);
+      },
+    };
+  }
+
+  /** A new route from the engine (a navigator extended or re-planned it). Distances stay comparable. */
+  setRoute(route: Route) {
+    this.sampler = new RouteSampler(route);
   }
 
   /** Feeds the latest engine state. Called ~20 times a second. */
@@ -226,6 +276,7 @@ export class World {
     g.rotateX(-this.lean);
     this.rider.animate(this.cadence, this.speed, dt);
     this.statics.animate(dt);
+    this.tiles?.update(g.position.x, g.position.z, this.camPos);
     this.adaptResolution(dt);
 
     // Camera.

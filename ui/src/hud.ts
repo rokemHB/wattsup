@@ -12,10 +12,21 @@ export class Hud {
   private frames = 0;
   private fpsAt = performance.now();
 
-  constructor(private sampler: RouteSampler) {
+  /** Open-ended rides (a road network) show the next few kilometres instead of the whole route. */
+  private windowed = false;
+
+  constructor(private sampler: RouteSampler, windowed = false) {
+    this.windowed = windowed;
     $("hud-route-name").textContent = sampler.route.name;
     this.profile = sampler.profile(400);
     window.addEventListener("resize", () => (this.lastKey = ""));
+  }
+
+  setSampler(sampler: RouteSampler) {
+    this.sampler = sampler;
+    $("hud-route-name").textContent = sampler.route.name;
+    this.profile = sampler.profile(400);
+    this.lastKey = "";
   }
 
   private workout: Workout | null = null;
@@ -37,11 +48,30 @@ export class Hud {
     $("hud-gear").textContent = String(s.gear);
     $("hud-gear-ratio").textContent = `of ${s.gear_count}`;
     $("hud-lap").textContent = String(s.lap + 1);
-    $("hud-dist").textContent = `${(s.route_position_m / 1000).toFixed(2)} / ${(this.sampler.length / 1000).toFixed(1)} km`;
+    ($("hud-lap").parentElement as HTMLElement).classList.toggle("windowed", this.windowed);
+    $("hud-dist").textContent = this.windowed ? `${(s.distance_m / 1000).toFixed(2)} km ridden` : `${(s.route_position_m / 1000).toFixed(2)} / ${(this.sampler.length / 1000).toFixed(1)} km`;
     const g = s.road_grade_pct;
     const grade = $("hud-grade");
     grade.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(1)} %`;
     grade.className = g > 3 ? "climb" : g < -3 ? "descent" : "";
+    if (this.windowed) {
+      // The profile of the road from 300 m behind to 4.7 km ahead.
+      const from = Math.max(0, s.distance_m - 300);
+      const span = 5000;
+      const n = 200;
+      let lo = Infinity;
+      let hi = -Infinity;
+      const ys = Array.from({ length: n }, (_, k) => this.sampler.pose(Math.min(this.sampler.length, from + (k / (n - 1)) * span)).y);
+      for (const y of ys) {
+        lo = Math.min(lo, y);
+        hi = Math.max(hi, y);
+      }
+      const range = Math.max(hi - lo, 60);
+      this.profile = ys.map((y) => (y - lo) / range);
+      this.lastKey = "";
+      this.drawProfile((s.distance_m - from) / span);
+      return;
+    }
     this.drawProfile(s.route_position_m / this.sampler.length);
   }
 
