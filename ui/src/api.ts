@@ -33,6 +33,7 @@ export const api = {
   setAutoShift: (enabled: boolean) => invoke<void>("set_auto_shift", { enabled }),
   setTargetCadence: (rpm: number) => invoke<void>("set_target_cadence", { rpm }),
   pressButton: (button: ControllerButton) => invoke<void>("press_button", { button }),
+  quit: () => getCurrentWindow().close(),
   toggleFullscreen: async () => {
     const win = getCurrentWindow();
     await win.setFullscreen(!(await win.isFullscreen()));

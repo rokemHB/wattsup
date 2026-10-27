@@ -34,6 +34,8 @@ struct StartupInfo {
     start_m: f64,
     /// Camera mode to start in: chase, side, front or drone.
     camera: Option<String>,
+    /// Screen to open at startup (start, menu, rider, settings, ride), for looking at one.
+    screen: Option<String>,
 }
 
 /// `--sim-only`, `--no-sim`, `--raw`, `--auto-sim`, or the same as
@@ -58,6 +60,7 @@ fn startup_from_env() -> StartupInfo {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
         camera: value("--camera", "WATTSUP_CAMERA"),
+        screen: value("--screen", "WATTSUP_SCREEN"),
     }
 }
 

@@ -118,4 +118,5 @@ export interface StartupInfo {
   route: string;
   start_m: number;
   camera: string | null;
+  screen: string | null;
 }

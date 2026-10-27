@@ -10,6 +10,97 @@
     <canvas id="world"></canvas>
     <div id="loading" class="loading" hidden><div><b>WattsUp</b><span id="loading-text">Building the world…</span></div></div>
 
+    <!-- Start -->
+    <section id="screen-start" class="screen centered" hidden>
+      <div class="title-card">
+        <h1 class="app-title">WattsUp</h1>
+        <p class="tagline">Real climbs. Your watts.</p>
+        <button id="start-go" class="primary big">Start</button>
+        <p class="hint">Enter · F11 fullscreen</p>
+      </div>
+    </section>
+
+    <!-- Main menu -->
+    <section id="screen-menu" class="screen" hidden>
+      <div class="menu-left">
+        <div class="rider-card" id="menu-rider-card">
+          <span class="avatar" id="menu-avatar">🚴</span>
+          <div><b id="menu-name">Rider</b><span class="hint" id="menu-devices">No devices connected</span></div>
+        </div>
+        <nav class="menu-nav">
+          <button id="menu-ride" class="primary">Ride</button>
+          <button id="menu-rider">Rider</button>
+          <button id="menu-settings">Settings</button>
+          <button id="menu-quit">Quit</button>
+        </nav>
+      </div>
+      <div class="menu-right">
+        <h2>Routes</h2>
+        <div id="route-list" class="route-list"></div>
+      </div>
+    </section>
+
+    <!-- Rider profile -->
+    <section id="screen-rider" class="screen panel" hidden>
+      <header class="panel-head"><h2>Rider</h2><span class="row"><button id="rider-save" class="primary" disabled>Save</button><button class="back" data-back>Back</button></span></header>
+      <div class="panel-body">
+        <label class="field">Name <input id="rider-name" type="text" maxlength="24" /></label>
+        <div class="field"><span>Avatar</span><div id="rider-avatars" class="choices"></div></div>
+        <div class="field"><span>Jersey</span><div id="rider-jerseys" class="choices"></div></div>
+        <div class="field"><span>Jersey accent</span><div id="rider-accents" class="choices"></div></div>
+        <div class="field"><span>Bike</span><div id="rider-bikes" class="choices"></div></div>
+        <p class="hint">The rider behind this panel shows your choices live. Save keeps them; Back discards them.</p>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="screen-settings" class="screen panel" hidden>
+      <header class="panel-head"><h2>Settings</h2><button class="back" data-back>Back</button></header>
+      <div class="panel-body">
+        <h3>Devices</h3>
+        <div id="device-slots"></div>
+        <div class="row scan-row">
+          <button id="scan">Scan</button>
+          <label class="check"><input type="checkbox" id="show-sim" checked /> show simulated devices</label>
+          <span id="scan-status" class="hint"></span>
+        </div>
+        <div id="scan-results"></div>
+        <h3>Shifting</h3>
+        <label class="check"><input type="checkbox" id="settings-auto-shift" /> Automatic shifting toward a target cadence</label>
+        <label class="field">Target cadence <input id="settings-target-cadence" type="number" min="50" max="130" step="1" value="88" /> rpm</label>
+        <p class="hint">Keyboard: ↑ / ] harder · ↓ / [ easier · A toggles automatic shifting. The Click or any connected controller shifts too.</p>
+        <h3>Trainer</h3>
+        <p class="hint">Virtual gearing uses the trainer's simulation mode. See HARDWARE_TESTING.md for the calibration steps; the debug drawer (D while riding) shows what is sent.</p>
+      </div>
+    </section>
+
+    <!-- Pause -->
+    <section id="screen-pause" class="screen centered" hidden>
+      <div class="title-card">
+        <h2>Paused</h2>
+        <nav class="menu-nav">
+          <button id="pause-resume" class="primary">Resume</button>
+          <button id="pause-restart">Restart ride</button>
+          <button id="pause-settings">Settings</button>
+          <button id="pause-menu">Main menu</button>
+        </nav>
+        <p class="hint">Esc resumes · the trainer keeps responding while paused</p>
+      </div>
+    </section>
+
+    <!-- Finish -->
+    <section id="screen-finish" class="screen centered" hidden>
+      <div class="title-card">
+        <h2 id="finish-title">Summit!</h2>
+        <div class="stats" id="finish-stats"></div>
+        <nav class="menu-nav">
+          <button id="finish-again" class="primary">Ride again</button>
+          <button id="finish-menu">Main menu</button>
+        </nav>
+      </div>
+    </section>
+
+    <!-- Ride HUD -->
     <div id="hud" hidden>
       <div class="hud-top">
         <div class="tile"><label>Power</label><b id="hud-power">–</b><small>W</small></div>
@@ -17,13 +108,17 @@
         <div class="tile"><label>Heart rate</label><b id="hud-hr">–</b><small>bpm</small></div>
         <div class="tile"><label>Speed</label><b id="hud-speed">–</b><small>km/h</small></div>
         <div class="tile gear"><label>Gear</label><b id="hud-gear">–</b><small id="hud-gear-ratio"></small></div>
+        <div class="tile rider-badge"><span class="avatar" id="hud-avatar">🚴</span><b id="hud-name">Rider</b></div>
       </div>
       <div class="hud-route">
         <b id="hud-route-name"></b> · lap <span id="hud-lap">1</span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
       </div>
-      <div class="hud-bottom"><canvas id="profile"></canvas></div>
+      <div class="hud-bottom">
+        <canvas id="minimap" class="minimap"></canvas>
+        <div class="hud-profile"><canvas id="profile"></canvas></div>
+      </div>
       <div class="hud-hints">
-        <span>↑ ↓ shift · C camera · F11 fullscreen · <span id="fps"></span><br /><span id="attribution" class="attribution"></span></span>
+        <span>Esc menu · ↑ ↓ shift · C camera · F11 fullscreen · <span id="fps"></span><br /><span id="attribution" class="attribution"></span></span>
         <label class="hud-control">
           <input type="checkbox" id="auto-shift" /> Auto shift (A) at
           <input type="number" id="target-cadence" min="50" max="130" step="1" value="88" /> rpm
@@ -95,17 +190,6 @@
             <div class="row"><span class="hint">−10 %</span><span class="spacer"></span><span class="hint">+15 %</span></div>
             <p class="hint" id="grade-hint" hidden>The route sets the grade while riding a course.</p>
           </div>
-        </section>
-
-        <section class="devices">
-          <h2>Devices</h2>
-          <div id="device-slots"></div>
-          <div class="row scan-row">
-            <button id="scan">Scan</button>
-            <label class="check"><input type="checkbox" id="show-sim" checked /> show simulated devices</label>
-            <span id="scan-status" class="hint"></span>
-          </div>
-          <div id="scan-results"></div>
         </section>
 
         <section class="log">

@@ -1,237 +1,135 @@
-// The ride screen (3D world + HUD) and the debug drawer: live values, gearing, mode, devices, log.
+// The app's screens: start, main menu, rider, settings, the ride with its HUD
+// and minimap, pause and finish. The 3D world runs behind all of them.
 import { api, insideTauri } from "./api";
-import { describeCommand, distance, duration, isTypingTarget, KIND_LABEL, num, shiftForKey, stateLabel } from "./format";
+import { latest, renderDebug, scan, showError, wireDebug } from "./debug";
+import { $, el } from "./dom";
+import { duration, isTypingTarget, num, shiftForKey } from "./format";
 import { Hud } from "./hud";
-import type { ControllerButton, DeviceKind, DeviceStatus, DiscoveredDevice, EngineSnapshot, ScanResult } from "./types";
-import { loadWorld } from "./world/terrain";
+import { Minimap } from "./minimap";
+import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
+import type { EngineSnapshot, Route, RouteInfo } from "./types";
+import { loadWorld, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 
-const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const COG_TEETH = 14;
+type Screen = "start" | "menu" | "rider" | "settings" | "ride" | "pause" | "finish";
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...children: (Node | string)[]) {
-  const e = Object.assign(document.createElement(tag), props);
-  e.append(...children);
-  return e;
-}
-
-function showError(e: unknown) {
-  $("scan-status").textContent = String(e);
-}
-
-// --- live values -------------------------------------------------------------
-
-let lastSlotsJson = "";
-let lastLogSeq = 0;
-let lastGearKey = "";
-let latest: EngineSnapshot | null = null;
-
-function render(snap: EngineSnapshot) {
-  latest = snap;
-  const s = snap.session;
-  $("elapsed").textContent = duration(s.elapsed_s);
-  $("distance").textContent = distance(s.distance_m);
-  $("power").textContent = num(s.power_w);
-  $("power-model").textContent = `W · model ${num(s.model_power_w)} W`;
-  $("cadence").textContent = num(s.cadence_rpm);
-  $("speed").textContent = num(s.virtual_speed_kmh, 1);
-  $("hr").textContent = num(s.heart_rate_bpm);
-  $("gear").textContent = String(s.gear);
-  $("gear-ratio").textContent = `of ${s.gear_count} · ratio ${s.gear_ratio.toFixed(2)}`;
-  $("trainer-speed").textContent = num(s.trainer_speed_kmh, 1);
-  $("road-grade").textContent = s.road_grade_pct.toFixed(1);
-
-  const sent = describeCommand(s.last_command);
-  $("sent").textContent = sent.text;
-  $("sent-age").textContent = s.last_command_age_s === null ? "" : `${s.last_command_age_s.toFixed(1)} s ago`;
-  const warning = $("sent-warning");
-  warning.hidden = !sent.warning;
-  warning.textContent = sent.warning ?? "";
-
-  $("drive-ratio").textContent = num(s.measured_drive_ratio, 2);
-  $("drive-teeth").textContent =
-    s.measured_drive_ratio === null ? "pedal to measure" : `≈ ${Math.round(s.measured_drive_ratio * COG_TEETH)}T over a ${COG_TEETH}T Cog`;
-
-  $("mode-sim").classList.toggle("on", s.mode === "sim");
-  $("mode-erg").classList.toggle("on", s.mode === "erg");
-  const erg = $<HTMLInputElement>("erg-target");
-  if (document.activeElement !== erg) erg.value = String(s.erg_target_w);
-  $<HTMLInputElement>("auto-shift").checked = s.auto_shift;
-  const target = $<HTMLInputElement>("target-cadence");
-  if (document.activeElement !== target) target.value = String(s.target_cadence_rpm);
-
-  renderGears(s.gear, s.gear_count);
-  renderProviders(snap.providers);
-  renderSlots(snap.devices);
-  renderLog(snap);
-}
-
-function renderGears(gear: number, count: number) {
-  const key = `${gear}/${count}`;
-  if (key === lastGearKey) return;
-  lastGearKey = key;
-  const strip = $("gear-strip");
-  strip.replaceChildren(
-    ...Array.from({ length: count }, (_, i) => {
-      const bar = el("div", { className: i + 1 === gear ? "active" : i + 1 < gear ? "below" : "", title: `gear ${i + 1}` });
-      bar.style.height = `${30 + (70 * (i + 1)) / count}%`;
-      return bar;
-    }),
-  );
-}
-
-function renderProviders(providers: string[]) {
-  const box = $("providers");
-  const text = providers.join(",");
-  if (box.dataset.p === text) return;
-  box.dataset.p = text;
-  box.replaceChildren(...providers.map((p) => el("span", { className: "badge" }, p === "ble" ? "Bluetooth" : p === "sim" ? "Simulator" : p)));
-}
-
-function renderSlots(devices: DeviceStatus[]) {
-  const json = JSON.stringify(devices);
-  if (json === lastSlotsJson) return;
-  lastSlotsJson = json;
-  $("device-slots").replaceChildren(
-    ...devices.map((d) => {
-      const st = stateLabel(d.state);
-      const battery = d.battery_percent === null ? "" : ` · battery ${d.battery_percent} %`;
-      const action =
-        d.state.state === "disconnected"
-          ? el("span")
-          : el("button", { className: "small", textContent: "Disconnect", onclick: () => api.disconnect(d.kind).catch(showError) });
-      return el(
-        "div",
-        { className: "slot" },
-        el("span", { className: "role" }, KIND_LABEL[d.kind]),
-        el("span", { className: "name" }, (d.name ?? d.id ?? "–") + battery),
-        el("span", { className: `state tone-${st.tone}` }, st.label),
-        action,
-      );
-    }),
-  );
-  const controller = devices.find((d) => d.kind === "controller");
-  $("sim-click-row").hidden = !(controller?.id?.startsWith("sim:") && controller.state.state === "connected");
-}
-
-function renderLog(snap: EngineSnapshot) {
-  const list = $("log");
-  const fresh = snap.log.filter((l) => l.seq > lastLogSeq);
-  if (!fresh.length) return;
-  lastLogSeq = fresh[fresh.length - 1].seq;
-  for (const line of fresh) {
-    list.append(el("li", {}, el("span", {}, `${duration(line.elapsed_s)} ${line.source}`), line.message));
-  }
-  while (list.children.length > 200) list.firstElementChild?.remove();
-  list.scrollTop = list.scrollHeight;
-}
-
-// --- scanning ----------------------------------------------------------------
-
-let lastScan: ScanResult = { devices: [], errors: [] };
-
-function renderScan() {
-  const showSim = $<HTMLInputElement>("show-sim").checked;
-  const devices = lastScan.devices.filter((d) => showSim || !d.simulated);
-  $("scan-results").replaceChildren(
-    ...lastScan.errors.map((e) => el("div", { className: "warning" }, e)),
-    ...devices.map(renderFound),
-  );
-}
-
-function renderFound(d: DiscoveredDevice) {
-  const buttons = d.kinds.map((kind: DeviceKind) =>
-    el("button", { className: "small", textContent: `Use as ${KIND_LABEL[kind].toLowerCase()}`, onclick: () => api.connect(d.id, kind).catch(showError) }),
-  );
-  const rssi = d.rssi === null ? "" : `${d.rssi} dBm`;
-  return el(
-    "div",
-    { className: "found" },
-    el("div", { className: "title" }, el("strong", {}, d.name), el("span", { className: "hint" }, rssi)),
-    el("div", { className: "id" }, d.id),
-    el("div", { className: "row" }, ...buttons),
-  );
-}
-
-async function scan() {
-  const button = $<HTMLButtonElement>("scan");
-  button.disabled = true;
-  $("scan-status").textContent = "scanning…";
-  try {
-    lastScan = await api.scan(5);
-    $("scan-status").textContent = `${lastScan.devices.length} found`;
-    renderScan();
-  } catch (e) {
-    showError(e);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-// --- wiring ------------------------------------------------------------------
-
-function wire() {
-  $("shift-up").onclick = () => api.shift("up");
-  $("shift-down").onclick = () => api.shift("down");
-  $("mode-sim").onclick = () => api.setMode("sim");
-  $("mode-erg").onclick = () => api.setMode("erg");
-  $("scan").onclick = scan;
-  $("show-sim").onchange = renderScan;
-
-  const erg = $<HTMLInputElement>("erg-target");
-  erg.onchange = () => api.setErgTarget(Number(erg.value));
-  document.querySelectorAll<HTMLButtonElement>("[data-erg]").forEach((b) => {
-    b.onclick = () => api.setErgTarget((latest?.session.erg_target_w ?? Number(erg.value)) + Number(b.dataset.erg));
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-press]").forEach((b) => {
-    b.onclick = () => api.pressButton(b.dataset.press as ControllerButton).catch(showError);
-  });
-
-  const grade = $<HTMLInputElement>("grade");
-  grade.oninput = () => api.setRoadGrade(Number(grade.value));
-
-  $("toggle-debug").onclick = toggleDebug;
-  $("close-debug").onclick = toggleDebug;
-  const auto = $<HTMLInputElement>("auto-shift");
-  auto.onchange = () => api.setAutoShift(auto.checked).catch(showError);
-  const target = $<HTMLInputElement>("target-cadence");
-  target.onchange = () => api.setTargetCadence(Number(target.value)).catch(showError);
-
-  window.addEventListener("keydown", (e) => {
-    if (isTypingTarget(e.target) || e.repeat) return;
-    const dir = shiftForKey(e.key);
-    if (dir) {
-      e.preventDefault();
-      api.shift(dir);
-      return;
-    }
-    if (e.key === "d" || e.key === "D") toggleDebug();
-    else if (e.key === "a" || e.key === "A") api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
-    else if ((e.key === "c" || e.key === "C") && world) world.cycleCamera();
-    else if (e.key === "F11") {
-      e.preventDefault();
-      api.toggleFullscreen().catch(showError);
-    } else if (e.key === "Escape" && !$("debug").hidden) toggleDebug();
-  });
-}
-
+let screen: Screen = "start";
+let cameFrom: Screen = "menu";
 let world: World | null = null;
 let hud: Hud | null = null;
+let minimap: Minimap | null = null;
+let route: Route | null = null;
+let routes: RouteInfo[] = [];
+let selectedRoute = "";
+let profile: Profile = loadProfile();
+/** The rider screen edits a draft; Save makes it the profile, Back throws it away. */
+let draft: Profile = { ...profile };
+let finishShown = false;
+const stats = { samples: 0, power: 0, hr: 0, hrSamples: 0 };
 
-function toggleDebug() {
-  const drawer = $("debug");
-  drawer.hidden = !drawer.hidden;
+// --- screens -----------------------------------------------------------------
+
+function show(next: Screen) {
+  if (next === "settings" || next === "rider") cameFrom = screen === "pause" ? "pause" : "menu";
+  if (next === "rider") draft = { ...profile };
+  screen = next;
+  for (const s of ["start", "menu", "rider", "settings", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
+  $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
+  if (next === "rider") fillRiderScreen();
+  world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? "chase" : "orbit");
 }
 
-async function startWorld() {
-  const route = await api.route();
-  if (!route) return;
-  // Building the terrain blocks the page for a few seconds; paint something first.
+function back() {
+  if (screen === "rider") {
+    draft = { ...profile };
+    applyProfile(profile);
+  }
+  show(cameFrom);
+}
+
+// --- rider profile -------------------------------------------------------------
+
+/** Shows a profile everywhere: badges and the 3D rider. Does not store it. */
+function applyProfile(p: Profile) {
+  for (const id of ["menu-avatar", "hud-avatar"]) $(id).textContent = p.avatar;
+  for (const id of ["menu-name", "hud-name"]) $(id).textContent = p.name || "Rider";
+  world?.setRider(p.jersey, p.accent, p.bike);
+}
+
+function draftChanged(): boolean {
+  return (Object.keys(profile) as (keyof Profile)[]).some((k) => profile[k] !== draft[k]);
+}
+
+function previewDraft() {
+  applyProfile(draft);
+  $<HTMLButtonElement>("rider-save").disabled = !draftChanged();
+}
+
+function saveDraft() {
+  profile = { ...draft, name: draft.name.trim() || "Rider" };
+  saveProfile(profile);
+  applyProfile(profile);
+  $<HTMLButtonElement>("rider-save").disabled = true;
+}
+
+function choices(id: string, options: string[], current: string, pick: (v: string) => void, swatch: boolean) {
+  const box = $(id);
+  box.replaceChildren(
+    ...options.map((v) => {
+      const b = el("button", { className: v === current ? "on" : "", title: v });
+      if (swatch) b.style.background = v;
+      else b.textContent = v;
+      b.onclick = () => {
+        pick(v);
+        previewDraft();
+        fillRiderScreen();
+      };
+      return b;
+    }),
+  );
+}
+
+function fillRiderScreen() {
+  const name = $<HTMLInputElement>("rider-name");
+  if (document.activeElement !== name) name.value = draft.name;
+  choices("rider-avatars", AVATARS, draft.avatar, (v) => (draft.avatar = v), false);
+  choices("rider-jerseys", JERSEYS, draft.jersey, (v) => (draft.jersey = v), true);
+  choices("rider-accents", ACCENTS, draft.accent, (v) => (draft.accent = v), true);
+  choices("rider-bikes", BIKES, draft.bike, (v) => (draft.bike = v), true);
+  $<HTMLButtonElement>("rider-save").disabled = !draftChanged();
+}
+
+// --- routes and the world -----------------------------------------------------
+
+function fillRouteList() {
+  $("route-list").replaceChildren(
+    ...routes.map((r) => {
+      const km = (r.length_m / 1000).toFixed(1);
+      const card = el(
+        "div",
+        { className: `route-card${r.id === selectedRoute ? " selected" : ""}` },
+        el("b", {}, r.name),
+        el("button", { className: "primary", textContent: "Ride" }),
+        el("span", { className: "meta" }, `${km} km · ${Math.round(r.climb_m)} m climbing · ${r.closed ? "loop" : "climb"}${r.world ? " · real terrain" : ""}`),
+      );
+      card.onclick = () => startRide(r.id).catch(showError);
+      return card;
+    }),
+  );
+}
+
+/** Builds the 3D world for the engine's current route. */
+async function buildWorld() {
   const loading = $("loading");
   loading.hidden = false;
+  route = await api.route();
+  if (!route) {
+    loading.hidden = true;
+    return;
+  }
   $("loading-text").textContent = `Building ${route.name}…`;
   await new Promise((r) => setTimeout(r, 50));
-  let terrain;
+  let terrain: WorldData | undefined;
   if (route.world) {
     try {
       terrain = await loadWorld(route.world);
@@ -240,17 +138,126 @@ async function startWorld() {
       showError(`terrain for ${route.world} not loaded (${e}); riding a procedural world`);
     }
   }
-  const started = performance.now();
+  world?.dispose();
   world = new World($<HTMLCanvasElement>("world"), route, terrain);
-  const startup = await api.startupInfo();
-  if (startup.camera) world.setCamera(startup.camera);
-  console.info(`world built in ${((performance.now() - started) / 1000).toFixed(1)} s`);
-  loading.hidden = true;
-  hud = new Hud(world.sampler);
   world.onFrame = () => hud?.frame();
-  $("hud").hidden = false;
-  $("grade").hidden = true;
-  $("grade-hint").hidden = false;
+  hud = new Hud(world.sampler);
+  minimap = new Minimap($<HTMLCanvasElement>("minimap"), route, terrain);
+  applyProfile(screen === "rider" ? draft : profile);
+  show(screen);
+  loading.hidden = true;
+}
+
+async function startRide(id: string) {
+  if (id !== selectedRoute || !world) {
+    await api.setRoute(id);
+    selectedRoute = id;
+    fillRouteList();
+    await buildWorld();
+  } else {
+    await api.resetRide();
+  }
+  stats.samples = stats.power = stats.hr = stats.hrSamples = 0;
+  finishShown = false;
+  show("ride");
+}
+
+function onSnapshot(snap: EngineSnapshot) {
+  renderDebug(snap);
+  world?.update(snap);
+  if (screen === "ride" || screen === "pause") {
+    hud?.update(snap);
+    minimap?.update(snap);
+    if (snap.session.power_w !== null) {
+      stats.samples++;
+      stats.power += snap.session.power_w;
+    }
+    if (snap.session.heart_rate_bpm !== null) {
+      stats.hrSamples++;
+      stats.hr += snap.session.heart_rate_bpm;
+    }
+    if (snap.session.finished && !finishShown) {
+      finishShown = true;
+      showFinish(snap);
+    }
+  }
+}
+
+function showFinish(snap: EngineSnapshot) {
+  const s = snap.session;
+  const avgPower = stats.samples ? stats.power / stats.samples : null;
+  const avgHr = stats.hrSamples ? stats.hr / stats.hrSamples : null;
+  $("finish-title").textContent = `${profile.avatar} ${route?.name ?? "Ride"}: done!`;
+  const item = (label: string, value: string) => [el("span", {}, label), el("b", {}, value)];
+  $("finish-stats").replaceChildren(
+    ...item("Time", duration(s.elapsed_s)),
+    ...item("Distance", `${(s.distance_m / 1000).toFixed(2)} km`),
+    ...item("Average power", avgPower === null ? "–" : `${num(avgPower)} W`),
+    ...item("Average heart rate", avgHr === null ? "–" : `${num(avgHr)} bpm`),
+    ...item("Average speed", s.elapsed_s > 0 ? `${((s.distance_m / s.elapsed_s) * 3.6).toFixed(1)} km/h` : "–"),
+  );
+  show("finish");
+}
+
+// --- wiring --------------------------------------------------------------------
+
+function wire() {
+  wireDebug();
+  $("start-go").onclick = () => show("menu");
+  $("menu-ride").onclick = () => startRide(selectedRoute || routes[0]?.id).catch(showError);
+  $("menu-rider").onclick = () => show("rider");
+  $("menu-settings").onclick = () => show("settings");
+  $("menu-quit").onclick = () => api.quit().catch(showError);
+  document.querySelectorAll<HTMLButtonElement>("[data-back]").forEach((b) => (b.onclick = back));
+  $("pause-resume").onclick = () => show("ride");
+  $("pause-restart").onclick = () => startRide(selectedRoute).catch(showError);
+  $("pause-settings").onclick = () => show("settings");
+  $("pause-menu").onclick = () => show("menu");
+  $("finish-again").onclick = () => startRide(selectedRoute).catch(showError);
+  $("finish-menu").onclick = () => show("menu");
+  $("toggle-debug").onclick = toggleDebug;
+  $("close-debug").onclick = toggleDebug;
+  const name = $<HTMLInputElement>("rider-name");
+  name.oninput = () => {
+    draft.name = name.value.slice(0, 24);
+    previewDraft();
+  };
+  $("rider-save").onclick = saveDraft;
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "F11") {
+      e.preventDefault();
+      api.toggleFullscreen().catch(showError);
+      return;
+    }
+    if (isTypingTarget(e.target)) return;
+    if (e.key === "Escape") {
+      if (!$("debug").hidden) toggleDebug();
+      else if (screen === "ride") show("pause");
+      else if (screen === "pause") show("ride");
+      else if (screen === "rider" || screen === "settings") back();
+      return;
+    }
+    if (screen === "start" && e.key === "Enter") {
+      show("menu");
+      return;
+    }
+    if (e.repeat) return;
+    const dir = shiftForKey(e.key);
+    if (dir) {
+      e.preventDefault();
+      api.shift(dir);
+      return;
+    }
+    if (e.key === "d" || e.key === "D") toggleDebug();
+    else if ((e.key === "c" || e.key === "C") && world && screen === "ride") world.cycleCamera();
+    else if (e.key === "a" || e.key === "A") api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
+  });
+}
+
+function toggleDebug() {
+  const drawer = $("debug");
+  drawer.hidden = !drawer.hidden;
 }
 
 async function start() {
@@ -259,15 +266,18 @@ async function start() {
     return;
   }
   wire();
-  await startWorld();
-  const onSnap = (snap: EngineSnapshot) => {
-    render(snap);
-    world?.update(snap);
-    hud?.update(snap);
-  };
-  await api.onSnapshot(onSnap);
-  onSnap(await api.snapshot());
-  await scan();
+  applyProfile(profile);
+  const startup = await api.startupInfo();
+  routes = await api.routes();
+  selectedRoute = startup.route;
+  fillRouteList();
+  await api.onSnapshot(onSnapshot);
+  onSnapshot(await api.snapshot());
+  const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");
+  show((["start", "menu", "rider", "settings", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
+  await buildWorld();
+  if (startup.camera && world) world.setCamera(startup.camera);
+  scan().catch(showError);
 }
 
 start().catch(showError);

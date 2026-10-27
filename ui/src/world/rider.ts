@@ -24,9 +24,9 @@ export class Rider {
   private crankAngle = 0;
   private wheelAngle = 0;
 
-  constructor(jersey = "#ffc400", accent = "#1b1b22") {
+  constructor(jersey = "#ffc400", accent = "#1b1b22", bike = "#2b7fff") {
     const black = new THREE.MeshStandardMaterial({ color: "#1c1e24", roughness: 0.7 });
-    const frame = new THREE.MeshStandardMaterial({ color: "#2b7fff", roughness: 0.35, metalness: 0.2 });
+    const frame = new THREE.MeshStandardMaterial({ color: bike, roughness: 0.35, metalness: 0.2 });
     const chrome = new THREE.MeshStandardMaterial({ color: "#c9ccd4", roughness: 0.3, metalness: 0.8 });
     const skin = new THREE.MeshStandardMaterial({ color: "#e3a97f", roughness: 0.8 });
     const kit = new THREE.MeshStandardMaterial({ color: jersey, roughness: 0.75 });

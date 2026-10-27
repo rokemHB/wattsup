@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The main window may call the app's own commands and listen to its events.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-fullscreen", "core:window:allow-is-fullscreen"]
+  "permissions": ["core:default", "core:window:allow-set-fullscreen", "core:window:allow-is-fullscreen", "core:window:allow-close"]
 }

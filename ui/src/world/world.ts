@@ -8,7 +8,8 @@ import { RouteSampler } from "./route";
 import { buildWorld, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, type WorldStatics } from "./scene";
 import type { WorldData } from "./terrain";
 
-export type CameraMode = "chase" | "side" | "front" | "drone";
+export type CameraMode = "chase" | "side" | "front" | "drone" | "orbit";
+/** The modes the C key cycles through; orbit is for the menus. */
 const MODES: CameraMode[] = ["chase", "side", "front", "drone"];
 
 export class World {
@@ -20,6 +21,7 @@ export class World {
   private sunDir: THREE.Vector3;
   private statics: WorldStatics;
   private rider = new Rider();
+  private orbitAngle = 0;
   private distance = 0;
   private targetDistance = 0;
   private targetAt = performance.now();
@@ -115,7 +117,33 @@ export class World {
   }
 
   setCamera(mode: string) {
-    if ((MODES as string[]).includes(mode)) this.mode = mode as CameraMode;
+    if ((MODES as string[]).includes(mode) || mode === "orbit") this.mode = mode as CameraMode;
+  }
+
+  /** Swaps the rider model for one in these colours. */
+  setRider(jersey: string, accent: string, bike: string) {
+    const old = this.rider;
+    this.rider = new Rider(jersey, accent, bike);
+    this.rider.group.position.copy(old.group.position);
+    this.rider.group.quaternion.copy(old.group.quaternion);
+    this.scene.remove(old.group);
+    this.scene.add(this.rider.group);
+  }
+
+  /** Stops rendering and frees the GPU resources. */
+  dispose() {
+    this.running = false;
+    this.scene.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
+          m.dispose();
+        }
+      }
+    });
+    this.renderer.renderLists.dispose();
   }
 
   cycleCamera(): CameraMode {
@@ -205,6 +233,14 @@ export class World {
     let wantPos: THREE.Vector3;
     let wantLook: THREE.Vector3;
     switch (this.mode) {
+      case "orbit": {
+        // Slow circle round the rider for the menus.
+        this.orbitAngle += dt * 0.25;
+        const r = 5.5;
+        wantPos = rider.clone().add(new THREE.Vector3(Math.cos(this.orbitAngle) * r, 1.6, Math.sin(this.orbitAngle) * r));
+        wantLook = rider.clone().add(up.clone().multiplyScalar(0.9));
+        break;
+      }
       case "side":
         wantPos = rider.clone().add(right.clone().multiplyScalar(9)).add(up.clone().multiplyScalar(2.2));
         wantLook = rider.clone().add(up.clone().multiplyScalar(0.9));
@@ -235,6 +271,10 @@ export class World {
     const eye = rider.clone().add(up.clone().multiplyScalar(1.2));
     const before = wantPos.y;
     this.clearTerrain(wantPos, eye);
+    if (this.mode === "orbit") {
+      this.camPos.copy(wantPos);
+      this.camLook.copy(wantLook);
+    }
     // When the terrain forces the camera well up, bring it in closer too, so
     // hairpins cut into a slope are not watched from high above the bank.
     const lifted = wantPos.y - before;
