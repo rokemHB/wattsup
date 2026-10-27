@@ -33,6 +33,7 @@ export interface SessionSnapshot {
   heart_rate_bpm: number | null;
   virtual_speed_kmh: number;
   distance_m: number;
+  model_power_w: number;
   last_command: TrainerCommand | null;
   last_command_age_s: number | null;
   measured_drive_ratio: number | null;

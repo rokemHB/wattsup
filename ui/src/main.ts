@@ -29,6 +29,7 @@ function render(snap: EngineSnapshot) {
   $("elapsed").textContent = duration(s.elapsed_s);
   $("distance").textContent = distance(s.distance_m);
   $("power").textContent = num(s.power_w);
+  $("power-model").textContent = `W · model ${num(s.model_power_w)} W`;
   $("cadence").textContent = num(s.cadence_rpm);
   $("speed").textContent = num(s.virtual_speed_kmh, 1);
   $("hr").textContent = num(s.heart_rate_bpm);

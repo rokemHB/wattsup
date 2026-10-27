@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::gearing::{implied_ratio, GearSet, Gearbox, ShiftDirection};
 use crate::physics::{kmh_to_mps, mps_to_kmh, step_speed, RiderParams};
 use crate::protocol::ftms::ControlRequest;
-use crate::resistance::{virtual_gear_sim, SimTarget, TrainerProfile};
+use crate::resistance::{virtual_gear_power, virtual_gear_sim, SimTarget, TrainerProfile};
 
 /// How the trainer's resistance is controlled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +130,10 @@ pub struct SessionSnapshot {
     pub heart_rate_bpm: Option<f64>,
     pub virtual_speed_kmh: f64,
     pub distance_m: f64,
+    /// Pedal power the virtual road asks for at the current cadence, gear and
+    /// grade. In SIM mode the trainer should make the rider produce about this
+    /// much; the gap to `power_w` shows how far the [`TrainerProfile`] is off.
+    pub model_power_w: f64,
     pub last_command: Option<TrainerCommand>,
     pub last_command_age_s: Option<f64>,
     /// Chainring/cog ratio measured from the trainer's own speed and cadence.
@@ -305,6 +309,8 @@ impl RideSession {
     pub fn snapshot(&self) -> SessionSnapshot {
         let now = self.clock_s;
         let t = self.config.data_timeout_s;
+        let cadence = self.cadence.fresh(now, t).unwrap_or(0.0);
+        let model_power_w = virtual_gear_power(&self.config.rider, cadence, self.gearbox.ratio(), self.road_grade_pct);
         SessionSnapshot {
             elapsed_s: now,
             mode: self.mode,
@@ -319,6 +325,7 @@ impl RideSession {
             heart_rate_bpm: self.heart_rate.fresh(now, t),
             virtual_speed_kmh: mps_to_kmh(self.virtual_speed_mps),
             distance_m: self.distance_m,
+            model_power_w,
             last_command: self.last_command,
             last_command_age_s: self.last_command.map(|_| now - self.last_command_at),
             measured_drive_ratio: self.drive_ratio_estimate,
@@ -472,6 +479,25 @@ mod tests {
         }
         let r = s.snapshot().measured_drive_ratio.unwrap();
         assert!((r - 34.0 / 14.0).abs() < 0.01, "{r}");
+    }
+
+    #[test]
+    fn model_power_follows_cadence_gear_and_grade() {
+        let mut s = RideSession::default();
+        assert_eq!(s.snapshot().model_power_w, 0.0, "not pedalling");
+        riding(&mut s, 200.0, 90.0);
+        s.tick(0.25);
+        let flat = s.snapshot().model_power_w;
+        assert!(flat > 40.0 && flat < 200.0, "{flat}");
+        s.shift(ShiftDirection::Up);
+        let harder = s.snapshot().model_power_w;
+        assert!(harder > flat, "{harder} > {flat}");
+        s.set_road_grade(5.0);
+        assert!(s.snapshot().model_power_w > harder);
+        for _ in 0..13 {
+            s.tick(0.25);
+        }
+        assert_eq!(s.snapshot().model_power_w, 0.0, "cadence expired");
     }
 
     #[test]

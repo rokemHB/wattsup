@@ -184,9 +184,10 @@ fn status_line(s: &EngineSnapshot) -> String {
         })
         .collect();
     format!(
-        "{:>6.0}s  {:>4} W  {:>5} rpm  {:>5} km/h trainer  {:>5.1} km/h virtual  HR {:>3}  gear {:>2}/{} ({:.2})  sent {}  [{}]",
+        "{:>6.0}s  {:>4} W (model {:>3.0})  {:>5} rpm  {:>5} km/h trainer  {:>5.1} km/h virtual  HR {:>3}  gear {:>2}/{} ({:.2})  drive {}  sent {}  [{}]",
         r.elapsed_s,
         opt(r.power_w, 0),
+        r.model_power_w,
         opt(r.cadence_rpm, 1),
         opt(r.trainer_speed_kmh, 1),
         r.virtual_speed_kmh,
@@ -194,6 +195,7 @@ fn status_line(s: &EngineSnapshot) -> String {
         r.gear,
         r.gear_count,
         r.gear_ratio,
+        opt(r.measured_drive_ratio, 2),
         sent,
         devices.join(" ")
     )
