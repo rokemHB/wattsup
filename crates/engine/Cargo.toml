@@ -1,0 +1,21 @@
+[package]
+name = "wattsup-engine"
+description = "Runs a WattsUp ride: device providers, connected devices and the ride session, independent of any UI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["ble"]
+ble = ["wattsup-devices/ble"]
+
+[dependencies]
+wattsup-core = { path = "../core" }
+wattsup-devices = { path = "../devices", default-features = false }
+serde.workspace = true
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "test-util"] }
