@@ -1,6 +1,7 @@
 // The live 3D view: renders the static world, moves the rider from engine
 // snapshots and runs the chase camera.
 import * as THREE from "three";
+import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
 import { Rider } from "./rider";
 import { RouteSampler } from "./route";
@@ -15,6 +16,7 @@ export class World {
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
+  private sunDir: THREE.Vector3;
   private statics: WorldStatics;
   private rider = new Rider();
   private distance = 0;
@@ -30,29 +32,49 @@ export class World {
   private camLook = new THREE.Vector3();
   private heading = new THREE.Vector3(1, 0, 0);
   private lean = 0;
+  /** Render scale, tuned at runtime to hold the frame rate on weak GPUs. */
+  private pixelRatio = Math.min(window.devicePixelRatio, 1.5);
+  private frameTimes: number[] = [];
 
   constructor(canvas: HTMLCanvasElement, route: Route) {
     this.sampler = new RouteSampler(route);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 0.62;
 
-    const sky = new THREE.Color("#8ec5ff");
-    this.scene.background = sky;
-    this.scene.fog = new THREE.Fog("#b9dcff", 250, 1600);
+    // Sky with atmospheric scattering; it also lights the materials through an environment map.
+    const sky = new Sky();
+    sky.scale.setScalar(40000);
+    const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 38), THREE.MathUtils.degToRad(145));
+    Object.assign(sky.material.uniforms, {});
+    sky.material.uniforms.turbidity.value = 2.5;
+    sky.material.uniforms.rayleigh.value = 1.2;
+    sky.material.uniforms.mieCoefficient.value = 0.004;
+    sky.material.uniforms.mieDirectionalG.value = 0.8;
+    sky.material.uniforms.sunPosition.value.copy(sunDir);
+    this.scene.add(sky);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envScene = new THREE.Scene();
+    envScene.add(sky.clone());
+    this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+    this.scene.environmentIntensity = 0.35;
+    envScene.clear();
+    this.scene.fog = new THREE.Fog("#c6d9ec", 500, 9000);
 
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 4000);
-    this.scene.add(new THREE.HemisphereLight("#cfe6ff", "#6f8f4f", 0.9));
-    this.sun = new THREE.DirectionalLight("#fff3dc", 2.2);
+    this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 30000);
+    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#5f7f45", 0.55));
+    this.sun = new THREE.DirectionalLight("#fff1d6", 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
-    const s = 70;
-    Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 600 });
-    this.sun.shadow.bias = -0.0005;
+    const s = 80;
+    Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 700 });
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.05;
+    this.sunDir = sunDir;
     this.scene.add(this.sun, this.sun.target);
 
     this.statics = buildWorld(route);
@@ -90,6 +112,24 @@ export class World {
     this.running = false;
   }
 
+  /** Every two seconds: lower the render scale when frames are slow, raise it when there is headroom. */
+  private adaptResolution(dt: number) {
+    this.frameTimes.push(dt);
+    if (this.frameTimes.length < 120) return;
+    const sorted = [...this.frameTimes].sort((a, b) => a - b);
+    const median = sorted[sorted.length >> 1];
+    this.frameTimes = [];
+    const max = Math.min(window.devicePixelRatio, 1.5);
+    let next = this.pixelRatio;
+    if (median > 1 / 50 && this.pixelRatio > 0.75) next = Math.max(0.75, this.pixelRatio - 0.25);
+    else if (median < 1 / 70 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.25);
+    if (next !== this.pixelRatio) {
+      this.pixelRatio = next;
+      this.renderer.setPixelRatio(next);
+      this.resize();
+    }
+  }
+
   private frame() {
     if (!this.running) return;
     const now = performance.now();
@@ -111,23 +151,26 @@ export class World {
     this.heading.lerp(fwd, Math.min(1, dt * 10)).normalize();
     this.lean += (Math.max(-0.35, Math.min(0.35, turn * this.speed * 3.5)) - this.lean) * Math.min(1, dt * 6);
 
+    // Ride on the right-hand side of the lane, not on the centre line.
+    const right = new THREE.Vector3(-this.heading.z, 0, this.heading.x);
     const g = this.rider.group;
-    g.position.set(pose.x, pose.y, pose.z);
+    g.position.set(pose.x, pose.y, pose.z).add(right.clone().multiplyScalar(1.6));
     const pitch = Math.atan(pose.grade / 100);
     g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), this.heading.clone().negate(), up));
     g.rotateY(-Math.PI / 2);
     g.rotateZ(pitch);
     g.rotateX(-this.lean);
     this.rider.animate(this.cadence, this.speed, dt);
+    this.statics.animate(dt);
+    this.adaptResolution(dt);
 
     // Camera.
-    const left = new THREE.Vector3(-this.heading.z, 0, this.heading.x);
     const rider = g.position;
     let wantPos: THREE.Vector3;
     let wantLook: THREE.Vector3;
     switch (this.mode) {
       case "side":
-        wantPos = rider.clone().add(left.clone().multiplyScalar(9)).add(up.clone().multiplyScalar(2.2));
+        wantPos = rider.clone().add(right.clone().multiplyScalar(9)).add(up.clone().multiplyScalar(2.2));
         wantLook = rider.clone().add(up.clone().multiplyScalar(0.9));
         break;
       case "front":
@@ -156,7 +199,7 @@ export class World {
     this.camera.lookAt(this.camLook);
 
     // The sun's shadow box follows the rider.
-    this.sun.position.copy(rider).add(new THREE.Vector3(120, 220, 80));
+    this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(300));
     this.sun.target.position.copy(rider);
 
     this.renderer.render(this.scene, this.camera);

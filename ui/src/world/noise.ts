@@ -38,3 +38,26 @@ export function noise2(x: number, z: number, scale: number, seed = 1): number {
 export function fbm(x: number, z: number, scale: number, seed = 1): number {
   return 0.6 * noise2(x, z, scale, seed) + 0.28 * noise2(x, z, scale / 2.3, seed + 7) + 0.12 * noise2(x, z, scale / 5.1, seed + 13);
 }
+
+/** Value noise that tiles every `period` lattice cells, for seamless textures. */
+export function noise2p(u: number, v: number, period: number, seed = 1): number {
+  const iu = Math.floor(u);
+  const iv = Math.floor(v);
+  const tu = smooth(u - iu);
+  const tv = smooth(v - iv);
+  const w = (a: number, b: number) => hash(((a % period) + period) % period, ((b % period) + period) % period, seed);
+  const a = w(iu, iv);
+  const b = w(iu + 1, iv);
+  const c = w(iu, iv + 1);
+  const d = w(iu + 1, iv + 1);
+  return (a + (b - a) * tu) * (1 - tv) + (c + (d - c) * tu) * tv;
+}
+
+/** Tileable fbm over the unit square. */
+export function fbmTile(x: number, y: number, cells: number, seed = 1): number {
+  return (
+    0.55 * noise2p(x * cells, y * cells, cells, seed) +
+    0.3 * noise2p(x * cells * 2, y * cells * 2, cells * 2, seed + 3) +
+    0.15 * noise2p(x * cells * 4, y * cells * 4, cells * 4, seed + 9)
+  );
+}
