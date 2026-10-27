@@ -12,3 +12,7 @@ Open items, roughly in the order they are worth doing.
 - [ ] Ride recording to FIT or TCX for Strava.
 - [ ] Multiplayer over a WebSocket server (engine snapshots in, other riders out).
 - [ ] More of Mallorca: the pipeline works for any road; next candidates Puig Major, Coll de Sóller, Formentor.
+
+## Ideas
+
+- Workout mountains: define a workout as ERG intervals (watts × minutes) and let the game build a custom mountain whose grades correspond to those watts, so the intervals are ridden as climbs and recoveries as flats or descents. Open questions: ERG holds the watts regardless of the hill, so either the hill is scenery over ERG (the trainer does the work, the mountain shows the plan) or the hill *is* the workout in SIM mode with grades chosen so the target watts come at the rider's chosen cadence and gear. Interval length maps to climb length through the rider's expected speed at that power.
