@@ -190,9 +190,22 @@ export class World {
         wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-9.5)).add(up.clone().multiplyScalar(3.4));
         wantLook = rider.clone().add(this.heading.clone().multiplyScalar(8)).add(up.clone().multiplyScalar(1.1));
     }
-    // Keep the camera above the ground.
+    // Keep the camera above the ground, and keep the line of sight to the
+    // rider clear of the terrain: on a road cut into a slope the ground
+    // between them can rise well above both.
     const ground = this.statics.heightAt(wantPos.x, wantPos.z) + 1.2;
     if (wantPos.y < ground) wantPos.y = ground;
+    const eye = rider.clone().add(up.clone().multiplyScalar(1.2));
+    let lift = 0;
+    for (let t = 0.15; t < 1; t += 0.1) {
+      const px = eye.x + (wantPos.x - eye.x) * t;
+      const pz = eye.z + (wantPos.z - eye.z) * t;
+      const py = eye.y + (wantPos.y - eye.y) * t;
+      const need = this.statics.heightAt(px, pz) + 1.0 - py;
+      // A blockage at fraction t needs the camera end raised by need / t.
+      if (need > 0) lift = Math.max(lift, need / t);
+    }
+    wantPos.y += lift;
     const k = Math.min(1, dt * 5);
     if (this.camPos.lengthSq() === 0) {
       this.camPos.copy(wantPos);

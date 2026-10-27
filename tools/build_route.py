@@ -2,8 +2,10 @@
 """Builds a real-world route and its terrain from OpenStreetMap and the Copernicus DEM.
 
 Inputs:
-  --osm     Overpass JSON (`out geom;`) with the road's ways
-  --dem     Copernicus GLO-30 COG GeoTIFF covering the area (1 arcsec, pixel-is-point)
+  --osm       Overpass JSON (`out geom;`) with the road's ways
+  --dem       Copernicus GLO-30 COG GeoTIFF covering the wide area (1 arcsec, pixel-is-point)
+  --dem-fine  optional finer GeoTIFF in EPSG:4326 for the route and the near grid, e.g.
+              Spain's IGN 5 m model from the IDEE WCS (see README)
 Outputs (in the repo):
   crates/core/routes/<id>.json      route for the Rust core (distance, x, y, z every 5 m)
   ui/public/worlds/<id>.json        world metadata (origin, grids)
@@ -37,38 +39,65 @@ def haversine(a, b):
 
 
 class Dem:
+    """A GeoTIFF elevation grid in geographic coordinates (EPSG:4326 / 4258)."""
+
     def __init__(self, path):
         with tifffile.TiffFile(path) as t:
             page = t.pages[0]
             tie = page.tags["ModelTiepointTag"].value
             scale = page.tags["ModelPixelScaleTag"].value
+            keys = page.tags["GeoKeyDirectoryTag"].value
+            nodata = page.tags.get("GDAL_NODATA")
             self.lon0, self.lat0 = tie[3], tie[4]
             self.dlon, self.dlat = scale[0], scale[1]
+            # GTRasterTypeGeoKey (1025): 1 = PixelIsArea (tie point is the pixel corner), 2 = PixelIsPoint.
+            raster_type = next((keys[i + 3] for i in range(4, len(keys), 4) if keys[i] == 1025), 1)
+            if raster_type == 1:
+                self.lon0 += self.dlon / 2
+                self.lat0 -= self.dlat / 2
             self.data = page.asarray().astype(np.float32)
+            if nodata is not None:
+                self.data[self.data == float(nodata.value)] = np.nan
         self.rows, self.cols = self.data.shape
 
-    def sample(self, lat, lon):
-        """Bilinear elevation; pixel centres sit on the grid (pixel-is-point)."""
-        r = (self.lat0 - lat) / self.dlat
-        c = (lon - self.lon0) / self.dlon
-        r0, c0 = int(math.floor(r)), int(math.floor(c))
-        if r0 < 0 or c0 < 0 or r0 + 1 >= self.rows or c0 + 1 >= self.cols:
-            return float("nan")
-        fr, fc = r - r0, c - c0
+    def sample_many(self, lats, lons):
+        """Bilinear elevation for arrays of coordinates; NaN outside the grid."""
+        lats = np.asarray(lats, dtype=np.float64)
+        lons = np.asarray(lons, dtype=np.float64)
+        r = (self.lat0 - lats) / self.dlat
+        c = (lons - self.lon0) / self.dlon
+        r0 = np.floor(r).astype(np.int64)
+        c0 = np.floor(c).astype(np.int64)
+        inside = (r0 >= 0) & (c0 >= 0) & (r0 + 1 < self.rows) & (c0 + 1 < self.cols)
+        r0c = np.clip(r0, 0, self.rows - 2)
+        c0c = np.clip(c0, 0, self.cols - 2)
+        fr = r - r0
+        fc = c - c0
         d = self.data
-        return float((d[r0, c0] * (1 - fr) + d[r0 + 1, c0] * fr) * (1 - fc) + (d[r0, c0 + 1] * (1 - fr) + d[r0 + 1, c0 + 1] * fr) * fc)
+        v = (d[r0c, c0c] * (1 - fr) + d[r0c + 1, c0c] * fr) * (1 - fc) + (d[r0c, c0c + 1] * (1 - fr) + d[r0c + 1, c0c + 1] * fr) * fc
+        return np.where(inside, v, np.nan)
 
-    def grid(self, lat_min, lat_max, lon_min, lon_max, spacing_m, lat_ref):
-        """Heightmap rows from north to south, columns west to east, at `spacing_m`."""
+    def sample(self, lat, lon):
+        return float(self.sample_many([lat], [lon])[0])
+
+    def covers(self, lat, lon):
+        return not math.isnan(self.sample(lat, lon))
+
+    def grid(self, lat_min, lat_max, lon_min, lon_max, spacing_m, lat_ref, fallback=None):
+        """Heightmap rows from north to south, columns west to east, at `spacing_m`.
+
+        Cells outside this grid come from `fallback` (another Dem), else 0."""
         dlat = spacing_m / EARTH_LAT_M
         dlon = spacing_m / (EARTH_LON_M * math.cos(math.radians(lat_ref)))
         lats = np.arange(lat_max, lat_min - 1e-12, -dlat)
         lons = np.arange(lon_min, lon_max + 1e-12, dlon)
-        out = np.empty((len(lats), len(lons)), dtype=np.float32)
-        for i, lat in enumerate(lats):
-            for j, lon in enumerate(lons):
-                v = self.sample(lat, lon)
-                out[i, j] = 0.0 if math.isnan(v) else v
+        glat, glon = np.meshgrid(lats, lons, indexing="ij")
+        out = self.sample_many(glat.ravel(), glon.ravel())
+        if fallback is not None:
+            missing = np.isnan(out)
+            if missing.any():
+                out[missing] = fallback.sample_many(glat.ravel()[missing], glon.ravel()[missing])
+        out = np.nan_to_num(out, nan=0.0).astype(np.float32).reshape(glat.shape)
         return lats, lons, out
 
 
@@ -89,6 +118,8 @@ def chain_ways(elements, dem, start_lowest=True, cut_at_top=False):
             adj.setdefault(b, []).append((a, w))
     ends = [n for n, nb in adj.items() if len(nb) == 1]
     elev = {n: dem.sample(*nodes[n]) for n in ends}
+    if any(math.isnan(v) for v in elev.values()):
+        raise SystemExit("the DEM does not cover all road endpoints")
     lo = min(ends, key=lambda n: elev[n])
     hi = max(ends, key=lambda n: elev[n])
     start, goal = (lo, hi) if start_lowest else (hi, lo)
@@ -161,11 +192,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--osm", required=True)
     ap.add_argument("--dem", required=True)
+    ap.add_argument("--dem-fine")
     ap.add_argument("--id", required=True)
     ap.add_argument("--name", required=True)
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--near-margin", type=float, default=2500.0, help="metres around the route in the near heightmap")
-    ap.add_argument("--near-spacing", type=float, default=15.0)
+    ap.add_argument("--near-spacing", type=float, default=10.0)
     ap.add_argument("--far-size", type=float, default=36000.0)
     ap.add_argument("--far-spacing", type=float, default=150.0)
     ap.add_argument("--cut-at-top", action="store_true", help="end the route at its highest point (a climb)")
@@ -175,8 +207,9 @@ def main():
     args = ap.parse_args()
 
     dem = Dem(args.dem)
+    fine = Dem(args.dem_fine) if args.dem_fine else dem
     osm = json.load(open(args.osm))
-    latlon, e_start, e_end = chain_ways(osm["elements"], dem, cut_at_top=args.cut_at_top)
+    latlon, e_start, e_end = chain_ways(osm["elements"], fine, cut_at_top=args.cut_at_top)
     print(f"path: {len(latlon)} nodes, {e_start:.0f} m -> {e_end:.0f} m")
 
     lat_ref = (max(p[0] for p in latlon) + min(p[0] for p in latlon)) / 2
@@ -186,7 +219,10 @@ def main():
     to_latlon = lambda x, z: (lat_ref - z / EARTH_LAT_M, lon_ref + x / kx)
 
     xz = resample([to_xz(*p) for p in latlon], SPACING)
-    raw = np.array([dem.sample(*to_latlon(x, z)) for x, z in xz])
+    ll = np.array([to_latlon(x, z) for x, z in xz])
+    raw = fine.sample_many(ll[:, 0], ll[:, 1])
+    if np.isnan(raw).any():
+        raise SystemExit("the fine DEM does not cover the whole route")
     # The DEM is a surface model on 30 m cells: on a cliff road with stacked
     # hairpins it is off by tens of metres. Smooth, cap the grade, then
     # re-integrate so the profile stays plausible and ends at the right height.
@@ -205,10 +241,10 @@ def main():
     route = {"name": args.name, "points": points, "closed": False, "world": args.id}
     (repo / "crates/core/routes" / f"{args.id}.json").write_text(json.dumps(route, separators=(",", ":")))
 
-    def heightmap(center_x, center_z, half_w, half_h, spacing, suffix):
+    def heightmap(center_x, center_z, half_w, half_h, spacing, suffix, source):
         lat_max, lon_min = to_latlon(center_x - half_w, center_z - half_h)
         lat_min, lon_max = to_latlon(center_x + half_w, center_z + half_h)
-        lats, lons, grid = dem.grid(lat_min, lat_max, lon_min, lon_max, spacing, lat_ref)
+        lats, lons, grid = source.grid(lat_min, lat_max, lon_min, lon_max, spacing, lat_ref, fallback=dem)
         x0, z0 = to_xz(lats[0], lons[0])
         (repo / "ui/public/worlds" / f"{args.id}-{suffix}.bin").write_bytes(struct.pack(f"<{grid.size}f", *grid.flatten().tolist()))
         print(f"{suffix}: {grid.shape[1]}x{grid.shape[0]} at {spacing} m, {grid.min():.0f}..{grid.max():.0f} m")
@@ -216,15 +252,17 @@ def main():
 
     xs, zs = xz[:, 0], xz[:, 1]
     cx, cz = float((xs.max() + xs.min()) / 2), float((zs.max() + zs.min()) / 2)
-    near = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.near_margin, (zs.max() - zs.min()) / 2 + args.near_margin, args.near_spacing, "near")
-    far = heightmap(cx, cz, args.far_size / 2, args.far_size / 2, args.far_spacing, "far")
+    near = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.near_margin, (zs.max() - zs.min()) / 2 + args.near_margin, args.near_spacing, "near", fine)
+    far = heightmap(cx, cz, args.far_size / 2, args.far_size / 2, args.far_spacing, "far", dem)
     meta = {
         "id": args.id,
         "name": args.name,
         "origin": {"lat": lat_ref, "lon": lon_ref},
         "near": near,
         "far": far,
-        "attribution": "Road data © OpenStreetMap contributors (ODbL). Elevation: Copernicus DEM GLO-30 © ESA.",
+        "attribution": "Road data © OpenStreetMap contributors (ODbL). Elevation: "
+        + ("IGN España MDT05 (CC BY 4.0) and " if args.dem_fine else "")
+        + "Copernicus DEM GLO-30 © ESA.",
     }
     (repo / "ui/public/worlds" / f"{args.id}.json").write_text(json.dumps(meta, indent=1))
 

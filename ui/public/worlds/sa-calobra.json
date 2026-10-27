@@ -7,11 +7,11 @@
  },
  "near": {
   "file": "/worlds/sa-calobra-near.bin",
-  "cols": 470,
-  "rows": 506,
+  "cols": 704,
+  "rows": 758,
   "x0": -3519.0,
   "z0": -3788.9,
-  "spacing": 15.0
+  "spacing": 10.0
  },
  "far": {
   "file": "/worlds/sa-calobra-far.bin",
@@ -21,5 +21,5 @@
   "z0": -18000.7,
   "spacing": 150.0
  },
- "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: Copernicus DEM GLO-30 \u00a9 ESA."
+ "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA."
 }

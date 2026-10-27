@@ -93,12 +93,19 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   const { near, far } = world;
 
   const raw = (x: number, z: number) => gridSample(near, x, z) ?? gridSample(far, x, z) ?? SEA_LEVEL - 10;
+  const box = {
+    x0: Math.min(...pts.map((p) => p.x)) - 60,
+    x1: Math.max(...pts.map((p) => p.x)) + 60,
+    z0: Math.min(...pts.map((p) => p.z)) - 60,
+    z1: Math.max(...pts.map((p) => p.z)) + 60,
+  };
   const heightAt = (x: number, z: number): number => {
     const h = raw(x, z);
-    const n = index.nearest(x, z, 120);
-    if (n.d > 120) return h;
-    // Cut a shelf for the road: flat under it, back to the real ground within a few tens of metres.
-    return lerp(n.y - 0.35, h, smoothstep(7, 40, n.d));
+    if (x < box.x0 || x > box.x1 || z < box.z0 || z > box.z1) return h;
+    const n = index.nearest(x, z, 60);
+    if (n.d > 60) return h;
+    // Cut a narrow shelf for the road: flat under it, back to the real ground within a few metres.
+    return lerp(n.y - 0.35, h, smoothstep(5, 22, n.d));
   };
   const land: Land = {
     height: heightAt,
@@ -136,8 +143,8 @@ function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THRE
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const uv = geo.attributes.uv as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
-  const scrub = new THREE.Color("#6f8a4a");
-  const dryScrub = new THREE.Color("#a09a5e");
+  const scrub = new THREE.Color("#73855a");
+  const dryScrub = new THREE.Color("#a59c68");
   const rock = new THREE.Color("#a39b8f");
   const rockHigh = new THREE.Color("#c4bdb1");
   const sand = new THREE.Color("#d8c89a");
@@ -155,7 +162,7 @@ function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THRE
       const patch = fbm(x, z, 180, 16);
       tmp.copy(scrub).lerp(dryScrub, 0.5 * fbm(x, z, 420, 15) + 0.4 * high);
       // Limestone shows through on steep ground, more so higher up and in rocky patches.
-      const rockiness = smoothstep(0.28, 0.6, slope + 0.3 * high + 0.25 * (patch - 0.5));
+      const rockiness = smoothstep(0.22, 0.55, slope + 0.3 * high + 0.3 * (patch - 0.5));
       tmp.lerp(high > 0.5 ? rockHigh : rock, rockiness);
       if (y < SEA_LEVEL + 6) tmp.lerp(sand, smoothstep(SEA_LEVEL + 6, SEA_LEVEL + 1, y));
       colors.set([tmp.r, tmp.g, tmp.b], i * 3);

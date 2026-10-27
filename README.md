@@ -152,7 +152,10 @@ course. *Sa Calobra* is the real road from the Port de Sa Calobra up to the
 Coll dels Reis on Mallorca, 10.2 km at 6.7 % average, built from open data:
 
 - road geometry from OpenStreetMap (© OpenStreetMap contributors, ODbL),
-- elevation from the Copernicus DEM GLO-30 (© ESA), a 30 m surface model.
+- elevation near the route from Spain's IGN 5 m terrain model MDT05 (CC BY 4.0),
+  fetched through the IDEE INSPIRE WCS,
+- elevation for the wide surroundings from the Copernicus DEM GLO-30 (© ESA),
+  a 30 m surface model.
 
 `tools/build_route.py` turns those into a route file for the Rust core
 (`crates/core/routes/<id>.json`, a point every 5 m with elevation) and two
@@ -165,19 +168,22 @@ python -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 # the road: an Overpass query with `out geom;`, e.g. all ways tagged ref=Ma-2141 in a bounding box
 curl -A 'WattsUp route builder' -o sa_calobra.json -X POST https://overpass-api.de/api/interpreter \
   --data-urlencode 'data=[out:json];way["highway"]["ref"="Ma-2141"](39.80,2.74,39.90,2.86);out geom;'
-# the elevation tile covering it (1° x 1°, named after its south-west corner)
+# the wide-area elevation tile (1° x 1°, named after its south-west corner)
 curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N39_00_E002_00_DEM/Copernicus_DSM_COG_10_N39_00_E002_00_DEM.tif
-.venv/bin/python tools/build_route.py --osm sa_calobra.json --dem dem.tif --id sa-calobra --name "Sa Calobra" \
-  --cut-at-top --smooth 15 --min-grade -6
+# the 5 m model for the route and its surroundings (Spain only; a GeoTIFF in EPSG:4326)
+curl -A 'WattsUp route builder' -o ign5.tif 'https://servicios.idee.es/wcs-inspire/mdt?service=WCS&request=GetCoverage&version=2.0.1&coverageId=Elevacion4258_5&subset=Lat(39.800,39.880)&subset=Long(2.755,2.850)&format=image/tiff'
+.venv/bin/python tools/build_route.py --osm sa_calobra.json --dem dem.tif --dem-fine ign5.tif \
+  --id sa-calobra --name "Sa Calobra" --cut-at-top --smooth 5 --min-grade -6
 ```
 
 The script chains the OSM way segments into one path from the lowest to the
 highest end (`--cut-at-top` stops at the summit), resamples it every 5 m,
-reads the elevation from the tile, smooths it and caps the grade: a 30 m
-surface model is tens of metres off on a cliff road with stacked hairpins,
-so the profile is plausible rather than exact. A 5 m terrain model (Spain's
-IGN publishes one) would fix that; the pipeline does not care about the
-source resolution.
+reads the elevation from the fine model, smooths it lightly and caps the
+grade as a safety net. `--dem-fine` is optional: without it the 30 m surface
+model is used for everything, which is tens of metres off on a cliff road
+with stacked hairpins, so use `--smooth 15` there and expect a plausible
+rather than exact profile. Outside Spain, any GeoTIFF in geographic
+coordinates works as the fine model.
 
 ## Tests
 
