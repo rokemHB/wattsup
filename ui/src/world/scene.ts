@@ -271,7 +271,10 @@ export function corridorMesh(
   const colors = new Float32Array(n * across * 3);
   const tmp = new THREE.Color();
   // Cross-section frames, and how far out each section owns the ground on
-  // each side before another part of the road is closer (hairpins).
+  // each side before another part of the road is closer (hairpins). "Another
+  // part" means at least 50 m further along the road, whatever the spacing.
+  const spacing = n > 1 ? Math.max(1, pts[1].distance_m - pts[0].distance_m) : 5;
+  const apart = Math.max(3, Math.round(50 / spacing));
   const frames = pts.map((p, i) => {
     const a = pts[Math.max(i - 1, 0)];
     const b = pts[Math.min(i + 1, n - 1)];
@@ -282,7 +285,7 @@ export function corridorMesh(
       let r = CORRIDOR_REACH;
       for (const o of CORRIDOR_OFFSETS) {
         const q = index.nearest(p.x + nx * o * side, p.z + nz * o * side, CORRIDOR_REACH);
-        const other = q.edge !== undefined && edgeId >= 0 ? q.edge !== edgeId || Math.abs(q.i - (startIndex + i)) > 12 : Math.abs(q.i - i) > 12;
+        const other = q.edge !== undefined && edgeId >= 0 ? q.edge !== edgeId || Math.abs(q.i - (startIndex + i)) > apart : Math.abs(q.i - i) > apart;
         if (q.i >= 0 && other && q.d < o * 0.95) {
           r = Math.max(SHOULDER, o - 0.5 * (o - q.d));
           break;

@@ -266,6 +266,7 @@ export class TileManager {
           t = { key, i, j, x0: xa, z0: za, x1: xb, z1: zb, grid: null, group: new THREE.Group(), posts: [], state: "loading" };
           this.tiles.set(key, t);
           wanted.push(t);
+          console.info(`tile ${key}: queued at ${(performance.now() / 1000).toFixed(1)} s, ${Math.hypot(cx - x, cz - z).toFixed(0)} m away`);
         }
       }
     }
@@ -396,7 +397,15 @@ export class TileManager {
       const n = this.index.nearest(x, z, TUNNEL_HALF + 1);
       return n.i >= 0 && n.d < TUNNEL_HALF + 1 && this.tubeZone[n.i] === 1;
     };
-    group.add(gridBlockMesh(grid, tucked, [0, rows - 1], [0, cols - 1], tex, this.detail, 1, overTunnel));
+    // One ring of vertices beyond the data, hanging 6 m below the edge: a skirt
+    // that closes the seam to the neighbouring tile (their grids abut, they do
+    // not share a row) whether or not that tile is loaded yet.
+    const skirted = (x: number, z: number) => {
+      const cx = Math.min(Math.max(x, grid.x0), grid.x0 + (cols - 1) * grid.spacing);
+      const cz = Math.min(Math.max(z, grid.z0), grid.z0 + (rows - 1) * grid.spacingZ!);
+      return cx === x && cz === z ? tucked(x, z) : tucked(cx, cz) - 6;
+    };
+    group.add(gridBlockMesh(grid, skirted, [-1, rows], [-1, cols], tex, this.detail, 1, overTunnel));
 
     // Roads in this tile: the stretches of each edge inside it, plus one point beyond for continuity.
     const inside = (x: number, z: number) => x >= t.x0 && x < t.x1 && z >= t.z0 && z < t.z1;
@@ -462,7 +471,7 @@ export class TileManager {
     this.scene.add(group);
     this.sinkFar(t, true);
     t.state = "ready";
-    console.info(`tile ${t.key}: fetched in ${(t1 - t0).toFixed(0)} ms, built in ${(performance.now() - t1).toFixed(0)} ms`);
+    console.info(`tile ${t.key}: ready at ${(performance.now() / 1000).toFixed(1)} s, fetched in ${(t1 - t0).toFixed(0)} ms, built in ${(performance.now() - t1).toFixed(0)} ms`);
   }
 
   /** Bearing in degrees (x east, z south) of an edge leaving `node`. */
@@ -514,10 +523,10 @@ export class TileManager {
     const pixels = sctx.getImageData(0, 0, 256, 256).data;
     const [x0, z0] = this.frame.toXZ(lat1, lon0);
     const [x1, z1] = this.frame.toXZ(lat0, lon1);
+    // Just outside the tile (a corridor strip reaching past its edge) the nearest edge pixel is used, not a made-up rock colour.
     const colorAt = (x: number, z: number): [number, number, number] | null => {
-      const u = (x - x0) / (x1 - x0);
-      const v = (z - z0) / (z1 - z0);
-      if (u < 0 || v < 0 || u > 1 || v > 1) return null;
+      const u = Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+      const v = Math.min(1, Math.max(0, (z - z0) / (z1 - z0)));
       const i = (Math.min(255, Math.floor(v * 256)) * 256 + Math.min(255, Math.floor(u * 256))) * 4;
       return [pixels[i] / 255, pixels[i + 1] / 255, pixels[i + 2] / 255];
     };
