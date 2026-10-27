@@ -23,9 +23,11 @@ parapets where the ground drops away, and close-up surfaces are patches of
 the same imagery at 10 cm per pixel. Everything in the pictures is built
 from open data by `tools/build_route.py`; no hand-made assets yet.
 
-Beyond the single climb, the whole Serra de Tramuntana is rideable: pick a
-start anywhere on the island map and ride the road network freely, the
-Ma-10 included. Terrain and imagery stream in around you (and are cached on
+Beyond the single climb, the Serra de Tramuntana is rideable: the Ma-10 and
+the well-known climbs (Sa Calobra, Puig Major, Coll de Sóller, Coll de sa
+Batalla, Formentor, Orient, Valldemossa, Galilea, Sant Elm) and the roads
+that join them, tunnels included. Pick a start on the island map and ride
+the network freely. Terrain and imagery stream in around you (and are cached on
 disk), direction signs stand at every junction, and a prompt 500 m before
 each junction lets you choose the turn with the arrow keys.
 
@@ -174,12 +176,15 @@ The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
 
 ### The island
 
-`tools/build_network.py` builds a whole region as a road network: every
-road a road bike rides (OSM `primary` to `unclassified`) as a graph with
+`tools/build_network.py` builds a region as a road network: a whitelist of
+road refs (`--refs`, plus the roundabouts, short links and shortest runs of
+other roads that join them; without it every road from OSM `primary` to
+`unclassified`) as a graph with
 10 m sampled geometry, elevation from the 5 m model, and sign destinations
 at junctions (OSM `destination` tags, else the nearest towns along the
 graph). It also writes the coarse far layer and the island map. The
-Tramuntana network (3474 km of road, 5502 signed junctions) is compiled into
+Tramuntana network (420 km of road, 692 signed junctions; tunnels are
+their own edges and run straight between their portals) is compiled into
 the core crate; terrain and imagery around the rider are fetched at ride
 time from the IGN services through the app's disk cache
 (`~/.cache/wattsup/` on Linux, the app cache directory elsewhere).
@@ -192,7 +197,8 @@ curl -L -o baleares.osm.pbf https://download.geofabrik.de/europe/spain/islas-bal
 # the 5 m model in 0.05° chunks (the WCS caps one request at about 0.1°), into dem5/
 # then the network, far layer, map and world metadata
 .venv/bin/python tools/build_network.py --osm tramuntana.json --dem-dir dem5 \
-  --dem dem_n39_e002.tif dem_n39_e003.tif --id mallorca --name Mallorca --ortho
+  --dem dem_n39_e002.tif dem_n39_e003.tif --id mallorca --name Mallorca --ortho \
+  --refs Ma-10,Ma-11,Ma-11A,Ma-2141,Ma-2130,Ma-2131,Ma-2210,Ma-2220,Ma-2200,Ma-2100,Ma-1110,Ma-1101,Ma-1100,Ma-1032,Ma-1041,Ma-1040,Ma-1043,Ma-1016,Ma-1031,Ma-1030
 ```
 
 ### Single routes
