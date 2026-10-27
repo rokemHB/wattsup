@@ -1,0 +1,5 @@
+//! Pure ride logic for WattsUp.
+//!
+//! Nothing in this crate touches Bluetooth, files or clocks: devices hand in
+//! bytes and timestamps, and get typed values and commands back. That keeps
+//! every rule here unit-testable without hardware.

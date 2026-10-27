@@ -1,0 +1,10 @@
+[package]
+name = "wattsup-core"
+description = "Pure ride logic for WattsUp: physics, virtual gearing, session state and BLE packet codecs. No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
