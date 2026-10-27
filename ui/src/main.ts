@@ -7,7 +7,7 @@ import { duration, isTypingTarget, num, shiftForKey } from "./format";
 import { drawWorkout, Hud } from "./hud";
 import { Minimap, type NetworkView } from "./minimap";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
-import type { EngineSnapshot, Junction, Route, RouteInfo, Turn, Workout } from "./types";
+import type { EngineSnapshot, Junction, Place, Route, RouteInfo, Turn, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
@@ -240,6 +240,31 @@ interface MapView {
 }
 const mapView: MapView = { ox: 0, oy: 0, scale: 1, dragging: null };
 let mapSel: { x: number; z: number; edge: number; i: number } | null = null;
+/** The roads as canvas paths in map-image pixels, built once per network: stroking a path is cheap, rebuilding it every frame was not. */
+let mapPaths: { byKind: { kind: number; path: Path2D }[]; bounds: { x0: number; y0: number; x1: number; y1: number }; places: Place[] } | null = null;
+
+function buildMapPaths() {
+  const net = network!;
+  const xyz = net.xyz;
+  const bounds = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  const byKind = [3, 2, 1, 0].map((kind) => ({ kind, path: new Path2D() }));
+  for (const e of net.edges) {
+    const path = byKind.find((k) => k.kind === e.kind)?.path ?? byKind[0].path;
+    for (let i = e.start; i < e.start + e.count; i++) {
+      const [px, py] = mapPixel(xyz[i * 3], xyz[i * 3 + 2]);
+      if (i === e.start) path.moveTo(px, py);
+      else path.lineTo(px, py);
+      if (px < bounds.x0) bounds.x0 = px;
+      if (px > bounds.x1) bounds.x1 = px;
+      if (py < bounds.y0) bounds.y0 = py;
+      if (py > bounds.y1) bounds.y1 = py;
+    }
+  }
+  // Only the places along the rideable roads get a label; the rest of the island is just the picture.
+  const places = net.places.filter((pl) => networkIndex!.nearest(pl.x, pl.z, 2500).d < 2500);
+  mapPaths = { byKind, bounds, places };
+  return mapPaths;
+}
 
 async function ensureNetwork(): Promise<boolean> {
   if (network && networkWorld) return true;
@@ -249,6 +274,7 @@ async function ensureNetwork(): Promise<boolean> {
     network = net;
     networkIndex = new NetworkIndex(net);
     networkWorld = data;
+    mapPaths = null;
     return true;
   } catch (e) {
     showError(`island not available: ${e}`);
@@ -265,14 +291,21 @@ async function openMap() {
   $("map-title").textContent = networkWorld!.name;
   mapSel = null;
   mapView.scale = 0;
+  for (const id of ["map-ride-a", "map-ride-b"]) {
+    $<HTMLButtonElement>(id).disabled = true;
+    $(id).textContent = "Ride";
+  }
+  $("map-hint").textContent = "Click a road to start there. Scroll to zoom, drag to pan.";
   show("map");
 }
 
 /** Map image pixel of a local position. */
+let mapFrame: Frame | null = null;
 function mapPixel(x: number, z: number): [number, number] {
   const w = networkWorld!;
   const m = w.map!;
-  const [lat, lon] = new Frame(w.origin.lat, w.origin.lon).toLatLon(x, z);
+  if (!mapFrame || mapFrame.lat0 !== w.origin.lat || mapFrame.lon0 !== w.origin.lon) mapFrame = new Frame(w.origin.lat, w.origin.lon);
+  const [lat, lon] = mapFrame.toLatLon(x, z);
   return [((lon - m.lon_min) / (m.lon_max - m.lon_min)) * m.image.width, ((m.lat_max - lat) / (m.lat_max - m.lat_min)) * m.image.height];
 }
 
@@ -288,15 +321,13 @@ function drawMap() {
     canvas.height = h * dpr;
   }
   const img = networkWorld.map.image;
+  const paths = mapPaths ?? buildMapPaths();
   if (!mapView.scale) {
     // Fit the roads' extent: the Tramuntana, not the whole island.
-    const xs = Array.from({ length: network.points }, (_, i) => network!.xyz[i * 3]);
-    const zs = Array.from({ length: network.points }, (_, i) => network!.xyz[i * 3 + 2]);
-    const [px0, py0] = mapPixel(Math.min(...xs), Math.min(...zs));
-    const [px1, py1] = mapPixel(Math.max(...xs), Math.max(...zs));
-    mapView.scale = Math.max((px1 - px0) / w, (py1 - py0) / h) * 1.05;
-    mapView.ox = (px0 + px1) / 2 - (w / 2) * mapView.scale;
-    mapView.oy = (py0 + py1) / 2 - (h / 2) * mapView.scale;
+    const b = paths.bounds;
+    mapView.scale = Math.max((b.x1 - b.x0) / w, (b.y1 - b.y0) / h) * 1.05;
+    mapView.ox = (b.x0 + b.x1) / 2 - (w / 2) * mapView.scale;
+    mapView.oy = (b.y0 + b.y1) / 2 - (h / 2) * mapView.scale;
   }
   const ctx = canvas.getContext("2d")!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -313,26 +344,22 @@ function drawMap() {
     const [px, py] = mapPixel(x, z);
     return [(px - mapView.ox) / s, (py - mapView.oy) / s] as const;
   };
+  // Roads: prebuilt paths in map-image pixels, drawn through the view transform.
+  ctx.save();
+  ctx.setTransform(dpr / s, 0, 0, dpr / s, (-mapView.ox * dpr) / s, (-mapView.oy * dpr) / s);
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  const xyz = network.xyz;
-  for (const kindPass of [3, 2, 1, 0]) {
-    ctx.beginPath();
-    for (const e of network.edges) {
-      if (e.kind !== kindPass) continue;
-      for (let i = e.start; i < e.start + e.count; i += s > 8 ? 4 : 1) {
-        const [cx, cy] = toCanvas(xyz[i * 3], xyz[i * 3 + 2]);
-        if (i === e.start) ctx.moveTo(cx, cy);
-        else ctx.lineTo(cx, cy);
-      }
-    }
-    ctx.strokeStyle = kindPass === 0 ? "#ffd166" : kindPass === 1 ? "#ffffff" : kindPass === 2 ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.35)";
-    ctx.lineWidth = kindPass <= 1 ? 2.2 : 1.2;
-    ctx.stroke();
+  for (const { kind, path } of paths.byKind) {
+    ctx.strokeStyle = kind === 0 ? "#ffd166" : kind === 1 ? "#ffffff" : kind === 2 ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.35)";
+    ctx.lineWidth = (kind <= 1 ? 2.2 : 1.2) * s;
+    ctx.stroke(path);
   }
+  ctx.restore();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "bold 12px sans-serif";
-  for (const pl of network.places) {
+  for (const pl of paths.places) {
     if (pl.kind === "hamlet" && s > 6) continue;
+    if (pl.kind === "village" && s > 12) continue;
     const [cx, cy] = toCanvas(pl.x, pl.z);
     if (cx < 0 || cy < 0 || cx > w || cy > h) continue;
     ctx.fillStyle = "#0f121b";
@@ -376,6 +403,17 @@ function directionLabel(edge: number, towardB: boolean): string {
   return `${road} ${dirs[idx]}`;
 }
 
+/** One redraw per frame, however many wheel or mouse events arrive. */
+let mapDrawQueued = false;
+function scheduleMapDraw() {
+  if (mapDrawQueued) return;
+  mapDrawQueued = true;
+  requestAnimationFrame(() => {
+    mapDrawQueued = false;
+    drawMap();
+  });
+}
+
 function wireMap() {
   const canvas = $<HTMLCanvasElement>("map-canvas");
   canvas.addEventListener("wheel", (e) => {
@@ -388,14 +426,14 @@ function wireMap() {
     mapView.ox += mx * (mapView.scale - ns);
     mapView.oy += my * (mapView.scale - ns);
     mapView.scale = ns;
-    drawMap();
+    scheduleMapDraw();
   });
   canvas.addEventListener("mousedown", (e) => (mapView.dragging = { x: e.clientX, y: e.clientY, ox: mapView.ox, oy: mapView.oy }));
   window.addEventListener("mousemove", (e) => {
     if (!mapView.dragging) return;
     mapView.ox = mapView.dragging.ox - (e.clientX - mapView.dragging.x) * mapView.scale;
     mapView.oy = mapView.dragging.oy - (e.clientY - mapView.dragging.y) * mapView.scale;
-    drawMap();
+    scheduleMapDraw();
   });
   window.addEventListener("mouseup", (e) => {
     const drag = mapView.dragging;
@@ -440,7 +478,14 @@ async function startNetworkRide(forward: boolean) {
     $("loading-text").textContent = "Loading the terrain around you…";
     $("loading").hidden = false;
     world.update(latest ?? (await api.snapshot()));
-    await world.tiles.whenReady(mapSel.x, mapSel.z);
+    // Wait for the ground under the route's first point: that is where the rider stands.
+    const start = (await api.route())?.points[0];
+    const tiles = world.tiles;
+    const ticker = setInterval(() => {
+      $("loading-text").textContent = tiles.pending ? `Loading the terrain around you… ${tiles.pending} tile${tiles.pending === 1 ? "" : "s"} to go` : "Loading the terrain around you…";
+    }, 300);
+    await tiles.whenReady(start?.x ?? mapSel.x, start?.z ?? mapSel.z, 30000);
+    clearInterval(ticker);
     $("loading").hidden = true;
   }
   await api.resetRide();
