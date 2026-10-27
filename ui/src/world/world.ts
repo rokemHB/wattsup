@@ -80,6 +80,10 @@ export class World {
     Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 900 });
     this.sun.shadow.bias = -0.0002;
     this.sun.shadow.normalBias = 0.3;
+    // A soft fill from the opposite side, as the sky and the ground bounce would give: shaded cliffs stay readable.
+    const fill = new THREE.DirectionalLight("#c8d8ee", 0.75);
+    fill.position.copy(sunDir.clone().multiply(new THREE.Vector3(-1, 0.6, -1)).normalize().multiplyScalar(100));
+    this.scene.add(fill);
     this.sunDir = sunDir;
     this.scene.add(this.sun, this.sun.target);
 
@@ -213,16 +217,32 @@ export class World {
         wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-22)).add(up.clone().multiplyScalar(30));
         wantLook = rider.clone().add(this.heading.clone().multiplyScalar(25));
         break;
-      default:
-        wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-9.5)).add(up.clone().multiplyScalar(3.4));
-        wantLook = rider.clone().add(this.heading.clone().multiplyScalar(8)).add(up.clone().multiplyScalar(1.1));
+      default: {
+        // Follow the road itself, not the rider's heading: the camera sits on
+        // the road behind and looks along it ahead, so in a hairpin it stays
+        // on the tarmac and looks round the bend instead of into the bank.
+        const back = this.sampler.pose(this.distance - 8.5);
+        const ahead = this.sampler.pose(this.distance + 7);
+        const backRight = new THREE.Vector3(-back.dz, 0, back.dx).multiplyScalar(this.laneOffset * 0.6);
+        wantPos = new THREE.Vector3(back.x, Math.max(back.y, rider.y - 1) + 2.7, back.z).add(backRight);
+        wantLook = new THREE.Vector3(ahead.x, ahead.y + 1.0, ahead.z).lerp(rider.clone().add(up.clone().multiplyScalar(1.0)), 0.6);
+      }
     }
     // Keep the camera above the ground and its line of sight to the rider
     // clear of the terrain: on a road cut into a slope the ground between
     // them can rise well above both. Applied to the target and again to the
     // smoothed position, which lags behind and would otherwise dip underground.
     const eye = rider.clone().add(up.clone().multiplyScalar(1.2));
+    const before = wantPos.y;
     this.clearTerrain(wantPos, eye);
+    // When the terrain forces the camera well up, bring it in closer too, so
+    // hairpins cut into a slope are not watched from high above the bank.
+    const lifted = wantPos.y - before;
+    if (lifted > 2 && this.mode === "chase") {
+      const t = Math.min(1, (lifted - 2) / 8);
+      wantPos.lerp(eye.clone().add(up.clone().multiplyScalar(lifted * 0.5)), 0.45 * t);
+      this.clearTerrain(wantPos, eye);
+    }
     const k = Math.min(1, dt * 5);
     if (this.camPos.lengthSq() === 0) {
       this.camPos.copy(wantPos);

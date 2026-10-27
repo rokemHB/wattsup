@@ -1,5 +1,10 @@
 {
  "id": "sa-calobra",
+ "details": {
+  "rock": "/worlds/sa-calobra/detail-rock.jpg",
+  "scrub": "/worlds/sa-calobra/detail-scrub.jpg",
+  "metres": 110
+ },
  "name": "Sa Calobra",
  "origin": {
   "lat": 39.8393708,

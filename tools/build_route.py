@@ -211,6 +211,53 @@ class Ortho:
         return mosaic.transform((size, size), Image.Transform.EXTENT, box, Image.Resampling.BILINEAR)
 
 
+def detail_textures(near, ortho, ortho_dir, args, lats_for=None):
+    """Close-up detail textures from the imagery itself: a patch of bare rock
+    and a patch of scrub near the route, fetched at the highest zoom (about
+    10 cm per pixel) so the renderer can tile real surface over the photo."""
+    import numpy as np
+    from PIL import Image
+
+    o = near["ortho"]
+    best_rock, best_scrub = None, None
+    block_px = 48
+    for br, row in enumerate(o["files"]):
+        for bc, f in enumerate(row):
+            img = np.asarray(Image.open(ortho_dir.parent.parent / f.lstrip("/")).convert("RGB"), dtype=np.float32) / 255
+            size = img.shape[0]
+            for py in range(0, size - block_px, block_px):
+                for px in range(0, size - block_px, block_px):
+                    patch = img[py : py + block_px, px : px + block_px]
+                    mean = patch.mean(axis=(0, 1))
+                    green = mean[1] - max(mean[0], mean[2])
+                    std = float(patch.std())
+                    bright = float(mean.mean())
+                    rock = bright - 2.5 * std - 6 * max(green, 0)
+                    scrub = green * 4 + 0.3 * std - abs(bright - 0.3)
+                    loc = (br, bc, py + block_px / 2, px + block_px / 2, size)
+                    if bright > 0.35 and (best_rock is None or rock > best_rock[0]):
+                        best_rock = (rock, loc)
+                    if best_scrub is None or scrub > best_scrub[0]:
+                        best_scrub = (scrub, loc)
+
+    def fetch(loc, name):
+        br, bc, py, px, size = loc
+        r0, r1 = o["rowEdges"][br], o["rowEdges"][br + 1]
+        c0, c1 = o["colEdges"][bc], o["colEdges"][bc + 1]
+        # Block pixel -> grid vertex -> world -> lat/lon.
+        gx = near["x0"] + (c0 + (c1 - c0) * px / size) * near["spacing"]
+        gz = near["z0"] + (r0 + (r1 - r0) * py / size) * near["spacing"]
+        lat, lon = lats_for(gx, gz)
+        half_lat = 55 / EARTH_LAT_M
+        half_lon = 55 / (EARTH_LON_M * math.cos(math.radians(lat)))
+        img = ortho.image(lat - half_lat, lat + half_lat, lon - half_lon, lon + half_lon, args.ortho_zoom + 3, 1024)
+        img.save(ortho_dir / name, quality=85, optimize=True)
+        print(f"  {name}: 110 m patch at {lat:.5f}, {lon:.5f}")
+        return f"/worlds/{args.id}/{name}"
+
+    return {"rock": fetch(best_rock[1], "detail-rock.jpg"), "scrub": fetch(best_scrub[1], "detail-scrub.jpg"), "metres": 110}
+
+
 def catmull_rom(p0, p1, p2, p3, t):
     t2, t3 = t * t, t * t * t
     return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
@@ -392,8 +439,10 @@ def main():
     saved_ortho, ortho = ortho, None
     band = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.band_margin, (zs.max() - zs.min()) / 2 + args.band_margin, args.band_spacing, "band", fine, 1, 0, 0)
     ortho = saved_ortho
+    details = detail_textures(near, ortho, ortho_dir, args, lats_for=to_latlon) if ortho else None
     meta = {
         "id": args.id,
+        "details": details,
         "name": args.name,
         "origin": {"lat": lat_ref, "lon": lon_ref},
         "near": near,

@@ -5,7 +5,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import type { Route } from "../types";
 import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
-import { gridSample, gridSlope, OrthoSampler, type Grid, type WorldData } from "./terrain";
+import { gridSample, gridSlope, imageMean, OrthoSampler, type Grid, type WorldData } from "./terrain";
 import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockDetailTexture, rockNormalTexture, rockTexture, scrubDetailTexture, waterNormalTexture } from "./textures";
 
 /** Road width in metres: a mountain road for real-world routes, a wider one for the procedural course. */
@@ -140,7 +140,18 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 
   const grass = grassTexture();
   const rockTex = rockTexture();
-  const detail: Detail = { grain: detailTexture(), rock: rockDetailTexture(), scrub: scrubDetailTexture(), normal: rockNormalTexture() };
+  const detail: Detail = world.details
+    ? {
+        grain: detailTexture(),
+        rock: patchTexture(world.details.rock),
+        scrub: patchTexture(world.details.scrub),
+        normal: rockNormalTexture(),
+        rockScale: world.details.metres,
+        scrubScale: world.details.metres,
+        rockMean: imageMean(world.details.rock),
+        scrubMean: imageMean(world.details.scrub),
+      }
+    : { grain: detailTexture(), rock: rockDetailTexture(), scrub: scrubDetailTexture(), normal: rockNormalTexture(), rockScale: 3.2, scrubScale: 2.6, rockMean: [0.5, 0.5, 0.5], scrubMean: [0.5, 0.5, 0.5] };
   let photo: ((x: number, z: number) => [number, number, number] | null) | null = null;
   const inNear = (x: number, z: number) => gridSample(near, x, z) !== null;
   // Inside the near grid the far mesh only has to stay hidden; on cliffs the two differ by tens of metres.
@@ -185,13 +196,13 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 }
 
 /** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
-const PHOTO_REFLECTANCE = 0.52;
+const PHOTO_REFLECTANCE = 0.46;
 const SHOULDER = REAL_ROAD_WIDTH / 2 + 0.9;
 /** Metres either side of the road that the corridor shapes. */
 const CORRIDOR_REACH = 46;
 /** Rise over run of the cut bank above the road and the fill bank below it. */
-const CUT_SLOPE = 1.2;
-const FILL_SLOPE = 0.7;
+const CUT_SLOPE = 2.4;
+const FILL_SLOPE = 0.9;
 /** Lateral offsets of the corridor strip's cross-section, shoulder outwards. */
 const CORRIDOR_OFFSETS = [0, SHOULDER, SHOULDER + 1.5, SHOULDER + 3.5, SHOULDER + 6.5, SHOULDER + 11, 24, 33, CORRIDOR_REACH];
 
@@ -300,14 +311,7 @@ function corridorMesh(
   geo.computeVertexNormals();
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail ? null : map, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
   if (photo) mat.color.setScalar(PHOTO_REFLECTANCE);
-  if (detail) {
-    withDetail(mat, detail);
-    const normal = detail.normal.clone();
-    normal.needsUpdate = true;
-    normal.repeat.set(18 / 7.0, 18 / 7.0);
-    mat.normalMap = normal;
-    mat.normalScale.set(0.35, 0.35);
-  }
+  if (detail) withDetail(mat, detail);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
@@ -330,6 +334,25 @@ interface Detail {
   rock: THREE.Texture;
   scrub: THREE.Texture;
   normal: THREE.Texture;
+  /** Metres one repeat of each detail texture covers. */
+  rockScale: number;
+  scrubScale: number;
+  /** Mean colour of each, so it can be normalised to a neutral modulation. */
+  rockMean: [number, number, number];
+  scrubMean: [number, number, number];
+}
+
+/** A photo patch as a seamless detail texture: mirrored repeats hide the seams. */
+function patchTexture(image: ImageBitmap): THREE.Texture {
+  const tex = new THREE.Texture(image);
+  tex.flipY = false;
+  tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 /**
@@ -343,6 +366,10 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1)
     shader.uniforms.rockMap = { value: detail.rock };
     shader.uniforms.scrubMap = { value: detail.scrub };
     shader.uniforms.detailAmount = { value: amount };
+    shader.uniforms.rockScale = { value: detail.rockScale };
+    shader.uniforms.scrubScale = { value: detail.scrubScale };
+    shader.uniforms.rockMean = { value: new THREE.Vector3(...detail.rockMean) };
+    shader.uniforms.scrubMean = { value: new THREE.Vector3(...detail.scrubMean) };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;")
       .replace(
@@ -352,7 +379,7 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1)
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        "#include <common>\nuniform sampler2D rockMap;\nuniform sampler2D scrubMap;\nuniform float detailAmount;\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;",
+        "#include <common>\nuniform sampler2D rockMap;\nuniform sampler2D scrubMap;\nuniform float detailAmount;\nuniform float rockScale;\nuniform float scrubScale;\nuniform vec3 rockMean;\nuniform vec3 scrubMean;\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;",
       )
       .replace(
         "#include <map_fragment>",
@@ -362,21 +389,25 @@ function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amount = 1)
   // does not darken them twice, take their blue cast out, and tame the glare
   // on bare limestone so it does not read as snow. A touch of warmth overall.
   float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
-  vec3 lifted = pow(diffuseColor.rgb, vec3(0.7));
-  diffuseColor.rgb = mix(diffuseColor.rgb, lifted, 0.7 * (1.0 - smoothstep(0.15, 0.45, lum)));
+  vec3 lifted = pow(diffuseColor.rgb, vec3(0.6));
+  diffuseColor.rgb = mix(diffuseColor.rgb, lifted, 0.85 * (1.0 - smoothstep(0.15, 0.45, lum)));
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(lum) * vec3(1.04, 1.0, 0.92), 0.3 * (1.0 - smoothstep(0.1, 0.4, lum)));
-  diffuseColor.rgb *= 1.0 - 0.3 * smoothstep(0.45, 0.85, lum);
+  diffuseColor.rgb *= 1.0 - 0.42 * smoothstep(0.4, 0.8, lum);
+  // A floor under the deepest photo shadows, so surface detail has something to modulate.
+  diffuseColor.rgb += vec3(0.09, 0.085, 0.075) * (1.0 - smoothstep(0.0, 0.3, lum));
   diffuseColor.rgb *= vec3(1.03, 1.0, 0.94);
   vec3 n = normalize(vGroundNormal);
-  float rockScale = 3.2;
-  // Rock sampled on the ground plane and on the dominant vertical plane, so cliffs do not stretch.
+  // Detail sampled on the ground plane and on the dominant vertical plane, so cliffs do not stretch.
   vec2 vertical = abs(n.x) > abs(n.z) ? vGroundPos.zy : vGroundPos.xy;
   float wy = clamp(abs(n.y) * 1.4, 0.0, 1.0);
-  vec3 rock = mix(texture2D(rockMap, vertical / rockScale).rgb, texture2D(rockMap, vGroundPos.xz / rockScale).rgb, wy);
-  vec3 scrub = texture2D(scrubMap, vGroundPos.xz / 2.6).rgb;
-  float steep = smoothstep(0.30, 0.62, 1.0 - n.y);
+  vec3 rock = mix(texture2D(rockMap, vertical / rockScale).rgb, texture2D(rockMap, vGroundPos.xz / rockScale).rgb, wy) * (0.5 / max(rockMean, vec3(0.05)));
+  vec3 scrub = mix(texture2D(scrubMap, vertical / scrubScale).rgb, texture2D(scrubMap, vGroundPos.xz / scrubScale).rgb, wy) * (0.5 / max(scrubMean, vec3(0.05)));
+  float steep = smoothstep(0.18, 0.5, 1.0 - n.y);
   vec3 det = mix(scrub, rock, steep);
-  diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, detailAmount * mix(0.3, 0.5, steep));
+  diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, detailAmount * mix(0.5, 0.8, steep));
+  // A photo taken from above says little about a cliff face: there, show the rock itself.
+  vec3 rockFace = rock * rockMean * 2.0 * vec3(0.9, 0.88, 0.84);
+  diffuseColor.rgb = mix(diffuseColor.rgb, rockFace * 0.8, detailAmount * steep * 0.75);
 }`,
       );
   };
@@ -412,16 +443,8 @@ function gridBlockMesh(
   geo.computeVertexNormals();
   // The photo already carries the sun's shading; lit again it blows out, so reflect less.
   const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.95, metalness: 0, color: new THREE.Color().setScalar(PHOTO_REFLECTANCE) });
-  if (detail) {
-    withDetail(mat, detail, detailAmount);
-    if (detailAmount > 0) {
-      const normal = detail.normal.clone();
-      normal.needsUpdate = true;
-      normal.repeat.set(((c1 - c0) * g.spacing) / 7.0, ((r1 - r0) * g.spacing) / 7.0);
-      mat.normalMap = normal;
-      mat.normalScale.set(0.35, 0.35);
-    }
-  }
+  // No bump map: its tangents come from the photo's uv, which stretches into streaks on steep faces.
+  if (detail) withDetail(mat, detail, detailAmount);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;

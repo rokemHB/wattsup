@@ -140,10 +140,10 @@ export function rockDetailTexture(): THREE.CanvasTexture {
   return canvasTexture(
     size,
     paintPixels(size, (u, v) => {
-      const n = fbmTile(u, v, 6, 81);
-      const fine = fbmTile(u, v, 24, 82);
-      const crack = Math.pow(Math.abs(fbmTile(u, v, 10, 83) - 0.5) * 2, 0.35);
-      const g = 128 + (n - 0.5) * 46 + (fine - 0.5) * 30 - (1 - crack) * 40 + (rand() - 0.5) * 10;
+      const n = fbmTile(u, v, 5, 81);
+      const fine = fbmTile(u, v, 13, 82);
+      const crack = Math.pow(Math.abs(fbmTile(u, v, 8, 83) - 0.5) * 2, 0.4);
+      const g = 128 + (n - 0.5) * 60 + (fine - 0.5) * 34 - (1 - crack) * 48 + (rand() - 0.5) * 8;
       return [g * 1.02, g, g * 0.94];
     }),
     1,
@@ -172,7 +172,7 @@ export function scrubDetailTexture(): THREE.CanvasTexture {
 /** A tangent-space normal map of rocky bumps for the terrain. */
 export function rockNormalTexture(): THREE.CanvasTexture {
   const size = 512;
-  const h = (u: number, v: number) => fbmTile(u, v, 6, 101) + 0.5 * fbmTile(u, v, 18, 102) + 0.25 * fbmTile(u, v, 50, 103);
+  const h = (u: number, v: number) => fbmTile(u, v, 5, 101) + 0.45 * fbmTile(u, v, 14, 102) + 0.15 * fbmTile(u, v, 36, 103);
   const e = 1 / size;
   const tex = canvasTexture(
     size,

@@ -27,6 +27,8 @@ export interface WorldData {
   far: Grid;
   /** Optional fine grid right around the road, at the source resolution. */
   band?: Grid;
+  /** Close-up surface patches cut from the imagery at its highest zoom, `metres` wide. */
+  details?: { rock: ImageBitmap; scrub: ImageBitmap; metres: number };
 }
 
 interface GridMeta {
@@ -57,6 +59,23 @@ async function loadGrid(meta: GridMeta): Promise<Grid> {
     grid.ortho = { rowEdges: o.rowEdges, colEdges: o.colEdges, size: o.size, images };
   }
   return grid;
+}
+
+/** Mean RGB of an image in 0..1, through a small canvas. */
+export function imageMean(img: ImageBitmap): [number, number, number] {
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const ctx = c.getContext("2d")!;
+  ctx.drawImage(img, 0, 0, 32, 32);
+  const d = ctx.getImageData(0, 0, 32, 32).data;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) {
+    sum[0] += d[i];
+    sum[1] += d[i + 1];
+    sum[2] += d[i + 2];
+  }
+  const n = (d.length / 4) * 255;
+  return [sum[0] / n, sum[1] / n, sum[2] / n];
 }
 
 /** Reads colours out of a grid's imagery at world positions, through small sampling canvases. */
@@ -102,9 +121,24 @@ export class OrthoSampler {
 export async function loadWorld(id: string): Promise<WorldData> {
   const res = await fetch(`/worlds/${id}.json`);
   if (!res.ok) throw new Error(`world ${id}: ${res.status}`);
-  const meta = (await res.json()) as { id: string; name: string; attribution: string; near: GridMeta; far: GridMeta; band?: GridMeta };
-  const [near, far, band] = await Promise.all([loadGrid(meta.near), loadGrid(meta.far), meta.band ? loadGrid(meta.band) : undefined]);
-  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band };
+  const meta = (await res.json()) as {
+    id: string;
+    name: string;
+    attribution: string;
+    near: GridMeta;
+    far: GridMeta;
+    band?: GridMeta;
+    details?: { rock: string; scrub: string; metres: number };
+  };
+  const [near, far, band, rock, scrub] = await Promise.all([
+    loadGrid(meta.near),
+    loadGrid(meta.far),
+    meta.band ? loadGrid(meta.band) : undefined,
+    meta.details ? loadImage(meta.details.rock) : undefined,
+    meta.details ? loadImage(meta.details.scrub) : undefined,
+  ]);
+  const details = meta.details && rock && scrub ? { rock, scrub, metres: meta.details.metres } : undefined;
+  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details };
 }
 
 /** Bilinear height, or null outside the grid. */
