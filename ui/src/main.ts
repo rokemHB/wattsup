@@ -465,7 +465,7 @@ function renderJunction(j: Junction | null, distance: number) {
   $("hud-junction-options").replaceChildren(
     ...j.options.map((o) => {
       const b = el("button", { className: o.chosen ? "on" : "" });
-      b.append(el("span", { className: "arrow" }, TURN_ARROWS[o.turn]), el("span", { className: "road" }, o.ref ?? o.turn.replace("_", " ")), el("span", { className: "to" }, o.to.join(" · ")));
+      b.append(el("span", { className: "arrow" }, TURN_ARROWS[o.turn]), el("span", { className: "road" }, o.ref ?? (o.to.length ? o.turn.replace("_", " ") : "side road")), el("span", { className: "to" }, o.to.join(" · ")));
       b.onclick = () => api.chooseTurn(o.edge).catch(showError);
       return b;
     }),

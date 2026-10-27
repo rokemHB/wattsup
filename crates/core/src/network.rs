@@ -488,6 +488,12 @@ impl Navigator {
                 })
                 .collect();
             options.sort_by(|a, b| a.angle_deg.partial_cmp(&b.angle_deg).unwrap());
+            // Dual carriageways and slip roads split into pieces that all read the same;
+            // there is nothing to decide there, so look further ahead.
+            let first = &options[0];
+            if options.iter().all(|o| o.road_ref == first.road_ref && o.to == first.to) {
+                continue;
+            }
             return Some(Junction {
                 node,
                 at_m: at,
@@ -698,6 +704,27 @@ mod tests {
         assert!((route.length_m() - 150.0).abs() < 6.0);
         let back = Navigator::start("t", &net, 0, 5, false);
         assert!((back.route(&net).length_m() - 50.0).abs() < 6.0, "dead end behind");
+    }
+
+    #[test]
+    fn identical_options_are_not_a_junction() {
+        let mut net = t_network();
+        // Make the branch read exactly like the main road: same ref, same destinations.
+        net.edges[2].road_ref = Some("Ma-10".into());
+        net.nodes[1].signs = Some(vec![
+            Sign {
+                edge: 1,
+                road_ref: Some("Ma-10".into()),
+                to: vec!["Lluc".into()],
+            },
+            Sign {
+                edge: 2,
+                road_ref: Some("Ma-10".into()),
+                to: vec!["Lluc".into()],
+            },
+        ]);
+        let nav = Navigator::start("t", &net, 0, 0, true);
+        assert!(nav.junction(&net, 20.0, 500.0).is_none());
     }
 
     #[test]

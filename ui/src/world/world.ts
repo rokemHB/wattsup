@@ -291,7 +291,8 @@ export class World {
         this.orbitAngle += dt * 0.25;
         const r = 5.5;
         wantPos = rider.clone().add(new THREE.Vector3(Math.cos(this.orbitAngle) * r, 1.6, Math.sin(this.orbitAngle) * r));
-        wantLook = rider.clone().add(up.clone().multiplyScalar(0.9));
+        // Look a little above the rider so they sit in the lower half, under the menu panels.
+        wantLook = rider.clone().add(up.clone().multiplyScalar(2.1));
         break;
       }
       case "side":

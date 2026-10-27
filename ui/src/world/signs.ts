@@ -4,8 +4,8 @@
 import * as THREE from "three";
 import type { NetworkNode, Sign } from "../types";
 
-const BOARD_W = 3.4;
-const BOARD_H = 0.64;
+const BOARD_W = 3.0;
+const BOARD_H = 0.56;
 
 function boardTexture(sign: Sign, arrow: string): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -70,13 +70,16 @@ export interface SignPost {
 export function signPost(node: NetworkNode, x: number, z: number, y: number, bearingOf: (edge: number) => number, facing: number): SignPost | null {
   const signs = (node.signs ?? []).filter((s) => s.to.length || s.ref);
   if (!signs.length) return null;
+  // Nothing to tell when every board would read the same (dual carriageways, slip roads).
+  const key = (s: Sign) => `${s.ref ?? ""}|${s.to.join(",")}`;
+  if (signs.length > 1 && signs.every((s) => key(s) === key(signs[0]))) return null;
   const group = new THREE.Group();
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
   post.position.set(0, 1.5, 0);
   post.castShadow = true;
   group.add(post);
   const boards: THREE.Mesh[] = [];
-  signs.slice(0, 4).forEach((sign, i) => {
+  signs.slice(0, 3).forEach((sign, i) => {
     const rel = bearingOf(sign.edge) - facing;
     const tex = boardTexture(sign, arrowFor(rel));
     const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, side: THREE.DoubleSide });

@@ -179,3 +179,4 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 .hud-offline span { color: #f5dede; font-size: 14px; }
 
 body.no-gears .tile.gear, body.no-gears .hud-control, body.no-gears .gears { display: none; }
+button:disabled { opacity: 0.4; cursor: default; }

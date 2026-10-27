@@ -265,14 +265,17 @@ export class TileManager {
 
     const group = t.group;
     const land: Land = { height: this.heightAt, water: (x, z) => this.rawAt(x, z) < SEA_LEVEL + 1.5, slope: (x, z) => gridSlope(grid, x, z) };
-    // The coarse grid shows the raw terrain and ducks under the corridor strip near
-    // roads; applying the road's cut-and-fill clamp to 10 m vertices would terrace the banks.
+    // The coarse grid near a road: never above the cut bank (or a cutting would
+    // wall the road in), free to lie below it (a fill clamp would terrace the
+    // downhill side at 10 m), and ducked under the corridor strip.
     const tucked = (x: number, z: number) => {
       const h = this.rawAt(x, z);
       const n = this.index.nearest(x, z, CORRIDOR_REACH);
       if (n.i < 0 || n.d > CORRIDOR_REACH) return h;
+      const bed = n.y - 0.35;
+      const top = n.d <= SHOULDER ? bed : bed + (n.d - SHOULDER) * CUT_SLOPE;
       const depth = 1.2 + 2.5 * Math.min(1.5, gridSlope(grid, x, z));
-      return h - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
+      return Math.min(h, top) - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
     };
     const tex = imageTexture(photo.bitmap);
     group.add(gridBlockMesh(grid, tucked, [0, rows - 1], [0, cols - 1], tex, this.detail));
@@ -305,9 +308,14 @@ export class TileManager {
       flush();
     }
 
-    // Signs: one post per approach at every junction inside the tile.
+    // Signs: one post per approach at every junction inside the tile, but not
+    // at junctions of minor roads only, and not within 30 m of another post.
+    const placed: [number, number][] = [];
     this.net.nodes.forEach((node, ni) => {
       if (!node.signs || !inside(node.x, node.z)) return;
+      if (!node.signs.some((s) => this.net.edges[s.edge].kind <= 2)) return;
+      if (placed.some(([px, pz]) => Math.hypot(px - node.x, pz - node.z) < 30)) return;
+      placed.push([node.x, node.z]);
       const edgesHere = node.signs.map((s) => s.edge);
       const bearingOf = (edge: number) => this.bearingOut(edge, ni);
       for (const approach of edgesHere) {
