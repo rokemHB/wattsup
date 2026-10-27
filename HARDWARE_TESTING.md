@@ -347,7 +347,7 @@ sometimes needs a firmware update through the Zwift Companion app first.
 ## 6. Everything together, in the app
 
 ```sh
-npm run tauri dev -- -- --raw      # or: cargo run -p wattsup -- --raw
+WATTSUP_RAW=1 npm run tauri dev    # or: cargo run -p wattsup -- --raw
 ```
 
 - [ ] *Scan* lists the three devices; *Use as trainer / heart rate /
