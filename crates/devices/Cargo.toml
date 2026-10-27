@@ -1,0 +1,26 @@
+[package]
+name = "wattsup-devices"
+description = "Device layer for WattsUp: common trainer / heart-rate / controller interfaces, BLE implementations and simulators."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Real Bluetooth via btleplug. Off for quick builds on machines without a BLE stack.
+ble = ["dep:btleplug", "dep:uuid", "dep:futures"]
+
+[dependencies]
+wattsup-core = { path = "../core" }
+serde.workspace = true
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+async-trait = "0.1"
+thiserror = "2"
+log = "0.4"
+btleplug = { version = "0.13", optional = true }
+uuid = { version = "1", optional = true }
+futures = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "test-util"] }
