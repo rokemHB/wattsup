@@ -242,6 +242,8 @@ async function startWorld() {
   }
   const started = performance.now();
   world = new World($<HTMLCanvasElement>("world"), route, terrain);
+  const startup = await api.startupInfo();
+  if (startup.camera) world.setCamera(startup.camera);
   console.info(`world built in ${((performance.now() - started) / 1000).toFixed(1)} s`);
   loading.hidden = true;
   hud = new Hud(world.sampler);

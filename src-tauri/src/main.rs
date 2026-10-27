@@ -30,6 +30,10 @@ struct StartupInfo {
     auto_sim: bool,
     /// Id of the built-in route to ride.
     route: String,
+    /// Metres along the route to start at (for looking at a specific spot).
+    start_m: f64,
+    /// Camera mode to start in: chase, side, front or drone.
+    camera: Option<String>,
 }
 
 /// `--sim-only`, `--no-sim`, `--raw`, `--auto-sim`, or the same as
@@ -38,18 +42,22 @@ struct StartupInfo {
 fn startup_from_env() -> StartupInfo {
     let args: Vec<String> = std::env::args().collect();
     let flag = |arg: &str, var: &str| args.iter().any(|a| a == arg) || std::env::var(var).is_ok_and(|v| v == "1");
-    let route = args
-        .iter()
-        .position(|a| a == "--route")
-        .and_then(|i| args.get(i + 1).cloned())
-        .or_else(|| std::env::var("WATTSUP_ROUTE").ok())
-        .unwrap_or_else(|| BUILTIN_ROUTES[0].to_string());
+    let value = |arg: &str, var: &str| {
+        args.iter()
+            .position(|a| a == arg)
+            .and_then(|i| args.get(i + 1).cloned())
+            .or_else(|| std::env::var(var).ok())
+    };
     StartupInfo {
         ble: !flag("--sim-only", "WATTSUP_SIM_ONLY"),
         sim: !flag("--no-sim", "WATTSUP_NO_SIM"),
         raw_logging: flag("--raw", "WATTSUP_RAW"),
         auto_sim: flag("--auto-sim", "WATTSUP_AUTO_SIM"),
-        route,
+        route: value("--route", "WATTSUP_ROUTE").unwrap_or_else(|| BUILTIN_ROUTES[0].to_string()),
+        start_m: value("--start", "WATTSUP_START_M")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
+        camera: value("--camera", "WATTSUP_CAMERA"),
     }
 }
 
@@ -140,6 +148,7 @@ fn main() {
                 sim: startup.sim,
                 ..EngineConfig::default()
             };
+            config.session.start_distance_m = startup.start_m;
             config.session.route = Some(Route::builtin(&startup.route).unwrap_or_else(|| {
                 log::warn!("unknown route {:?}, riding {}", startup.route, BUILTIN_ROUTES[0]);
                 Route::builtin(BUILTIN_ROUTES[0]).expect("built-in route")

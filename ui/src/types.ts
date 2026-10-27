@@ -106,4 +106,6 @@ export interface StartupInfo {
   raw_logging: boolean;
   auto_sim: boolean;
   route: string;
+  start_m: number;
+  camera: string | null;
 }

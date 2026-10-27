@@ -25,6 +25,8 @@ export interface WorldData {
   attribution: string;
   near: Grid;
   far: Grid;
+  /** Optional fine grid right around the road, at the source resolution. */
+  band?: Grid;
 }
 
 interface GridMeta {
@@ -100,9 +102,9 @@ export class OrthoSampler {
 export async function loadWorld(id: string): Promise<WorldData> {
   const res = await fetch(`/worlds/${id}.json`);
   if (!res.ok) throw new Error(`world ${id}: ${res.status}`);
-  const meta = (await res.json()) as { id: string; name: string; attribution: string; near: GridMeta; far: GridMeta };
-  const [near, far] = await Promise.all([loadGrid(meta.near), loadGrid(meta.far)]);
-  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far };
+  const meta = (await res.json()) as { id: string; name: string; attribution: string; near: GridMeta; far: GridMeta; band?: GridMeta };
+  const [near, far, band] = await Promise.all([loadGrid(meta.near), loadGrid(meta.far), meta.band ? loadGrid(meta.band) : undefined]);
+  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band };
 }
 
 /** Bilinear height, or null outside the grid. */

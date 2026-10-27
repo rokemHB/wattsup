@@ -56,6 +56,8 @@ pub struct SessionConfig {
     pub route: Option<Route>,
     /// Zero-based starting gear.
     pub start_gear: usize,
+    /// Distance already ridden at the start, to begin part-way along a route.
+    pub start_distance_m: f64,
     /// Minimum time between trainer commands in steady riding.
     pub command_interval_s: f64,
     /// Re-send the current command this often even if nothing changed, in
@@ -79,6 +81,7 @@ impl Default for SessionConfig {
             gears,
             route: None,
             start_gear,
+            start_distance_m: 0.0,
             command_interval_s: 0.25,
             resend_after_s: 5.0,
             grade_deadband_pct: 0.1,
@@ -214,6 +217,7 @@ pub struct RideSession {
 impl RideSession {
     pub fn new(config: SessionConfig) -> Self {
         let gearbox = Gearbox::new(config.gears.clone(), config.start_gear);
+        let start_distance_m = config.start_distance_m.max(0.0);
         Self {
             config,
             gearbox,
@@ -226,7 +230,7 @@ impl RideSession {
             trainer_speed: Reading::default(),
             heart_rate: Reading::default(),
             virtual_speed_mps: 0.0,
-            distance_m: 0.0,
+            distance_m: start_distance_m,
             last_command: None,
             last_command_at: 0.0,
             urgent: true,

@@ -80,5 +80,13 @@
    ]
   }
  },
+ "band": {
+  "file": "/worlds/sa-calobra-band.bin",
+  "cols": 528,
+  "rows": 636,
+  "x0": -1319.0,
+  "z0": -1588.9,
+  "spacing": 5.0
+ },
  "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0)."
 }

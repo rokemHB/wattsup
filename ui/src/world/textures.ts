@@ -132,3 +132,58 @@ export function detailTexture(): THREE.CanvasTexture {
   tex.colorSpace = THREE.NoColorSpace;
   return tex;
 }
+
+/** Tiling limestone: pale grey with cracks and darker pockets. Mean brightness about 0.5 so it modulates a photo neutrally. */
+export function rockDetailTexture(): THREE.CanvasTexture {
+  const size = 512;
+  const rand = mulberry32(9);
+  return canvasTexture(
+    size,
+    paintPixels(size, (u, v) => {
+      const n = fbmTile(u, v, 6, 81);
+      const fine = fbmTile(u, v, 24, 82);
+      const crack = Math.pow(Math.abs(fbmTile(u, v, 10, 83) - 0.5) * 2, 0.35);
+      const g = 128 + (n - 0.5) * 46 + (fine - 0.5) * 30 - (1 - crack) * 40 + (rand() - 0.5) * 10;
+      return [g * 1.02, g, g * 0.94];
+    }),
+    1,
+  );
+}
+
+/** Tiling scrub and bare earth, olive and ochre, mean about 0.5. */
+export function scrubDetailTexture(): THREE.CanvasTexture {
+  const size = 512;
+  const rand = mulberry32(10);
+  return canvasTexture(
+    size,
+    paintPixels(size, (u, v) => {
+      const n = fbmTile(u, v, 5, 91);
+      const tufts = Math.max(0, fbmTile(u, v, 23, 92) - 0.5) * 2;
+      const earth = 128 + (n - 0.5) * 34 + (rand() - 0.5) * 16;
+      const r = earth * 1.0 - tufts * 26;
+      const g = earth * 0.98 + tufts * 6;
+      const b = earth * 0.84 - tufts * 26;
+      return [r, g, b];
+    }),
+    1,
+  );
+}
+
+/** A tangent-space normal map of rocky bumps for the terrain. */
+export function rockNormalTexture(): THREE.CanvasTexture {
+  const size = 512;
+  const h = (u: number, v: number) => fbmTile(u, v, 6, 101) + 0.5 * fbmTile(u, v, 18, 102) + 0.25 * fbmTile(u, v, 50, 103);
+  const e = 1 / size;
+  const tex = canvasTexture(
+    size,
+    paintPixels(size, (u, v) => {
+      const dx = (h(u + e, v) - h(u - e, v)) * 14;
+      const dy = (h(u, v + e) - h(u, v - e)) * 14;
+      const n = new THREE.Vector3(-dx, -dy, 1).normalize();
+      return [(n.x * 0.5 + 0.5) * 255, (n.y * 0.5 + 0.5) * 255, (n.z * 0.5 + 0.5) * 255];
+    }),
+    1,
+  );
+  tex.colorSpace = THREE.NoColorSpace;
+  return tex;
+}

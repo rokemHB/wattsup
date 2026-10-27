@@ -290,6 +290,8 @@ def main():
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--near-margin", type=float, default=2500.0, help="metres around the route in the near heightmap")
     ap.add_argument("--near-spacing", type=float, default=10.0)
+    ap.add_argument("--band-margin", type=float, default=300.0, help="metres around the route in the fine band")
+    ap.add_argument("--band-spacing", type=float, default=5.0)
     ap.add_argument("--far-size", type=float, default=36000.0)
     ap.add_argument("--far-spacing", type=float, default=150.0)
     ap.add_argument("--ortho", action="store_true", help="fetch PNOA aerial imagery as terrain textures (Spain)")
@@ -376,12 +378,17 @@ def main():
     cx, cz = float((xs.max() + xs.min()) / 2), float((zs.max() + zs.min()) / 2)
     near = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.near_margin, (zs.max() - zs.min()) / 2 + args.near_margin, args.near_spacing, "near", fine, args.ortho_blocks, args.ortho_zoom, 1024)
     far = heightmap(cx, cz, args.far_size / 2, args.far_size / 2, args.far_spacing, "far", dem, 1, args.ortho_zoom - 4, 2048)
+    # A fine band right around the road, at the source resolution, for the road corridor.
+    saved_ortho, ortho = ortho, None
+    band = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.band_margin, (zs.max() - zs.min()) / 2 + args.band_margin, args.band_spacing, "band", fine, 1, 0, 0)
+    ortho = saved_ortho
     meta = {
         "id": args.id,
         "name": args.name,
         "origin": {"lat": lat_ref, "lon": lon_ref},
         "near": near,
         "far": far,
+        "band": band,
         "attribution": "Road data © OpenStreetMap contributors (ODbL). Elevation: "
         + ("IGN España MDT05 (CC BY 4.0) and " if args.dem_fine else "")
         + "Copernicus DEM GLO-30 © ESA."

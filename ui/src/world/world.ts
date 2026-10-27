@@ -5,7 +5,7 @@ import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
 import { Rider, TYRE_BULGE } from "./rider";
 import { RouteSampler } from "./route";
-import { buildWorld, ROAD_LIFT, type WorldStatics } from "./scene";
+import { buildWorld, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, type WorldStatics } from "./scene";
 import type { WorldData } from "./terrain";
 
 export type CameraMode = "chase" | "side" | "front" | "drone";
@@ -33,6 +33,8 @@ export class World {
   private camLook = new THREE.Vector3();
   private heading = new THREE.Vector3(1, 0, 0);
   private lean = 0;
+  /** How far right of the centre line the rider rides. */
+  private laneOffset: number;
   /** Render scale, tuned at runtime to hold the frame rate on weak GPUs. */
   private pixelRatio = Math.min(window.devicePixelRatio, 1.5);
   private frameTimes: number[] = [];
@@ -48,16 +50,16 @@ export class World {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.62;
+    this.renderer.toneMappingExposure = 0.56;
 
     // Sky with atmospheric scattering; it also lights the materials through an environment map.
     const sky = new Sky();
     sky.scale.setScalar(40000);
-    const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 38), THREE.MathUtils.degToRad(145));
+    const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 46), THREE.MathUtils.degToRad(160));
     Object.assign(sky.material.uniforms, {});
-    sky.material.uniforms.turbidity.value = 2.5;
-    sky.material.uniforms.rayleigh.value = 1.2;
-    sky.material.uniforms.mieCoefficient.value = 0.004;
+    sky.material.uniforms.turbidity.value = 2.0;
+    sky.material.uniforms.rayleigh.value = 1.0;
+    sky.material.uniforms.mieCoefficient.value = 0.002;
     sky.material.uniforms.mieDirectionalG.value = 0.8;
     sky.material.uniforms.sunPosition.value.copy(sunDir);
     this.scene.add(sky);
@@ -65,23 +67,24 @@ export class World {
     const envScene = new THREE.Scene();
     envScene.add(sky.clone());
     this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
-    this.scene.environmentIntensity = 0.35;
+    this.scene.environmentIntensity = 0.4;
     envScene.clear();
     this.scene.fog = new THREE.Fog("#c6d9ec", 500, 9000);
 
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 30000);
-    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#5f7f45", 0.55));
-    this.sun = new THREE.DirectionalLight("#fff1d6", 3.2);
+    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 0.7));
+    this.sun = new THREE.DirectionalLight("#fff1d6", 3.4);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    const s = 80;
-    Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 700 });
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.05;
+    this.sun.shadow.mapSize.set(1536, 1536);
+    const s = 110;
+    Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 900 });
+    this.sun.shadow.bias = -0.0002;
+    this.sun.shadow.normalBias = 0.3;
     this.sunDir = sunDir;
     this.scene.add(this.sun, this.sun.target);
 
     this.statics = buildWorld(route, world);
+    this.laneOffset = (world ? REAL_ROAD_WIDTH : ROAD_WIDTH) * 0.22;
     this.scene.add(this.statics.group, this.rider.group);
 
     this.resize();
@@ -105,6 +108,10 @@ export class World {
     this.speed = s.virtual_speed_kmh / 3.6;
     this.cadence = s.cadence_rpm ?? 0;
     if (Math.abs(this.targetDistance - this.distance) > 20) this.distance = this.targetDistance;
+  }
+
+  setCamera(mode: string) {
+    if ((MODES as string[]).includes(mode)) this.mode = mode as CameraMode;
   }
 
   cycleCamera(): CameraMode {
@@ -142,7 +149,7 @@ export class World {
     this.frameTimes = [];
     const max = Math.min(window.devicePixelRatio, 1.5);
     let next = this.pixelRatio;
-    if (median > 1 / 50 && this.pixelRatio > 0.75) next = Math.max(0.75, this.pixelRatio - 0.25);
+    if (median > 1 / 50 && this.pixelRatio > 0.6) next = Math.max(0.6, this.pixelRatio - 0.2);
     else if (median < 1 / 70 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.25);
     if (next !== this.pixelRatio) {
       this.pixelRatio = next;
@@ -180,7 +187,7 @@ export class World {
     // TYRE_BULGE below the hub height; pitching about the bike's middle dips one
     // wheel by half the wheelbase times the slope.
     const clearance = ROAD_LIFT + TYRE_BULGE + 0.5 * Math.abs(Math.sin(pitch)) + 0.005;
-    g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(1.6));
+    g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(this.laneOffset));
     g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), this.heading.clone().negate(), up));
     g.rotateY(-Math.PI / 2);
     g.rotateZ(pitch);
@@ -228,7 +235,7 @@ export class World {
     this.camera.lookAt(this.camLook);
 
     // The sun's shadow box follows the rider.
-    this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(300));
+    this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(400));
     this.sun.target.position.copy(rider);
 
     this.renderer.render(this.scene, this.camera);

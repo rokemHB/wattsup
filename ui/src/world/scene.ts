@@ -1,12 +1,15 @@
 // Static world geometry built once from the route: terrain, sea, lake, road,
 // far mountains, clouds and vegetation. Everything is procedural.
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { Route } from "../types";
 import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
 import { gridSample, gridSlope, OrthoSampler, type Grid, type WorldData } from "./terrain";
-import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockTexture, waterNormalTexture } from "./textures";
+import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockDetailTexture, rockNormalTexture, rockTexture, scrubDetailTexture, waterNormalTexture } from "./textures";
 
+/** Road width in metres: a mountain road for real-world routes, a wider one for the procedural course. */
+export const REAL_ROAD_WIDTH = 5.8;
 export const ROAD_WIDTH = 7;
 /** Height of the top road layer (the markings) above the route line. */
 export const ROAD_LIFT = 0.08;
@@ -92,9 +95,10 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   const pts = route.points;
   const index = new RouteIndex(pts);
   const group = new THREE.Group();
-  const { near, far } = world;
+  const { near, far, band } = world;
 
-  const raw = (x: number, z: number) => gridSample(near, x, z) ?? gridSample(far, x, z) ?? SEA_LEVEL - 10;
+  const raw = (x: number, z: number) =>
+    (band ? gridSample(band, x, z) : null) ?? gridSample(near, x, z) ?? gridSample(far, x, z) ?? SEA_LEVEL - 10;
   const box = {
     x0: Math.min(...pts.map((p) => p.x)) - 60,
     x1: Math.max(...pts.map((p) => p.x)) + 60,
@@ -120,19 +124,23 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     const h = heightAt(x, z);
     if (x < box.x0 || x > box.x1 || z < box.z0 || z > box.z1) return h;
     const n = index.nearest(x, z, CORRIDOR_REACH);
-    return h - 1.2 * (1 - smoothstep(CORRIDOR_REACH - 12, CORRIDOR_REACH, n.d));
+    // Deeper on steep ground: a 10 m grid and the fine strip disagree by metres there.
+    const depth = 1.2 + 3.5 * Math.min(1.5, gridSlope(near, x, z));
+    return h - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
   };
   const land: Land = {
     height: heightAt,
     water: (x, z) => raw(x, z) < SEA_LEVEL + 1.5,
-    slope: (x, z) => gridSlope(near, x, z),
+    slope: (x, z) => gridSlope(band && gridSample(band, x, z) !== null ? band : near, x, z),
   };
 
   const grass = grassTexture();
   const rockTex = rockTexture();
-  const detail = detailTexture();
+  const detail: Detail = { grain: detailTexture(), rock: rockDetailTexture(), scrub: scrubDetailTexture(), normal: rockNormalTexture() };
+  let photo: ((x: number, z: number) => [number, number, number] | null) | null = null;
   const inNear = (x: number, z: number) => gridSample(near, x, z) !== null;
-  const farHeight = (x: number, z: number) => (inNear(x, z) ? raw(x, z) - 6 : raw(x, z));
+  // Inside the near grid the far mesh only has to stay hidden; on cliffs the two differ by tens of metres.
+  const farHeight = (x: number, z: number) => (inNear(x, z) ? raw(x, z) - 60 : raw(x, z));
   if (near.ortho) {
     // Aerial imagery: one textured mesh per block of the near grid, photo on the far grid.
     const { rowEdges, colEdges, images } = near.ortho;
@@ -143,7 +151,8 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
       }
     }
     const sampler = new OrthoSampler(near, near.ortho);
-    group.add(corridorMesh(pts, index, heightAt, near, detail, (x, z) => sampler.colorAt(x, z)));
+    photo = (x, z) => sampler.colorAt(x, z);
+    group.add(corridorMesh(pts, index, heightAt, near, detail.grain, photo, detail));
     if (far.ortho) {
       group.add(gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), null));
     } else {
@@ -151,17 +160,18 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     }
   } else {
     group.add(gridMesh(near, tucked, grass, 18));
-    group.add(corridorMesh(pts, index, heightAt, near, grass, null));
+    group.add(corridorMesh(pts, index, heightAt, near, grass, null, null));
     group.add(gridMesh(far, farHeight, rockTex, 520));
   }
 
   const sea = seaMesh(FAR_SIZE * 2, (near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
   group.add(sea.mesh);
-  group.add(...roadMeshes(pts, route.closed));
+  group.add(...roadMeshes(pts, route.closed, REAL_ROAD_WIDTH, true));
+  group.add(parapets(pts, heightAt, REAL_ROAD_WIDTH, detail.rock));
   const clouds = cloudLayers((near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
   group.add(...clouds.meshes);
   const region = { x0: near.x0, z0: near.z0, w: near.cols * near.spacing, h: near.rows * near.spacing };
-  group.add(vegetation(index, heightAt, land, region, sampler, true));
+  group.add(vegetation(index, heightAt, land, region, sampler, true, photo));
 
   const animate = (dt: number) => {
     sea.animate(dt);
@@ -171,8 +181,8 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 }
 
 /** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
-const PHOTO_REFLECTANCE = 0.62;
-const SHOULDER = ROAD_WIDTH / 2 + 1.3;
+const PHOTO_REFLECTANCE = 0.58;
+const SHOULDER = REAL_ROAD_WIDTH / 2 + 0.9;
 /** Metres either side of the road that the corridor shapes. */
 const CORRIDOR_REACH = 46;
 /** Rise over run of the cut bank above the road and the fill bank below it. */
@@ -213,6 +223,7 @@ function corridorMesh(
   g: Grid,
   map: THREE.Texture,
   photo: ((x: number, z: number) => [number, number, number] | null) | null,
+  detail: Detail | null,
 ): THREE.Mesh {
   const n = pts.length;
   const offsets = [...CORRIDOR_OFFSETS.slice(1).reverse().map((o) => -o), ...CORRIDOR_OFFSETS];
@@ -283,8 +294,16 @@ function corridorMesh(
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map, roughness: 1, metalness: 0, side: THREE.DoubleSide });
-  if (photo) mat.color.setScalar(PHOTO_REFLECTANCE * 1.28); // the grey grain averages below white
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail ? null : map, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
+  if (photo) mat.color.setScalar(PHOTO_REFLECTANCE);
+  if (detail) {
+    withDetail(mat, detail);
+    const normal = detail.normal.clone();
+    normal.needsUpdate = true;
+    normal.repeat.set(18 / 7.0, 18 / 7.0);
+    mat.normalMap = normal;
+    mat.normalScale.set(0.35, 0.35);
+  }
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
@@ -300,18 +319,49 @@ function imageTexture(image: ImageBitmap): THREE.Texture {
   return tex;
 }
 
-/** Multiplies a world-space grain over the photo so it does not blur into mush up close. */
-function withDetail(mat: THREE.MeshStandardMaterial, detail: THREE.Texture) {
+interface Detail {
+  grain: THREE.Texture;
+  rock: THREE.Texture;
+  scrub: THREE.Texture;
+  normal: THREE.Texture;
+}
+
+/**
+ * Surface detail over the aerial photo, which blurs into mush up close:
+ * tiling limestone on steep faces (sampled triplanar so cliffs do not
+ * stretch), scrub and earth on flatter ground, and a fine grain. The detail
+ * textures average mid-grey, so the photo keeps its colour.
+ */
+function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail) {
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.detailMap = { value: detail };
+    shader.uniforms.rockMap = { value: detail.rock };
+    shader.uniforms.scrubMap = { value: detail.scrub };
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vGroundPos;")
-      .replace("#include <worldpos_vertex>", "#include <worldpos_vertex>\nvGroundPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      .replace("#include <common>", "#include <common>\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;")
+      .replace(
+        "#include <worldpos_vertex>",
+        "#include <worldpos_vertex>\nvGroundPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvGroundNormal = normalize(mat3(modelMatrix) * objectNormal);",
+      );
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nuniform sampler2D detailMap;\nvarying vec3 vGroundPos;")
+      .replace(
+        "#include <common>",
+        "#include <common>\nuniform sampler2D rockMap;\nuniform sampler2D scrubMap;\nvarying vec3 vGroundPos;\nvarying vec3 vGroundNormal;",
+      )
       .replace(
         "#include <map_fragment>",
-        "#include <map_fragment>\n{ float d = texture2D(detailMap, vGroundPos.xz / 7.0).r; float d2 = texture2D(detailMap, vGroundPos.xz / 1.3).r; float d3 = texture2D(detailMap, vGroundPos.xz / 0.35).r; diffuseColor.rgb *= (0.6 + 0.5 * d) * (0.7 + 0.45 * d2) * (0.85 + 0.25 * d3); }",
+        `#include <map_fragment>
+{
+  vec3 n = normalize(vGroundNormal);
+  float rockScale = 3.2;
+  // Rock sampled on the ground plane and on the dominant vertical plane, so cliffs do not stretch.
+  vec2 vertical = abs(n.x) > abs(n.z) ? vGroundPos.zy : vGroundPos.xy;
+  float wy = clamp(abs(n.y) * 1.4, 0.0, 1.0);
+  vec3 rock = mix(texture2D(rockMap, vertical / rockScale).rgb, texture2D(rockMap, vGroundPos.xz / rockScale).rgb, wy);
+  vec3 scrub = texture2D(scrubMap, vGroundPos.xz / 2.6).rgb;
+  float steep = smoothstep(0.30, 0.62, 1.0 - n.y);
+  vec3 det = mix(scrub, rock, steep);
+  diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, mix(0.3, 0.5, steep));
+}`,
       );
   };
 }
@@ -323,7 +373,7 @@ function gridBlockMesh(
   rows: [number, number],
   cols: [number, number],
   map: THREE.Texture,
-  detail: THREE.Texture | null,
+  detail: Detail | null,
 ): THREE.Mesh {
   const [r0, r1] = rows;
   const [c0, c1] = cols;
@@ -343,8 +393,15 @@ function gridBlockMesh(
   }
   geo.computeVertexNormals();
   // The photo already carries the sun's shading; lit again it blows out, so reflect less.
-  const mat = new THREE.MeshStandardMaterial({ map, roughness: 1, metalness: 0, color: new THREE.Color().setScalar(PHOTO_REFLECTANCE) });
-  if (detail) withDetail(mat, detail);
+  const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.95, metalness: 0, color: new THREE.Color().setScalar(PHOTO_REFLECTANCE) });
+  if (detail) {
+    withDetail(mat, detail);
+    const normal = detail.normal.clone();
+    normal.needsUpdate = true;
+    normal.repeat.set(((c1 - c0) * g.spacing) / 7.0, ((r1 - r0) * g.spacing) / 7.0);
+    mat.normalMap = normal;
+    mat.normalScale.set(0.35, 0.35);
+  }
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
@@ -403,14 +460,84 @@ function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mesh; anim
   };
 }
 
-function roadMeshes(pts: Route["points"], closed: boolean): THREE.Mesh[] {
+function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false): THREE.Mesh[] {
   const asphalt = asphaltTexture();
-  return [
-    ribbon(pts, closed, ROAD_WIDTH + 2.2, 0.02, "#b3a483"),
-    ribbon(pts, closed, ROAD_WIDTH, 0.05, "#55585f", { map: asphalt }),
-    ribbon(pts, closed, ROAD_WIDTH - 0.5, 0.07, "#e8e6dc", { lineWidth: 0.16, offset: (ROAD_WIDTH - 0.5) / 2 }),
-    ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }),
+  const meshes = [
+    // Shoulder: a wide sandy verge on the test course, a narrow gravel edge on a mountain road.
+    ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"),
+    ribbon(pts, closed, width, 0.05, mountain ? "#454341" : "#55585f", { map: asphalt }),
+    ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }),
   ];
+  if (!mountain) meshes.push(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }));
+  return meshes;
+}
+
+/**
+ * Low stone parapets along the road wherever the ground falls away beside it,
+ * the way mountain roads are built. One box strip per continuous stretch.
+ */
+function parapets(pts: Route["points"], heightAt: (x: number, z: number) => number, width: number, stone: THREE.Texture): THREE.Mesh {
+  const n = pts.length;
+  const offset = width / 2 + 0.75;
+  const wallW = 0.4;
+  const wallH = 0.7;
+  const verts: number[] = [];
+  const uvs: number[] = [];
+  const idx: number[] = [];
+  const pushQuad = (a: number[], b: number[], c: number[], d: number[], u0: number, u1: number) => {
+    const base = verts.length / 3;
+    verts.push(...a, ...b, ...c, ...d);
+    uvs.push(u0, 0, u1, 0, u0, 1, u1, 1);
+    idx.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+  };
+  for (const side of [-1, 1]) {
+    // Does the ground drop more than 1.5 m within 6 m beyond the shoulder here?
+    const drop = pts.map((p, i) => {
+      const a = pts[Math.max(i - 1, 0)];
+      const b = pts[Math.min(i + 1, n - 1)];
+      const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+      const nx = (-(b.z - a.z) / l) * side;
+      const nz = ((b.x - a.x) / l) * side;
+      const ground = Math.min(heightAt(p.x + nx * 4, p.z + nz * 4), heightAt(p.x + nx * 7, p.z + nz * 7));
+      return { nx, nz, wall: ground < p.y - 1.5 };
+    });
+    // Close short gaps and drop very short stretches so walls read as built, not flickering.
+    for (let i = 1; i < n - 1; i++) if (!drop[i].wall && drop[i - 1].wall && drop[i + 1].wall) drop[i].wall = true;
+    for (let i = 0; i < n; i++) {
+      if (!drop[i].wall) continue;
+      let j = i;
+      while (j < n && drop[j].wall) j++;
+      if (j - i < 4) for (let k = i; k < j; k++) drop[k].wall = false;
+      i = j;
+    }
+    for (let i = 0; i < n - 1; i++) {
+      if (!drop[i].wall || !drop[i + 1].wall) continue;
+      const p = pts[i];
+      const q = pts[i + 1];
+      const f = drop[i];
+      const g = drop[i + 1];
+      const inner0 = [p.x + f.nx * offset, p.y + 0.08, p.z + f.nz * offset];
+      const inner1 = [q.x + g.nx * offset, q.y + 0.08, q.z + g.nz * offset];
+      const outer0 = [p.x + f.nx * (offset + wallW), p.y + 0.08, p.z + f.nz * (offset + wallW)];
+      const outer1 = [q.x + g.nx * (offset + wallW), q.y + 0.08, q.z + g.nz * (offset + wallW)];
+      const up = (v: number[]) => [v[0], v[1] + wallH, v[2]];
+      const u0 = p.distance_m / 2;
+      const u1 = q.distance_m / 2;
+      pushQuad(inner0, inner1, up(inner0), up(inner1), u0, u1); // inner face
+      pushQuad(outer1, outer0, up(outer1), up(outer0), u0, u1); // outer face
+      pushQuad(up(inner0), up(inner1), up(outer0), up(outer1), u0, u1); // top
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ color: "#b8ad98", map: stone, roughness: 1, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
 }
 
 function cloudLayers(cx: number, cz: number): { meshes: THREE.Mesh[]; animate: (dt: number) => void } {
@@ -566,7 +693,7 @@ function buildProceduralWorld(route: Route): WorldStatics {
     slope: () => 0,
   };
   const region = { x0: cx - TERRAIN_SIZE * 0.45, z0: cz - TERRAIN_SIZE * 0.45, w: TERRAIN_SIZE * 0.9, h: TERRAIN_SIZE * 0.9 };
-  group.add(vegetation(index, heightAt, landInfo, region, sampler, false));
+  group.add(vegetation(index, heightAt, landInfo, region, sampler, false, null));
 
   const animate = (dt: number) => {
     sea.animate(dt);
@@ -585,8 +712,18 @@ function vegetation(
   region: { x0: number; z0: number; w: number; h: number },
   sampler: RouteSampler,
   mediterranean: boolean,
+  photo: ((x: number, z: number) => [number, number, number] | null) | null,
 ): THREE.Group {
   const g = new THREE.Group();
+  /** How much the aerial photo says "trees" here: dark green pixels. 0..1. */
+  const treeCover = (x: number, z: number): number => {
+    const c = photo?.(x, z);
+    if (!c) return 0.3;
+    const [r, gr, b] = c;
+    const green = gr - Math.max(r, b);
+    const dark = 1 - smoothstep(0.3, 0.55, (r + gr + b) / 3);
+    return smoothstep(0.0, 0.08, green) * (0.4 + 0.6 * dark);
+  };
   const rand = mulberry32(42);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -596,15 +733,19 @@ function vegetation(
   const leafMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.9 });
   const rockMat = new THREE.MeshStandardMaterial({ color: "#8d8880", roughness: 1 });
 
-  // Pine: trunk + two stacked cones.
-  const pine = new THREE.Group();
-  const pineCrown = new THREE.Group();
+  // Pine: trunk + two stacked cones (the test course), or an Aleppo pine with
+  // a broad, uneven crown of flattened blobs (real terrain).
   const c1 = new THREE.ConeGeometry(2.6, 6, 7);
   c1.translate(0, 5, 0);
   const c2 = new THREE.ConeGeometry(1.8, 5, 7);
   c2.translate(0, 8.5, 0);
-  pineCrown.add(new THREE.Mesh(c1), new THREE.Mesh(c2));
-  pine.add(pineCrown);
+  const blob = (r: number, sy: number, x: number, y: number, z: number) => {
+    const b = new THREE.SphereGeometry(r, 7, 5);
+    b.scale(1, sy, 1);
+    b.translate(x, y, z);
+    return b;
+  };
+  const aleppo = mergeGeometries([blob(2.9, 0.55, 0, 6.4, 0), blob(2.2, 0.6, 1.6, 5.6, 0.9), blob(2.0, 0.6, -1.5, 5.9, -1.0), blob(1.7, 0.65, 0.3, 7.3, -0.4), blob(1.5, 0.6, -0.8, 4.9, 1.4)]);
 
   // Round tree: trunk + three spheres.
   const roundCrown = [new THREE.SphereGeometry(2.2, 9, 7), new THREE.SphereGeometry(1.7, 9, 7), new THREE.SphereGeometry(1.6, 9, 7)];
@@ -620,20 +761,21 @@ function vegetation(
   const bush = new THREE.SphereGeometry(1, 7, 5);
   bush.scale(1.4, 0.9, 1.4);
   bush.translate(0, 0.7, 0);
-  const rock = new THREE.DodecahedronGeometry(1, 0);
+  const rock = new THREE.IcosahedronGeometry(1, 1);
+  rock.scale(1.3, 0.8, 1);
 
   const kinds = mediterranean
     ? {
-        pine: { geos: [c1, c2], count: 3000, palette: ["#355f33", "#3f6f38", "#2f5530", "#4a7a3e"] },
-        round: { geos: roundCrown, count: 350, palette: ["#5f7f36", "#6b8a3e", "#55702c"] },
-        cypress: { geos: [cypress], count: 150, palette: ["#24502a", "#2b5a30", "#1f4524"] },
+        pine: { geos: [aleppo], count: 3000, palette: ["#2f4d2c", "#38582f", "#2a4529", "#405f35", "#33502d"] },
+        round: { geos: roundCrown, count: 250, palette: ["#3d5a2e", "#46632f", "#35502a"] },
+        cypress: { geos: [cypress], count: 60, palette: ["#24502a", "#2b5a30", "#1f4524"] },
       }
     : {
         pine: { geos: [c1, c2], count: 1500, palette: ["#2f7d3a", "#3c8f3f", "#2b6b45", "#4a8f3e"] },
         round: { geos: roundCrown, count: 900, palette: ["#3e8a3c", "#4f8f44", "#467a2f", "#5a9a44"] },
         cypress: { geos: [cypress], count: 350, palette: ["#24502a", "#2b5a30", "#1f4524"] },
       };
-  const bushes = { count: mediterranean ? 2500 : 1800, palette: mediterranean ? ["#5a6b2e", "#66733a", "#4f5f28"] : ["#5f8233", "#75903f", "#6a7f34"] };
+  const bushes = { count: mediterranean ? 1500 : 1800, palette: mediterranean ? ["#4e5f2a", "#596a33", "#465525"] : ["#5f8233", "#75903f", "#6a7f34"] };
   const rocks = { count: mediterranean ? 1500 : 400 };
 
   const canPlace = (x: number, z: number, minRoad: number): { ok: boolean; near: number } => {
@@ -682,12 +824,12 @@ function vegetation(
   };
 
   const forest = (near: number, x: number, z: number) =>
-    mediterranean ? (fbm(x, z, 350, 5) > 0.4 ? 0.9 : 0.15) : (0.2 + 0.8 * (1 - smoothstep(30, 500, near))) * (fbm(x, z, 300, 5) > 0.42 ? 1 : 0.1);
-  place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, true, forest, [0.7, 1.4], 5);
+    mediterranean ? (photo ? treeCover(x, z) : fbm(x, z, 350, 5) > 0.4 ? 0.9 : 0.15) : (0.2 + 0.8 * (1 - smoothstep(30, 500, near))) * (fbm(x, z, 300, 5) > 0.42 ? 1 : 0.1);
+  place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, true, forest, mediterranean ? [0.55, 1.15] : [0.7, 1.4], mediterranean ? 3 : 5);
   place(kinds.round.geos, kinds.round.count, kinds.round.palette, true, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
   place(kinds.cypress.geos, kinds.cypress.count, kinds.cypress.palette, true, (n) => 0.9 * (1 - smoothstep(12, 120, n)), [0.55, 1.0], 3);
-  place([bush], bushes.count, bushes.palette, false, (n) => 0.9 * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, leafMat, false);
-  place([rock], rocks.count, ["#8d8880", "#7d7870", "#9a948a"], false, (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.3, mediterranean ? 2.2 : 1.0], 1.8, rockMat, false);
+  place([bush], bushes.count, bushes.palette, false, (n, x, z) => (mediterranean ? 0.5 + 0.5 * treeCover(x, z) : 0.9) * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, leafMat, false);
+  place([rock], rocks.count, ["#8d8880", "#7d7870", "#9a948a"], false, (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.3, mediterranean ? 1.3 : 1.0], 1.8, rockMat, false);
   return g;
 }
 
