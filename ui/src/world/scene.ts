@@ -40,12 +40,13 @@ class RouteIndex {
   private key(x: number, z: number) {
     return `${Math.floor(x / this.cell)},${Math.floor(z / this.cell)}`;
   }
-  nearest(x: number, z: number, radius: number): { d: number; y: number } {
+  nearest(x: number, z: number, radius: number): { d: number; y: number; i: number } {
     const r = Math.ceil(radius / this.cell);
     const cx = Math.floor(x / this.cell);
     const cz = Math.floor(z / this.cell);
     let best = Infinity;
     let y = 0;
+    let bi = -1;
     for (let i = -r; i <= r; i++) {
       for (let k = -r; k <= r; k++) {
         const list = this.cells.get(`${cx + i},${cz + k}`);
@@ -56,11 +57,12 @@ class RouteIndex {
           if (d < best) {
             best = d;
             y = p.y;
+            bi = idx;
           }
         }
       }
     }
-    return { d: best, y };
+    return { d: best, y, i: bi };
   }
 }
 
@@ -99,13 +101,26 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     z0: Math.min(...pts.map((p) => p.z)) - 60,
     z1: Math.max(...pts.map((p) => p.z)) + 60,
   };
-  const heightAt = (x: number, z: number): number => {
-    const h = raw(x, z);
+  // The road is cut into the hillside and built up on embankments: inside
+  // the shoulder the ground is the road bed; outside it the terrain is kept
+  // between a cut slope rising from the road and a fill slope dropping from
+  // it, so both meet the real ground a few metres out.
+  const corridor = (x: number, z: number, h: number): number => {
     if (x < box.x0 || x > box.x1 || z < box.z0 || z > box.z1) return h;
-    const n = index.nearest(x, z, 60);
-    if (n.d > 60) return h;
-    // Cut a narrow shelf for the road: flat under it, back to the real ground within a few metres.
-    return lerp(n.y - 0.35, h, smoothstep(5, 22, n.d));
+    const n = index.nearest(x, z, CORRIDOR_REACH);
+    if (n.d > CORRIDOR_REACH) return h;
+    const bed = n.y - 0.35;
+    if (n.d <= SHOULDER) return bed;
+    const out = n.d - SHOULDER;
+    return Math.min(Math.max(h, bed - out * FILL_SLOPE), bed + out * CUT_SLOPE);
+  };
+  const heightAt = (x: number, z: number): number => corridor(x, z, raw(x, z));
+  // Under the corridor strip the coarse grid is tucked away so its 10 m triangles cannot poke through.
+  const tucked = (x: number, z: number): number => {
+    const h = heightAt(x, z);
+    if (x < box.x0 || x > box.x1 || z < box.z0 || z > box.z1) return h;
+    const n = index.nearest(x, z, CORRIDOR_REACH);
+    return h - 1.2 * (1 - smoothstep(CORRIDOR_REACH - 12, CORRIDOR_REACH, n.d));
   };
   const land: Land = {
     height: heightAt,
@@ -115,7 +130,8 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
 
   const grass = grassTexture();
   const rockTex = rockTexture();
-  group.add(gridMesh(near, heightAt, grass, 18));
+  group.add(gridMesh(near, tucked, grass, 18));
+  group.add(corridorMesh(pts, index, heightAt, near, grass));
   const inNear = (x: number, z: number) => gridSample(near, x, z) !== null;
   group.add(gridMesh(far, (x, z) => (inNear(x, z) ? raw(x, z) - 6 : raw(x, z)), rockTex, 520));
 
@@ -134,6 +150,103 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   return { group, heightAt, animate };
 }
 
+const SHOULDER = ROAD_WIDTH / 2 + 1.3;
+/** Metres either side of the road that the corridor shapes. */
+const CORRIDOR_REACH = 46;
+/** Rise over run of the cut bank above the road and the fill bank below it. */
+const CUT_SLOPE = 1.2;
+const FILL_SLOPE = 0.7;
+/** Lateral offsets of the corridor strip's cross-section, shoulder outwards. */
+const CORRIDOR_OFFSETS = [0, SHOULDER, SHOULDER + 1.5, SHOULDER + 3.5, SHOULDER + 6.5, SHOULDER + 11, 24, 33, CORRIDOR_REACH];
+
+const GROUND = {
+  scrub: new THREE.Color("#73855a"),
+  dryScrub: new THREE.Color("#a59c68"),
+  rock: new THREE.Color("#a39b8f"),
+  rockHigh: new THREE.Color("#c4bdb1"),
+  sand: new THREE.Color("#d8c89a"),
+};
+
+/** Ground colour from altitude and steepness: limestone on steep and high ground, dry scrub elsewhere, sand at the shore. */
+function groundColor(out: THREE.Color, x: number, y: number, z: number, slope: number): THREE.Color {
+  const high = smoothstep(400, 1000, y);
+  const patch = fbm(x, z, 180, 16);
+  out.copy(GROUND.scrub).lerp(GROUND.dryScrub, 0.5 * fbm(x, z, 420, 15) + 0.4 * high);
+  const rockiness = smoothstep(0.22, 0.55, slope + 0.3 * high + 0.3 * (patch - 0.5));
+  out.lerp(high > 0.5 ? GROUND.rockHigh : GROUND.rock, rockiness);
+  if (y < SEA_LEVEL + 6) out.lerp(GROUND.sand, smoothstep(SEA_LEVEL + 6, SEA_LEVEL + 1, y));
+  return out;
+}
+
+/**
+ * A fine strip of ground along the road, sampling the same corridor field as
+ * the grid but every 5 m along and a few metres across, so banks and
+ * shoulders are shaped properly. At hairpins each cross-section stops where
+ * another part of the road is closer, so stacked sections never overlap.
+ */
+function corridorMesh(pts: Route["points"], index: RouteIndex, heightAt: (x: number, z: number) => number, g: Grid, map: THREE.Texture): THREE.Mesh {
+  const n = pts.length;
+  const offsets = [...CORRIDOR_OFFSETS.slice(1).reverse().map((o) => -o), ...CORRIDOR_OFFSETS];
+  const across = offsets.length;
+  const verts = new Float32Array(n * across * 3);
+  const uvs = new Float32Array(n * across * 2);
+  const colors = new Float32Array(n * across * 3);
+  const tmp = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(i - 1, 0)];
+    const b = pts[Math.min(i + 1, n - 1)];
+    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    const nx = -(b.z - a.z) / l;
+    const nz = (b.x - a.x) / l;
+    const p = pts[i];
+    // How far out this section owns the ground on each side.
+    const reach = [-1, 1].map((side) => {
+      let r = CORRIDOR_REACH;
+      for (const o of CORRIDOR_OFFSETS) {
+        const q = index.nearest(p.x + nx * o * side, p.z + nz * o * side, CORRIDOR_REACH);
+        if (q.i >= 0 && Math.abs(q.i - i) > 12 && q.d < o * 0.95) {
+          r = Math.max(SHOULDER, o - 0.5 * (o - q.d));
+          break;
+        }
+      }
+      return r;
+    });
+    for (let k = 0; k < across; k++) {
+      const o = offsets[k];
+      const side = o < 0 ? 0 : 1;
+      const oo = Math.sign(o) * Math.min(Math.abs(o), reach[side]);
+      const x = p.x + nx * oo;
+      const z = p.z + nz * oo;
+      const y = heightAt(x, z) + 0.02;
+      const v = (i * across + k) * 3;
+      verts[v] = x;
+      verts[v + 1] = y;
+      verts[v + 2] = z;
+      uvs[(i * across + k) * 2] = x / 18;
+      uvs[(i * across + k) * 2 + 1] = z / 18;
+      groundColor(tmp, x, y, z, gridSlope(g, x, z));
+      colors.set([tmp.r, tmp.g, tmp.b], v);
+    }
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    for (let k = 0; k < across - 1; k++) {
+      const a = i * across + k;
+      const b = (i + 1) * across + k;
+      idx.push(a, a + 1, b, a + 1, b + 1, b);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, map, roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
 /** One terrain mesh per heightmap grid, coloured by height and slope. */
 function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THREE.Texture, uvScale: number): THREE.Mesh {
   const w = (g.cols - 1) * g.spacing;
@@ -143,11 +256,6 @@ function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THRE
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const uv = geo.attributes.uv as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
-  const scrub = new THREE.Color("#73855a");
-  const dryScrub = new THREE.Color("#a59c68");
-  const rock = new THREE.Color("#a39b8f");
-  const rockHigh = new THREE.Color("#c4bdb1");
-  const sand = new THREE.Color("#d8c89a");
   const tmp = new THREE.Color();
   for (let iz = 0; iz < g.rows; iz++) {
     for (let ix = 0; ix < g.cols; ix++) {
@@ -157,14 +265,7 @@ function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THRE
       const y = heightAt(x, z);
       pos.setXYZ(i, x, y, z);
       uv.setXY(i, x / uvScale, z / uvScale);
-      const slope = gridSlope(g, x, z);
-      const high = smoothstep(400, 1000, y);
-      const patch = fbm(x, z, 180, 16);
-      tmp.copy(scrub).lerp(dryScrub, 0.5 * fbm(x, z, 420, 15) + 0.4 * high);
-      // Limestone shows through on steep ground, more so higher up and in rocky patches.
-      const rockiness = smoothstep(0.22, 0.55, slope + 0.3 * high + 0.3 * (patch - 0.5));
-      tmp.lerp(high > 0.5 ? rockHigh : rock, rockiness);
-      if (y < SEA_LEVEL + 6) tmp.lerp(sand, smoothstep(SEA_LEVEL + 6, SEA_LEVEL + 1, y));
+      groundColor(tmp, x, y, z, gridSlope(g, x, z));
       colors.set([tmp.r, tmp.g, tmp.b], i * 3);
     }
   }

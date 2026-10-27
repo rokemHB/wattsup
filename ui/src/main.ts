@@ -226,6 +226,11 @@ function toggleDebug() {
 async function startWorld() {
   const route = await api.route();
   if (!route) return;
+  // Building the terrain blocks the page for a few seconds; paint something first.
+  const loading = $("loading");
+  loading.hidden = false;
+  $("loading-text").textContent = `Building ${route.name}…`;
+  await new Promise((r) => setTimeout(r, 50));
   let terrain;
   if (route.world) {
     try {
@@ -235,7 +240,10 @@ async function startWorld() {
       showError(`terrain for ${route.world} not loaded (${e}); riding a procedural world`);
     }
   }
+  const started = performance.now();
   world = new World($<HTMLCanvasElement>("world"), route, terrain);
+  console.info(`world built in ${((performance.now() - started) / 1000).toFixed(1)} s`);
+  loading.hidden = true;
   hud = new Hud(world.sampler);
   world.onFrame = () => hud?.frame();
   $("hud").hidden = false;
