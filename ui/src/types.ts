@@ -37,6 +37,7 @@ export interface SessionSnapshot {
   distance_m: number;
   route_position_m: number;
   lap: number;
+  finished: boolean;
   model_power_w: number;
   last_command: TrainerCommand | null;
   last_command_age_s: number | null;
@@ -97,6 +98,15 @@ export interface Route {
   points: RoutePoint[];
   closed: boolean;
   /** Id of a real-world terrain under /worlds/, or null for a procedural world. */
+  world: string | null;
+}
+
+export interface RouteInfo {
+  id: string;
+  name: string;
+  length_m: number;
+  climb_m: number;
+  closed: boolean;
   world: string | null;
 }
 

@@ -10,7 +10,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
-use wattsup_core::route::{Route, BUILTIN_ROUTES};
+use wattsup_core::route::{Route, RouteInfo, BUILTIN_ROUTES};
 use wattsup_core::session::ControlMode;
 use wattsup_devices::{DeviceId, DeviceKind};
 use wattsup_engine::{Engine, EngineConfig, EngineSnapshot, ScanResult};
@@ -76,6 +76,22 @@ fn snapshot(state: State<'_, AppState>) -> EngineSnapshot {
 #[tauri::command]
 fn route(state: State<'_, AppState>) -> Option<Route> {
     state.engine.route()
+}
+
+#[tauri::command]
+fn routes(state: State<'_, AppState>) -> Vec<RouteInfo> {
+    state.engine.routes()
+}
+
+#[tauri::command]
+async fn set_route(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.engine.set_route(&id).await
+}
+
+#[tauri::command]
+async fn reset_ride(state: State<'_, AppState>) -> CmdResult<()> {
+    state.engine.reset_ride().await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -192,6 +208,9 @@ fn main() {
             startup_info,
             snapshot,
             route,
+            routes,
+            set_route,
+            reset_ride,
             scan,
             connect,
             disconnect,

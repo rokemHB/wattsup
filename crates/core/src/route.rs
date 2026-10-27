@@ -34,6 +34,18 @@ pub struct Route {
 /// Ids accepted by [`Route::builtin`].
 pub const BUILTIN_ROUTES: [&str; 2] = ["sa-calobra", "lakeside"];
 
+/// What a route chooser needs to know, without the points.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RouteInfo {
+    pub id: String,
+    pub name: String,
+    pub length_m: f64,
+    /// Metres of climbing over the whole route.
+    pub climb_m: f64,
+    pub closed: bool,
+    pub world: Option<String>,
+}
+
 /// A hand-placed control point: ground position and elevation, in metres.
 #[derive(Clone, Copy, Debug)]
 pub struct ControlPoint {
@@ -110,6 +122,30 @@ impl Route {
             closed,
             world: None,
         }
+    }
+
+    /// Metres of climbing over the whole route.
+    pub fn climb_m(&self) -> f64 {
+        self.points.windows(2).map(|w| (w[1].y - w[0].y).max(0.0)).sum()
+    }
+
+    pub fn info(&self, id: &str) -> RouteInfo {
+        RouteInfo {
+            id: id.to_string(),
+            name: self.name.clone(),
+            length_m: self.length_m(),
+            climb_m: self.climb_m(),
+            closed: self.closed,
+            world: self.world.clone(),
+        }
+    }
+
+    /// All routes shipped with the app.
+    pub fn builtin_list() -> Vec<RouteInfo> {
+        BUILTIN_ROUTES
+            .iter()
+            .filter_map(|id| Self::builtin(id).map(|r| r.info(id)))
+            .collect()
     }
 
     /// A route shipped with the app, by id (see [`BUILTIN_ROUTES`]).
@@ -264,6 +300,15 @@ mod tests {
         for id in BUILTIN_ROUTES {
             assert!(Route::builtin(id).is_some(), "{id}");
         }
+        let list = Route::builtin_list();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "sa-calobra");
+        assert!(
+            list[0].climb_m > 650.0 && list[0].climb_m < 760.0,
+            "{}",
+            list[0].climb_m
+        );
+        assert!(list[1].closed);
     }
 
     #[test]

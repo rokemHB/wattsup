@@ -14,7 +14,7 @@ use tokio::sync::{watch, Mutex as AsyncMutex};
 use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
-use wattsup_core::route::Route;
+use wattsup_core::route::{Route, RouteInfo};
 use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot};
 use wattsup_devices::sim::{SimConfig, SimProvider};
 use wattsup_devices::{
@@ -175,6 +175,25 @@ impl Engine {
     /// The route the session rides, for UIs that draw it.
     pub fn route(&self) -> Option<Route> {
         self.inner.session.lock().unwrap().route().cloned()
+    }
+
+    /// All routes shipped with the app.
+    pub fn routes(&self) -> Vec<RouteInfo> {
+        Route::builtin_list()
+    }
+
+    /// Switches to a built-in route and starts a fresh ride on it.
+    pub async fn set_route(&self, id: &str) -> Result<(), String> {
+        let route = Route::builtin(id).ok_or_else(|| format!("unknown route {id}"))?;
+        self.inner.session.lock().unwrap().set_route(Some(route));
+        self.inner.send_now().await;
+        Ok(())
+    }
+
+    /// Back to the start of the current route.
+    pub async fn reset_ride(&self) {
+        self.inner.session.lock().unwrap().reset_ride();
+        self.inner.send_now().await;
     }
 
     /// Scans every provider at once. One failing provider does not hide the others.

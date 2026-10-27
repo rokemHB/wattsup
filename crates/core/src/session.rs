@@ -178,6 +178,8 @@ pub struct SessionSnapshot {
     pub route_position_m: f64,
     /// Zero-based lap count on a closed route.
     pub lap: u32,
+    /// The end of an open route has been reached.
+    pub finished: bool,
     /// Pedal power the virtual road asks for at the current cadence, gear and
     /// grade. In SIM mode the trainer should make the rider produce about this
     /// much; the gap to `power_w` shows how far the [`TrainerProfile`] is off.
@@ -208,6 +210,8 @@ pub struct RideSession {
     urgent: bool,
     drive_ratio_estimate: Option<f64>,
     auto_shift: AutoShift,
+    /// Clock reading when the current ride started; `elapsed_s` counts from here.
+    ride_start_s: f64,
     /// How long the cadence has been outside the auto-shift band, signed (+ = too fast).
     cadence_off_s: f64,
     last_auto_shift_at: f64,
@@ -236,6 +240,7 @@ impl RideSession {
             urgent: true,
             drive_ratio_estimate: None,
             auto_shift: AutoShift::default(),
+            ride_start_s: 0.0,
             cadence_off_s: 0.0,
             last_auto_shift_at: f64::MIN / 4.0,
             last_manual_shift_at: f64::MIN / 4.0,
@@ -356,6 +361,24 @@ impl RideSession {
         self.config.route.as_ref()
     }
 
+    /// Switches the road and starts a fresh ride on it.
+    pub fn set_route(&mut self, route: Option<Route>) {
+        self.config.route = route;
+        self.reset_ride();
+    }
+
+    /// Back to the start: distance, speed and the ride clock. Devices and
+    /// settings (gear, mode, auto-shift) stay as they are.
+    pub fn reset_ride(&mut self) {
+        self.distance_m = 0.0;
+        self.virtual_speed_mps = 0.0;
+        self.ride_start_s = self.clock_s;
+        if let Some(route) = &self.config.route {
+            self.road_grade_pct = route.grade_at(0.0);
+        }
+        self.urgent = true;
+    }
+
     /// Advances time by `dt` seconds. Returns a command when the trainer needs a new one.
     pub fn tick(&mut self, dt: f64) -> Option<TrainerCommand> {
         self.clock_s += dt;
@@ -442,8 +465,13 @@ impl RideSession {
             .route
             .as_ref()
             .map_or((self.distance_m, 0), |r| r.lap_position(self.distance_m));
+        let finished = self
+            .config
+            .route
+            .as_ref()
+            .is_some_and(|r| !r.closed && self.distance_m >= r.length_m());
         SessionSnapshot {
-            elapsed_s: now,
+            elapsed_s: now - self.ride_start_s,
             mode: self.mode,
             erg_target_w: self.erg_target_w,
             road_grade_pct: self.road_grade_pct,
@@ -460,6 +488,7 @@ impl RideSession {
             distance_m: self.distance_m,
             route_position_m,
             lap,
+            finished,
             model_power_w,
             last_command: self.last_command,
             last_command_age_s: self.last_command.map(|_| now - self.last_command_at),
@@ -730,6 +759,27 @@ mod tests {
 
         s.set_target_cadence(500.0);
         assert_eq!(s.snapshot().target_cadence_rpm, MAX_TARGET_CADENCE);
+    }
+
+    #[test]
+    fn switching_routes_restarts_the_ride_and_climbs_finish() {
+        let mut s = RideSession::default();
+        run(&mut s, 20.0, 200.0, 90.0);
+        assert!(s.snapshot().distance_m > 50.0);
+        assert!(s.snapshot().elapsed_s > 19.0);
+        s.set_route(Some(Route::builtin("sa-calobra").unwrap()));
+        let snap = s.snapshot();
+        assert_eq!(snap.distance_m, 0.0);
+        assert!(snap.elapsed_s < 0.01, "ride clock restarts: {}", snap.elapsed_s);
+        assert!(!snap.finished);
+        // Teleport to the end: the climb is finished, the lap position stays at the end.
+        s.distance_m = 20_000.0;
+        let snap = s.snapshot();
+        assert!(snap.finished);
+        assert!((snap.route_position_m - Route::builtin("sa-calobra").unwrap().length_m()).abs() < 1e-9);
+        s.set_route(Some(Route::demo()));
+        s.distance_m = 20_000.0;
+        assert!(!s.snapshot().finished, "loops never finish");
     }
 
     #[test]
