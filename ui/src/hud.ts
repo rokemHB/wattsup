@@ -9,6 +9,8 @@ export class Hud {
   private profile: number[];
   private canvas = $("profile") as HTMLCanvasElement;
   private lastKey = "";
+  private frames = 0;
+  private fpsAt = performance.now();
 
   constructor(private sampler: RouteSampler) {
     $("hud-route-name").textContent = sampler.route.name;
@@ -31,6 +33,17 @@ export class Hud {
     grade.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(1)} %`;
     grade.className = g > 3 ? "climb" : g < -3 ? "descent" : "";
     this.drawProfile(s.route_position_m / this.sampler.length);
+  }
+
+  /** Called once per rendered frame; shows the rate once a second. */
+  frame() {
+    this.frames++;
+    const now = performance.now();
+    if (now - this.fpsAt >= 1000) {
+      $("fps").textContent = `${Math.round((this.frames * 1000) / (now - this.fpsAt))} fps`;
+      this.frames = 0;
+      this.fpsAt = now;
+    }
   }
 
   private drawProfile(fraction: number) {

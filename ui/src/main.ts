@@ -55,6 +55,9 @@ function render(snap: EngineSnapshot) {
   $("mode-erg").classList.toggle("on", s.mode === "erg");
   const erg = $<HTMLInputElement>("erg-target");
   if (document.activeElement !== erg) erg.value = String(s.erg_target_w);
+  $<HTMLInputElement>("auto-shift").checked = s.auto_shift;
+  const target = $<HTMLInputElement>("target-cadence");
+  if (document.activeElement !== target) target.value = String(s.target_cadence_rpm);
 
   renderGears(s.gear, s.gear_count);
   renderProviders(snap.providers);
@@ -188,6 +191,10 @@ function wire() {
 
   $("toggle-debug").onclick = toggleDebug;
   $("close-debug").onclick = toggleDebug;
+  const auto = $<HTMLInputElement>("auto-shift");
+  auto.onchange = () => api.setAutoShift(auto.checked).catch(showError);
+  const target = $<HTMLInputElement>("target-cadence");
+  target.onchange = () => api.setTargetCadence(Number(target.value)).catch(showError);
 
   window.addEventListener("keydown", (e) => {
     if (isTypingTarget(e.target) || e.repeat) return;
@@ -198,6 +205,7 @@ function wire() {
       return;
     }
     if (e.key === "d" || e.key === "D") toggleDebug();
+    else if (e.key === "a" || e.key === "A") api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
     else if ((e.key === "c" || e.key === "C") && world) world.cycleCamera();
     else if (e.key === "F11") {
       e.preventDefault();
@@ -219,6 +227,7 @@ async function startWorld() {
   if (!route) return;
   world = new World($<HTMLCanvasElement>("world"), route);
   hud = new Hud(world.sampler);
+  world.onFrame = () => hud?.frame();
   $("hud").hidden = false;
   $("grade").hidden = true;
   $("grade-hint").hidden = false;

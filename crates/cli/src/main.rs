@@ -36,7 +36,7 @@ enum Command {
         #[arg(long, default_value_t = 8)]
         secs: u64,
     },
-    /// Connect devices and ride. Type u/d (shift), erg <W>, sim, grade <%>, q.
+    /// Connect devices and ride. Type u/d (shift), auto <rpm>, manual, erg <W>, sim, grade <%>, q.
     Ride {
         /// Device id from `scan`, e.g. ble:XX:XX:.. or sim:trainer
         #[arg(long)]
@@ -109,7 +109,7 @@ async fn main() {
                     }
                 }
             }
-            println!("commands: u = shift up, d = shift down, erg <W>, sim, grade <%>, q = quit");
+            println!("commands: u = shift up, d = shift down, auto <rpm> = shift automatically, manual, erg <W>, sim, grade <%>, q = quit");
             ride(engine).await;
         }
     }
@@ -141,10 +141,17 @@ async fn ride(engine: Engine) {
                         engine.set_mode(ControlMode::Erg).await;
                     }
                     (Some("sim"), _) => engine.set_mode(ControlMode::Sim).await,
+                    (Some("auto"), rpm) => {
+                        if let Some(rpm) = rpm {
+                            engine.set_target_cadence(rpm);
+                        }
+                        engine.set_auto_shift(true);
+                    }
+                    (Some("manual"), _) => engine.set_auto_shift(false),
                     (Some("grade"), Some(g)) => engine.set_road_grade(g).await,
                     (Some("q"), _) => break,
                     (None, _) => {}
-                    _ => println!("? u, d, erg <W>, sim, grade <%>, q"),
+                    _ => println!("? u, d, auto <rpm>, manual, erg <W>, sim, grade <%>, q"),
                 }
             }
             _ = tokio::signal::ctrl_c() => break,
@@ -184,7 +191,7 @@ fn status_line(s: &EngineSnapshot) -> String {
         })
         .collect();
     format!(
-        "{:>6.0}s  {:>4} W (model {:>3.0})  {:>5} rpm  {:>5} km/h trainer  {:>5.1} km/h virtual  HR {:>3}  gear {:>2}/{} ({:.2})  drive {}  sent {}  [{}]",
+        "{:>6.0}s  {:>4} W (model {:>3.0})  {:>5} rpm  {:>5} km/h trainer  {:>5.1} km/h virtual  HR {:>3}  gear {:>2}/{} ({:.2}){}  drive {}  sent {}  [{}]",
         r.elapsed_s,
         opt(r.power_w, 0),
         r.model_power_w,
@@ -195,6 +202,11 @@ fn status_line(s: &EngineSnapshot) -> String {
         r.gear,
         r.gear_count,
         r.gear_ratio,
+        if r.auto_shift {
+            format!(" auto {:.0}", r.target_cadence_rpm)
+        } else {
+            String::new()
+        },
         opt(r.measured_drive_ratio, 2),
         sent,
         devices.join(" ")

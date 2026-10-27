@@ -268,6 +268,17 @@ impl Engine {
         self.inner.send_now().await;
     }
 
+    /// Automatic shifting toward the target cadence (see [`wattsup_core::session::AutoShift`]).
+    pub fn set_auto_shift(&self, enabled: bool) {
+        self.inner.session.lock().unwrap().set_auto_shift(enabled);
+        self.publish();
+    }
+
+    pub fn set_target_cadence(&self, rpm: f64) {
+        self.inner.session.lock().unwrap().set_target_cadence(rpm);
+        self.publish();
+    }
+
     /// Presses a button on the connected (simulated) controller.
     pub async fn press(&self, button: Button) -> Result<(), DeviceError> {
         let controller = self

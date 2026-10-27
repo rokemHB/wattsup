@@ -22,7 +22,11 @@
       </div>
       <div class="hud-bottom"><canvas id="profile"></canvas></div>
       <div class="hud-hints">
-        <span>↑ ↓ shift · C camera · F11 fullscreen</span>
+        <span>↑ ↓ shift · C camera · F11 fullscreen · <span id="fps"></span></span>
+        <label class="hud-control">
+          <input type="checkbox" id="auto-shift" /> Auto shift (A) at
+          <input type="number" id="target-cadence" min="50" max="130" step="1" value="88" /> rpm
+        </label>
         <button id="toggle-debug" class="small">Debug (D)</button>
       </div>
     </div>
@@ -77,7 +81,7 @@
               <button id="shift-down" class="shift">− easier</button>
               <button id="shift-up" class="shift">harder +</button>
             </div>
-            <p class="hint">Keyboard: ↑ / ] harder · ↓ / [ easier</p>
+            <p class="hint">Keyboard: ↑ / ] harder · ↓ / [ easier · A toggles automatic shifting (set on the ride screen)</p>
             <div class="row" id="sim-click-row" hidden>
               <span class="hint">Simulated controller:</span>
               <button data-press="minus">Click −</button>

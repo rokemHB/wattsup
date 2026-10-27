@@ -89,6 +89,41 @@ impl Default for SessionConfig {
     }
 }
 
+/// Shifts virtual gears to keep the rider's cadence near a target.
+///
+/// Works for any rider, real or simulated: it only looks at measured cadence.
+/// Hysteresis and a hold time stop it hunting between neighbouring gears
+/// (one default gear step is about 7.7 %, or 7 rpm at 90 rpm).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AutoShift {
+    pub enabled: bool,
+    pub target_cadence_rpm: f64,
+    /// Cadence must leave this band around the target before a shift.
+    pub band_rpm: f64,
+    /// ... and stay outside it this long.
+    pub hold_s: f64,
+    /// Minimum time between automatic shifts.
+    pub interval_s: f64,
+    /// After a manual shift, automatic shifting pauses this long.
+    pub manual_pause_s: f64,
+}
+
+impl Default for AutoShift {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            target_cadence_rpm: 88.0,
+            band_rpm: 7.0,
+            hold_s: 1.5,
+            interval_s: 2.5,
+            manual_pause_s: 12.0,
+        }
+    }
+}
+
+pub const MIN_TARGET_CADENCE: f64 = 50.0;
+pub const MAX_TARGET_CADENCE: f64 = 130.0;
+
 /// One trainer measurement; fields the device did not send stay `None`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrainerSample {
@@ -128,6 +163,8 @@ pub struct SessionSnapshot {
     pub gear: usize,
     pub gear_count: usize,
     pub gear_ratio: f64,
+    pub auto_shift: bool,
+    pub target_cadence_rpm: f64,
     pub power_w: Option<f64>,
     pub cadence_rpm: Option<f64>,
     pub trainer_speed_kmh: Option<f64>,
@@ -167,6 +204,11 @@ pub struct RideSession {
     /// Rider intent changed: send at the next tick, skipping the rate limit.
     urgent: bool,
     drive_ratio_estimate: Option<f64>,
+    auto_shift: AutoShift,
+    /// How long the cadence has been outside the auto-shift band, signed (+ = too fast).
+    cadence_off_s: f64,
+    last_auto_shift_at: f64,
+    last_manual_shift_at: f64,
 }
 
 impl RideSession {
@@ -189,7 +231,24 @@ impl RideSession {
             last_command_at: 0.0,
             urgent: true,
             drive_ratio_estimate: None,
+            auto_shift: AutoShift::default(),
+            cadence_off_s: 0.0,
+            last_auto_shift_at: f64::MIN / 4.0,
+            last_manual_shift_at: f64::MIN / 4.0,
         }
+    }
+
+    pub fn auto_shift(&self) -> &AutoShift {
+        &self.auto_shift
+    }
+
+    pub fn set_auto_shift(&mut self, enabled: bool) {
+        self.auto_shift.enabled = enabled;
+        self.cadence_off_s = 0.0;
+    }
+
+    pub fn set_target_cadence(&mut self, rpm: f64) {
+        self.auto_shift.target_cadence_rpm = rpm.clamp(MIN_TARGET_CADENCE, MAX_TARGET_CADENCE).round();
     }
 
     pub fn config(&self) -> &SessionConfig {
@@ -218,11 +277,54 @@ impl RideSession {
         self.heart_rate.set(bpm, self.clock_s);
     }
 
-    /// Shifts one gear. Returns false at the end of the range.
+    /// Shifts one gear by hand. Returns false at the end of the range.
+    /// Pauses automatic shifting for a while so the rider's choice sticks.
     pub fn shift(&mut self, dir: ShiftDirection) -> bool {
+        self.last_manual_shift_at = self.clock_s;
+        self.cadence_off_s = 0.0;
         let changed = self.gearbox.shift(dir);
         self.urgent |= changed;
         changed
+    }
+
+    /// Automatic shifting for this tick. Only in SIM mode, only while pedalling.
+    fn auto_shift_step(&mut self, cadence: Option<f64>, dt: f64) {
+        let a = self.auto_shift;
+        let now = self.clock_s;
+        let Some(c) = cadence.filter(|c| *c >= 20.0) else {
+            self.cadence_off_s = 0.0;
+            return;
+        };
+        if !a.enabled
+            || self.mode != ControlMode::Sim
+            || now - self.last_manual_shift_at < a.manual_pause_s
+            || now - self.last_auto_shift_at < a.interval_s
+        {
+            self.cadence_off_s = 0.0;
+            return;
+        }
+        let off = c - a.target_cadence_rpm;
+        if off > a.band_rpm {
+            self.cadence_off_s = self.cadence_off_s.max(0.0) + dt;
+        } else if off < -a.band_rpm {
+            self.cadence_off_s = self.cadence_off_s.min(0.0) - dt;
+        } else {
+            self.cadence_off_s = 0.0;
+            return;
+        }
+        if self.cadence_off_s.abs() < a.hold_s {
+            return;
+        }
+        let dir = if self.cadence_off_s > 0.0 {
+            ShiftDirection::Up
+        } else {
+            ShiftDirection::Down
+        };
+        if self.gearbox.shift(dir) {
+            self.urgent = true;
+            self.last_auto_shift_at = now;
+        }
+        self.cadence_off_s = 0.0;
     }
 
     pub fn set_mode(&mut self, mode: ControlMode) {
@@ -272,6 +374,7 @@ impl RideSession {
 
         let cadence = self.cadence.fresh(now, timeout);
         let trainer_speed = self.trainer_speed.fresh(now, timeout).map(kmh_to_mps);
+        self.auto_shift_step(cadence, dt);
         if let (Some(c), Some(v)) = (cadence, trainer_speed) {
             if c >= 50.0 {
                 if let Some(r) = implied_ratio(v, c, self.config.rider.wheel_circumference_m) {
@@ -343,6 +446,8 @@ impl RideSession {
             gear: self.gearbox.gear_number(),
             gear_count: self.gearbox.set().len(),
             gear_ratio: self.gearbox.ratio(),
+            auto_shift: self.auto_shift.enabled,
+            target_cadence_rpm: self.auto_shift.target_cadence_rpm,
             power_w: self.power.fresh(now, t),
             cadence_rpm: self.cadence.fresh(now, t),
             trainer_speed_kmh: self.trainer_speed.fresh(now, t),
@@ -549,6 +654,78 @@ mod tests {
         assert!(seen_climb);
         assert!(snap.lap >= 1, "20 min at 250 W covers more than one lap: {snap:?}");
         assert!(snap.route_position_m < Route::demo().length_m());
+    }
+
+    fn run(s: &mut RideSession, seconds: f64, power: f64, cadence: f64) {
+        let steps = (seconds * 4.0) as usize;
+        for _ in 0..steps {
+            riding(s, power, cadence);
+            s.tick(0.25);
+        }
+    }
+
+    #[test]
+    fn auto_shift_chases_the_target_cadence() {
+        let mut s = RideSession::default();
+        let start = s.snapshot().gear;
+        run(&mut s, 10.0, 200.0, 110.0);
+        assert_eq!(s.snapshot().gear, start, "off by default");
+
+        s.set_auto_shift(true);
+        s.set_target_cadence(88.0);
+        assert_eq!(s.snapshot().target_cadence_rpm, 88.0);
+        assert!(s.snapshot().auto_shift);
+        run(&mut s, 2.0, 200.0, 110.0);
+        assert_eq!(s.snapshot().gear, start + 1, "one shift after the hold time");
+        run(&mut s, 1.0, 200.0, 110.0);
+        assert_eq!(s.snapshot().gear, start + 1, "not again inside the interval");
+        run(&mut s, 10.0, 200.0, 110.0);
+        assert!(
+            s.snapshot().gear >= start + 4,
+            "keeps shifting while still too fast: {}",
+            s.snapshot().gear
+        );
+
+        // Inside the band: nothing happens.
+        let g = s.snapshot().gear;
+        run(&mut s, 10.0, 200.0, 92.0);
+        assert_eq!(s.snapshot().gear, g);
+
+        // Too slow: shifts down.
+        run(&mut s, 5.0, 200.0, 70.0);
+        assert!(s.snapshot().gear < g);
+
+        // Coasting: once the cadence reading has expired, no shifting.
+        for _ in 0..13 {
+            s.tick(0.25);
+        }
+        let g = s.snapshot().gear;
+        assert_eq!(s.snapshot().cadence_rpm, None);
+        for _ in 0..40 {
+            s.tick(0.25);
+        }
+        assert_eq!(s.snapshot().gear, g);
+    }
+
+    #[test]
+    fn manual_shift_pauses_auto_shift_and_erg_disables_it() {
+        let mut s = RideSession::default();
+        s.set_auto_shift(true);
+        run(&mut s, 5.0, 200.0, 110.0);
+        let g = s.snapshot().gear;
+        s.shift(ShiftDirection::Down);
+        run(&mut s, 8.0, 200.0, 110.0);
+        assert_eq!(s.snapshot().gear, g - 1, "the rider's choice sticks for a while");
+        run(&mut s, 8.0, 200.0, 110.0);
+        assert!(s.snapshot().gear > g - 1, "then auto shifting resumes");
+
+        s.set_mode(ControlMode::Erg);
+        let g = s.snapshot().gear;
+        run(&mut s, 10.0, 200.0, 120.0);
+        assert_eq!(s.snapshot().gear, g, "ERG mode never auto-shifts");
+
+        s.set_target_cadence(500.0);
+        assert_eq!(s.snapshot().target_cadence_rpm, MAX_TARGET_CADENCE);
     }
 
     #[test]

@@ -19,7 +19,9 @@ export class World {
   private rider = new Rider();
   private distance = 0;
   private targetDistance = 0;
+  private targetAt = performance.now();
   private speed = 0;
+  onFrame: (() => void) | null = null;
   private cadence = 0;
   private lastFrame = performance.now();
   private running = true;
@@ -73,6 +75,7 @@ export class World {
   update(snap: EngineSnapshot) {
     const s = snap.session;
     this.targetDistance = s.distance_m;
+    this.targetAt = performance.now();
     this.speed = s.virtual_speed_kmh / 3.6;
     this.cadence = s.cadence_rpm ?? 0;
     if (Math.abs(this.targetDistance - this.distance) > 20) this.distance = this.targetDistance;
@@ -93,9 +96,13 @@ export class World {
     const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
     this.lastFrame = now;
 
-    // Dead-reckon between snapshots, then ease toward the authoritative distance.
-    this.distance += this.speed * dt;
-    this.distance += (this.targetDistance - this.distance) * Math.min(1, dt * 2);
+    // The engine steps the physics every 250 ms, so its distance arrives in
+    // jumps. Extrapolate it by the time since the snapshot and close the gap
+    // through velocity, never through position, so motion stays smooth.
+    const estimate = this.targetDistance + (this.speed * (now - this.targetAt)) / 1000;
+    const error = Math.max(-5, Math.min(5, estimate - this.distance));
+    this.distance += (this.speed + error * 1.5) * dt;
+    this.onFrame?.();
 
     const pose = this.sampler.pose(this.distance);
     const up = new THREE.Vector3(0, 1, 0);

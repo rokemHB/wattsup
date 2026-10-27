@@ -27,6 +27,8 @@ export interface SessionSnapshot {
   gear: number;
   gear_count: number;
   gear_ratio: number;
+  auto_shift: boolean;
+  target_cadence_rpm: number;
   power_w: number | null;
   cadence_rpm: number | null;
   trainer_speed_kmh: number | null;

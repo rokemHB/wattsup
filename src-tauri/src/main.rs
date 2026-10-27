@@ -106,6 +106,16 @@ async fn set_road_grade(state: State<'_, AppState>, grade: f64) -> CmdResult<()>
 }
 
 #[tauri::command]
+fn set_auto_shift(state: State<'_, AppState>, enabled: bool) {
+    state.engine.set_auto_shift(enabled);
+}
+
+#[tauri::command]
+fn set_target_cadence(state: State<'_, AppState>, rpm: f64) {
+    state.engine.set_target_cadence(rpm);
+}
+
+#[tauri::command]
 async fn press_button(state: State<'_, AppState>, button: Button) -> CmdResult<()> {
     state.engine.press(button).await.map_err(|e| e.to_string())
 }
@@ -135,6 +145,8 @@ fn main() {
                 }
             });
             if startup.auto_sim && startup.sim {
+                // The simulated rider never shifts by itself; let the gears follow its cadence.
+                engine.set_auto_shift(true);
                 let engine = engine.clone();
                 tauri::async_runtime::spawn(async move {
                     for (local, kind) in [
@@ -165,6 +177,8 @@ fn main() {
             set_mode,
             set_erg_target,
             set_road_grade,
+            set_auto_shift,
+            set_target_cadence,
             press_button
         ])
         .run(tauri::generate_context!())
