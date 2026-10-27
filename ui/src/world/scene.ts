@@ -881,7 +881,7 @@ export function vegetation(
   place(kinds.round.geos, kinds.round.count, kinds.round.palette, true, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
   place(kinds.cypress.geos, kinds.cypress.count, kinds.cypress.palette, true, (n) => 0.9 * (1 - smoothstep(12, 120, n)), [0.55, 1.0], 3);
   place([bush], bushes.count, bushes.palette, false, (n, x, z) => (mediterranean ? 0.5 + 0.5 * treeCover(x, z) : 0.9) * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, leafMat, false);
-  place([rock], rocks.count, ["#8d8880", "#7d7870", "#9a948a"], false, (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.3, mediterranean ? 1.3 : 1.0], 1.8, rockMat, false);
+  place([rock], rocks.count, ["#aaa49a", "#9c968c", "#b5afa5"], false, (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.25, mediterranean ? 0.8 : 1.0], 1.8, rockMat, false);
   return g;
 }
 

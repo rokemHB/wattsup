@@ -24,6 +24,7 @@ export class World {
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private sunDir: THREE.Vector3;
+  private sky: THREE.Object3D;
   private statics: WorldStatics;
   private rider = new Rider();
   private orbitAngle = 0;
@@ -70,6 +71,7 @@ export class World {
     sky.material.uniforms.mieDirectionalG.value = 0.8;
     sky.material.uniforms.sunPosition.value.copy(sunDir);
     this.scene.add(sky);
+    this.sky = sky;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const envScene = new THREE.Scene();
     envScene.add(sky.clone());
@@ -345,7 +347,8 @@ export class World {
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);
 
-    // The sun's shadow box follows the rider.
+    // The sky dome and the sun's shadow box follow the rider: an island is wider than the dome.
+    this.sky.position.copy(this.camPos);
     this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(400));
     this.sun.target.position.copy(rider);
 

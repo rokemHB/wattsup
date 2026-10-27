@@ -17,4 +17,5 @@ Open items, roughly in the order they are worth doing.
 ## Ideas
 
 - Workout mountains: define a workout as ERG intervals (watts × minutes) and let the game build a custom mountain whose grades correspond to those watts, so the intervals are ridden as climbs and recoveries as flats or descents. Open questions: ERG holds the watts regardless of the hill, so either the hill is scenery over ERG (the trainer does the work, the mountain shows the plan) or the hill *is* the workout in SIM mode with grades chosen so the target watts come at the rider's chosen cadence and gear. Interval length maps to climb length through the rider's expected speed at that power.
+- [ ] Island: hide lower hairpin legs behind terrain (a 10 m grid exposes road ribbons on cliffs); build tiles in idle slices instead of blocking a frame; the engine should pause while a world loads; signs at dead ends and for the road number straight ahead; the far layer's photo is blurry up close at the tile edge.
 - [ ] Background music: a few royalty-free tracks (or generated ambient), volume in Settings, off by default while a workout's audio cues play.

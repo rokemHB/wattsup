@@ -87,8 +87,8 @@ interface Tile {
 }
 
 /** Load tiles whose centre is within this distance of the rider; drop them beyond the larger one. */
-const LOAD_RADIUS_M = 2300;
-const DROP_RADIUS_M = 3800;
+const LOAD_RADIUS_M = 2000;
+const DROP_RADIUS_M = 3400;
 
 export class TileManager {
   private tiles = new Map<string, Tile>();
@@ -178,6 +178,19 @@ export class TileManager {
     return this.queue.length + this.loading;
   }
 
+  /** Resolves once the tile under `(x, z)` is built (or failed), or after `timeoutMs`. */
+  whenReady(x: number, z: number, timeoutMs = 90000): Promise<void> {
+    const started = performance.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        const t = [...this.tiles.values()].find((t) => x >= t.x0 && x < t.x1 && z >= t.z0 && z < t.z1);
+        if ((t && t.state !== "loading") || performance.now() - started > timeoutMs) resolve();
+        else setTimeout(check, 200);
+      };
+      check();
+    });
+  }
+
   private pump() {
     while (this.loading < 2 && this.queue.length) {
       const t = this.queue.shift()!;
@@ -240,7 +253,7 @@ export class TileManager {
     const [tiff, photo] = await Promise.all([api.fetchCached(url), this.fetchOrtho(lat0, lat1, lon0, lon1, ortho, orthoZoom)]);
     const geo = parseGeoTiff(tiff);
     // Every other sample: 10 m is plenty for the mesh, the corridor adds the fine shape near the road.
-    const step = 3;
+    const step = 2;
     const cols = Math.floor((geo.width - 1) / step) + 1;
     const rows = Math.floor((geo.height - 1) / step) + 1;
     const data = new Float32Array(cols * rows);
@@ -252,11 +265,13 @@ export class TileManager {
 
     const group = t.group;
     const land: Land = { height: this.heightAt, water: (x, z) => this.rawAt(x, z) < SEA_LEVEL + 1.5, slope: (x, z) => gridSlope(grid, x, z) };
+    // The coarse grid shows the raw terrain and ducks under the corridor strip near
+    // roads; applying the road's cut-and-fill clamp to 10 m vertices would terrace the banks.
     const tucked = (x: number, z: number) => {
-      const h = this.heightAt(x, z);
+      const h = this.rawAt(x, z);
       const n = this.index.nearest(x, z, CORRIDOR_REACH);
       if (n.i < 0 || n.d > CORRIDOR_REACH) return h;
-      const depth = 1.2 + 3.5 * Math.min(1.5, gridSlope(grid, x, z));
+      const depth = 1.2 + 2.5 * Math.min(1.5, gridSlope(grid, x, z));
       return h - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
     };
     const tex = imageTexture(photo.bitmap);

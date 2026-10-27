@@ -435,6 +435,15 @@ async function startNetworkRide(forward: boolean) {
   await api.startOnNetwork(NETWORK_WORLD, mapSel.x, mapSel.z, forward);
   selectedRoute = NETWORK_WORLD;
   await buildWorld();
+  // The tiles around the start stream in; hold the loading screen until the ground is there.
+  if (world?.tiles) {
+    $("loading-text").textContent = "Loading the terrain around you…";
+    $("loading").hidden = false;
+    world.update(latest ?? (await api.snapshot()));
+    await world.tiles.whenReady(mapSel.x, mapSel.z);
+    $("loading").hidden = true;
+  }
+  await api.resetRide();
   stats.samples = stats.power = stats.hr = stats.hrSamples = 0;
   finishShown = false;
   show("ride");
@@ -545,9 +554,9 @@ async function startRide(id: string) {
     selectedRoute = id;
     fillRouteList();
     await buildWorld();
-  } else {
-    await api.resetRide();
   }
+  // Building the world takes seconds and the trainer keeps going: the ride starts now.
+  await api.resetRide();
   stats.samples = stats.power = stats.hr = stats.hrSamples = 0;
   finishShown = false;
   show("ride");
@@ -753,6 +762,7 @@ async function start() {
         mapSel = { x: network!.xyz[p * 3], z: network!.xyz[p * 3 + 2], edge: e, i: p };
       }
       await startNetworkRide(forward);
+      if (startup.camera && world) world.setCamera(startup.camera);
     }
   } else if (startup.screen === "map") {
     await openMap();

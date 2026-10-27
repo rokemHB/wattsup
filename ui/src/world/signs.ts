@@ -4,8 +4,8 @@
 import * as THREE from "three";
 import type { NetworkNode, Sign } from "../types";
 
-const BOARD_W = 2.6;
-const BOARD_H = 0.5;
+const BOARD_W = 3.4;
+const BOARD_H = 0.64;
 
 function boardTexture(sign: Sign, arrow: string): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -71,8 +71,8 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
   const signs = (node.signs ?? []).filter((s) => s.to.length || s.ref);
   if (!signs.length) return null;
   const group = new THREE.Group();
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.6, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
-  post.position.set(0, 1.3, 0);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
+  post.position.set(0, 1.5, 0);
   post.castShadow = true;
   group.add(post);
   const boards: THREE.Mesh[] = [];
@@ -81,7 +81,7 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
     const tex = boardTexture(sign, arrowFor(rel));
     const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, side: THREE.DoubleSide });
     const board = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, BOARD_H), mat);
-    board.position.set(0, 2.45 - i * (BOARD_H + 0.06), 0);
+    board.position.set(0, 2.8 - i * (BOARD_H + 0.06), 0);
     board.castShadow = true;
     group.add(board);
     boards.push(board);

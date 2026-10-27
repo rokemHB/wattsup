@@ -23,6 +23,12 @@ parapets where the ground drops away, and close-up surfaces are patches of
 the same imagery at 10 cm per pixel. Everything in the pictures is built
 from open data by `tools/build_route.py`; no hand-made assets yet.
 
+Beyond the single climb, the whole Serra de Tramuntana is rideable: pick a
+start anywhere on the island map and ride the road network freely, the
+Ma-10 included. Terrain and imagery stream in around you (and are cached on
+disk), direction signs stand at every junction, and a prompt 500 m before
+each junction lets you choose the turn with the arrow keys.
+
 ## What it does
 
 - Connects to a Bluetooth smart trainer (FTMS), a heart-rate strap (HRS) and a
@@ -165,6 +171,31 @@ While riding, type `u` / `d` (shift), `erg <W>`, `sim`, `grade <%>` or `q`.
 The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
 
 ## Worlds and routes
+
+### The island
+
+`tools/build_network.py` builds a whole region as a road network: every
+road a road bike rides (OSM `primary` to `unclassified`) as a graph with
+10 m sampled geometry, elevation from the 5 m model, and sign destinations
+at junctions (OSM `destination` tags, else the nearest towns along the
+graph). It also writes the coarse far layer and the island map. The
+Tramuntana network (3474 km of road, 5502 signed junctions) is compiled into
+the core crate; terrain and imagery around the rider are fetched at ride
+time from the IGN services through the app's disk cache
+(`~/.cache/wattsup/` on Linux, the app cache directory elsewhere).
+
+```sh
+# the OSM extract: Overpass (see above) or, when Overpass is at capacity, a Geofabrik PBF
+curl -L -o baleares.osm.pbf https://download.geofabrik.de/europe/spain/islas-baleares-latest.osm.pbf
+.venv/bin/pip install osmium
+.venv/bin/python tools/pbf_extract.py baleares.osm.pbf tramuntana.json --bbox 39.50,2.33,39.99,3.25
+# the 5 m model in 0.05° chunks (the WCS caps one request at about 0.1°), into dem5/
+# then the network, far layer, map and world metadata
+.venv/bin/python tools/build_network.py --osm tramuntana.json --dem-dir dem5 \
+  --dem dem_n39_e002.tif dem_n39_e003.tif --id mallorca --name Mallorca --ortho
+```
+
+### Single routes
 
 Two routes ship with the app. *Lakeside loop* is a procedural 4.3 km test
 course. *Sa Calobra* is the real road from the Port de Sa Calobra up to the
