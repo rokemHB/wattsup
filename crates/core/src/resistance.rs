@@ -14,7 +14,7 @@
 //! power the virtual bike needs, which a test below checks. That force is sent as an FTMS simulation grade (SIM mode). The trainer's
 //! fast internal loop then keeps resistance right through every pedal stroke,
 //! while this code re-sends the grade a few times per second as speed, cadence
-//! or gear change. See docs/DESIGN-NOTES.md for why SIM beats ERG for shifting.
+//! or gear change. The README ("How virtual gearing works") says why SIM beats ERG for shifting.
 
 use serde::{Deserialize, Serialize};
 
