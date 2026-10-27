@@ -486,8 +486,8 @@ def main():
         img = ortho.image(lat_min, lat_max, lon_min, lon_max, 12, 2560)
         # Open sea has no tiles at this zoom and comes out black; paint it the colour of the sea that is there.
         px = np.asarray(img.convert("RGB")).astype(np.int16)
-        sea = (px[..., 2] > px[..., 0] + 10) & (px[..., 2] > 20) & (px[..., 2] < 90)
-        missing = px.max(axis=2) < 12
+        missing = px.max(axis=2) < 45
+        sea = ~missing & (px[..., 2] > px[..., 0] + 8) & (px[..., 2] > 40) & (px[..., 2] < 120)
         if sea.any():
             px[missing] = np.median(px[sea], axis=0).astype(np.int16)
         img = Image.fromarray(px.astype(np.uint8))
