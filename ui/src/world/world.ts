@@ -6,6 +6,7 @@ import type { EngineSnapshot, Route } from "../types";
 import { Rider, TYRE_BULGE } from "./rider";
 import { RouteSampler } from "./route";
 import { buildWorld, ROAD_LIFT, type WorldStatics } from "./scene";
+import type { WorldData } from "./terrain";
 
 export type CameraMode = "chase" | "side" | "front" | "drone";
 const MODES: CameraMode[] = ["chase", "side", "front", "drone"];
@@ -36,7 +37,7 @@ export class World {
   private pixelRatio = Math.min(window.devicePixelRatio, 1.5);
   private frameTimes: number[] = [];
 
-  constructor(canvas: HTMLCanvasElement, route: Route) {
+  constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData) {
     this.sampler = new RouteSampler(route);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
@@ -77,7 +78,7 @@ export class World {
     this.sunDir = sunDir;
     this.scene.add(this.sun, this.sun.target);
 
-    this.statics = buildWorld(route);
+    this.statics = buildWorld(route, world);
     this.scene.add(this.statics.group, this.rider.group);
 
     this.resize();

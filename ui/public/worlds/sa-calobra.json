@@ -1,0 +1,25 @@
+{
+ "id": "sa-calobra",
+ "name": "Sa Calobra",
+ "origin": {
+  "lat": 39.8393708,
+  "lon": 2.8059639499999998
+ },
+ "near": {
+  "file": "/worlds/sa-calobra-near.bin",
+  "cols": 470,
+  "rows": 506,
+  "x0": -3519.0,
+  "z0": -3788.9,
+  "spacing": 15.0
+ },
+ "far": {
+  "file": "/worlds/sa-calobra-far.bin",
+  "cols": 241,
+  "rows": 241,
+  "x0": -18000.2,
+  "z0": -18000.7,
+  "spacing": 150.0
+ },
+ "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: Copernicus DEM GLO-30 \u00a9 ESA."
+}

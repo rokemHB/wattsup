@@ -25,7 +25,14 @@ pub struct Route {
     pub points: Vec<RoutePoint>,
     /// The last point joins the first: ride laps.
     pub closed: bool,
+    /// Id of the real-world terrain this route lies in (`ui/public/worlds/<id>.json`),
+    /// or `None` for a procedural world.
+    #[serde(default)]
+    pub world: Option<String>,
 }
+
+/// Ids accepted by [`Route::builtin`].
+pub const BUILTIN_ROUTES: [&str; 2] = ["sa-calobra", "lakeside"];
 
 /// A hand-placed control point: ground position and elevation, in metres.
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +108,18 @@ impl Route {
             name: name.to_string(),
             points,
             closed,
+            world: None,
+        }
+    }
+
+    /// A route shipped with the app, by id (see [`BUILTIN_ROUTES`]).
+    pub fn builtin(id: &str) -> Option<Self> {
+        match id {
+            "lakeside" => Some(Self::demo()),
+            "sa-calobra" => {
+                Some(serde_json::from_str(include_str!("../routes/sa-calobra.json")).expect("valid built-in route"))
+            }
+            _ => None,
         }
     }
 
@@ -138,13 +157,17 @@ impl Route {
         }
         let len = self.length_m();
         let (d, _) = self.lap_position(distance_m);
+        // Closed routes wrap the window round the lap; open ones stop at the ends.
         let (lo, hi) = if self.closed {
-            (d - GRADE_WINDOW_M, d + GRADE_WINDOW_M)
+            (
+                (d - GRADE_WINDOW_M).rem_euclid(len),
+                (d + GRADE_WINDOW_M).rem_euclid(len),
+            )
         } else {
             ((d - GRADE_WINDOW_M).max(0.0), (d + GRADE_WINDOW_M).min(len))
         };
-        let rise = self.elevation_at(lo.rem_euclid(len.max(1e-9))) - self.elevation_at(hi.rem_euclid(len.max(1e-9)));
-        let run = hi - lo;
+        let rise = self.elevation_at(lo) - self.elevation_at(hi);
+        let run = if self.closed { 2.0 * GRADE_WINDOW_M } else { hi - lo };
         if run <= 0.0 {
             0.0
         } else {
@@ -219,6 +242,28 @@ mod tests {
         }
         assert!(max > 5.0 && max < 15.0, "steepest {max}");
         assert!(min < -4.0 && min > -15.0, "fastest descent {min}");
+    }
+
+    #[test]
+    fn sa_calobra_is_the_real_climb() {
+        let r = Route::builtin("sa-calobra").unwrap();
+        assert!(!r.closed);
+        assert_eq!(r.world.as_deref(), Some("sa-calobra"));
+        let len = r.length_m();
+        assert!(len > 9000.0 && len < 11000.0, "{len}");
+        let (bottom, top) = (r.points[0].y, r.points.last().unwrap().y);
+        assert!(top - bottom > 600.0 && top - bottom < 760.0, "{bottom} -> {top}");
+        let mut d = 0.0;
+        while d < len {
+            let g = r.grade_at(d);
+            assert!(g > -12.0 && g < 16.0, "{d} m: {g} %");
+            d += 25.0;
+        }
+        assert_eq!(r.lap_position(len + 500.0), (len, 0), "a climb does not lap");
+        assert!(Route::builtin("nope").is_none());
+        for id in BUILTIN_ROUTES {
+            assert!(Route::builtin(id).is_some(), "{id}");
+        }
     }
 
     #[test]

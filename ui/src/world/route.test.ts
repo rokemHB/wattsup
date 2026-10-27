@@ -12,7 +12,7 @@ function square(): Route {
   for (let i = 0; i < 10; i++) push(100 - i * 10, 100, 5);
   for (let i = 0; i < 10; i++) push(0, 100 - i * 10, 5 - i * 0.5);
   push(0, 0, 0);
-  return { name: "square", points: pts, closed: true };
+  return { name: "square", points: pts, closed: true, world: null };
 }
 
 describe("RouteSampler", () => {

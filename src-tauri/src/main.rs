@@ -10,7 +10,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
-use wattsup_core::route::Route;
+use wattsup_core::route::{Route, BUILTIN_ROUTES};
 use wattsup_core::session::ControlMode;
 use wattsup_devices::{DeviceId, DeviceKind};
 use wattsup_engine::{Engine, EngineConfig, EngineSnapshot, ScanResult};
@@ -28,18 +28,28 @@ struct StartupInfo {
     raw_logging: bool,
     /// Connect the simulated trainer, heart rate and controller right away.
     auto_sim: bool,
+    /// Id of the built-in route to ride.
+    route: String,
 }
 
 /// `--sim-only`, `--no-sim`, `--raw`, `--auto-sim`, or the same as
-/// WATTSUP_SIM_ONLY / WATTSUP_NO_SIM / WATTSUP_RAW / WATTSUP_AUTO_SIM=1.
+/// WATTSUP_SIM_ONLY / WATTSUP_NO_SIM / WATTSUP_RAW / WATTSUP_AUTO_SIM=1,
+/// and `--route <id>` / WATTSUP_ROUTE (default: the first built-in route).
 fn startup_from_env() -> StartupInfo {
     let args: Vec<String> = std::env::args().collect();
     let flag = |arg: &str, var: &str| args.iter().any(|a| a == arg) || std::env::var(var).is_ok_and(|v| v == "1");
+    let route = args
+        .iter()
+        .position(|a| a == "--route")
+        .and_then(|i| args.get(i + 1).cloned())
+        .or_else(|| std::env::var("WATTSUP_ROUTE").ok())
+        .unwrap_or_else(|| BUILTIN_ROUTES[0].to_string());
     StartupInfo {
         ble: !flag("--sim-only", "WATTSUP_SIM_ONLY"),
         sim: !flag("--no-sim", "WATTSUP_NO_SIM"),
         raw_logging: flag("--raw", "WATTSUP_RAW"),
         auto_sim: flag("--auto-sim", "WATTSUP_AUTO_SIM"),
+        route,
     }
 }
 
@@ -130,7 +140,10 @@ fn main() {
                 sim: startup.sim,
                 ..EngineConfig::default()
             };
-            config.session.route = Some(Route::demo());
+            config.session.route = Some(Route::builtin(&startup.route).unwrap_or_else(|| {
+                log::warn!("unknown route {:?}, riding {}", startup.route, BUILTIN_ROUTES[0]);
+                Route::builtin(BUILTIN_ROUTES[0]).expect("built-in route")
+            }));
             config.ble_config.log_raw = startup.raw_logging;
             // Engine::start spawns its loops, so it must run inside Tauri's Tokio runtime.
             let engine = tauri::async_runtime::block_on(async { Engine::start(config) });

@@ -4,6 +4,7 @@ import * as THREE from "three";
 import type { Route } from "../types";
 import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
+import { gridSample, gridSlope, type Grid, type WorldData } from "./terrain";
 import { asphaltTexture, cloudTexture, grassTexture, rockTexture, waterNormalTexture } from "./textures";
 
 export const ROAD_WIDTH = 7;
@@ -69,7 +70,162 @@ const smoothstep = (a: number, b: number, t: number) => {
 };
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-export function buildWorld(route: Route): WorldStatics {
+/** Where the land is in a procedural world versus a real one. */
+interface Land {
+  /** Raw ground before the road is cut in. */
+  height: (x: number, z: number) => number;
+  /** Sea or lake: nothing grows here. */
+  water: (x: number, z: number) => boolean;
+  /** Steepness (rise over run) for colouring and planting. */
+  slope: (x: number, z: number) => number;
+}
+
+export function buildWorld(route: Route, world?: WorldData): WorldStatics {
+  return world ? buildRealWorld(route, world) : buildProceduralWorld(route);
+}
+
+/** Terrain from heightmaps: the near grid as is, the far grid around it, lowered where they overlap. */
+function buildRealWorld(route: Route, world: WorldData): WorldStatics {
+  const sampler = new RouteSampler(route);
+  const pts = route.points;
+  const index = new RouteIndex(pts);
+  const group = new THREE.Group();
+  const { near, far } = world;
+
+  const raw = (x: number, z: number) => gridSample(near, x, z) ?? gridSample(far, x, z) ?? SEA_LEVEL - 10;
+  const heightAt = (x: number, z: number): number => {
+    const h = raw(x, z);
+    const n = index.nearest(x, z, 120);
+    if (n.d > 120) return h;
+    // Cut a shelf for the road: flat under it, back to the real ground within a few tens of metres.
+    return lerp(n.y - 0.35, h, smoothstep(7, 40, n.d));
+  };
+  const land: Land = {
+    height: heightAt,
+    water: (x, z) => raw(x, z) < SEA_LEVEL + 1.5,
+    slope: (x, z) => gridSlope(near, x, z),
+  };
+
+  const grass = grassTexture();
+  const rockTex = rockTexture();
+  group.add(gridMesh(near, heightAt, grass, 18));
+  const inNear = (x: number, z: number) => gridSample(near, x, z) !== null;
+  group.add(gridMesh(far, (x, z) => (inNear(x, z) ? raw(x, z) - 6 : raw(x, z)), rockTex, 520));
+
+  const sea = seaMesh(FAR_SIZE * 2, (near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
+  group.add(sea.mesh);
+  group.add(...roadMeshes(pts, route.closed));
+  const clouds = cloudLayers((near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
+  group.add(...clouds.meshes);
+  const region = { x0: near.x0, z0: near.z0, w: near.cols * near.spacing, h: near.rows * near.spacing };
+  group.add(vegetation(index, heightAt, land, region, sampler, true));
+
+  const animate = (dt: number) => {
+    sea.animate(dt);
+    clouds.animate(dt);
+  };
+  return { group, heightAt, animate };
+}
+
+/** One terrain mesh per heightmap grid, coloured by height and slope. */
+function gridMesh(g: Grid, heightAt: (x: number, z: number) => number, map: THREE.Texture, uvScale: number): THREE.Mesh {
+  const w = (g.cols - 1) * g.spacing;
+  const h = (g.rows - 1) * g.spacing;
+  const geo = new THREE.PlaneGeometry(w, h, g.cols - 1, g.rows - 1);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  const colors = new Float32Array(pos.count * 3);
+  const scrub = new THREE.Color("#6f8a4a");
+  const dryScrub = new THREE.Color("#a09a5e");
+  const rock = new THREE.Color("#a39b8f");
+  const rockHigh = new THREE.Color("#c4bdb1");
+  const sand = new THREE.Color("#d8c89a");
+  const tmp = new THREE.Color();
+  for (let iz = 0; iz < g.rows; iz++) {
+    for (let ix = 0; ix < g.cols; ix++) {
+      const i = iz * g.cols + ix;
+      const x = g.x0 + ix * g.spacing;
+      const z = g.z0 + iz * g.spacing;
+      const y = heightAt(x, z);
+      pos.setXYZ(i, x, y, z);
+      uv.setXY(i, x / uvScale, z / uvScale);
+      const slope = gridSlope(g, x, z);
+      const high = smoothstep(400, 1000, y);
+      const patch = fbm(x, z, 180, 16);
+      tmp.copy(scrub).lerp(dryScrub, 0.5 * fbm(x, z, 420, 15) + 0.4 * high);
+      // Limestone shows through on steep ground, more so higher up and in rocky patches.
+      const rockiness = smoothstep(0.28, 0.6, slope + 0.3 * high + 0.25 * (patch - 0.5));
+      tmp.lerp(high > 0.5 ? rockHigh : rock, rockiness);
+      if (y < SEA_LEVEL + 6) tmp.lerp(sand, smoothstep(SEA_LEVEL + 6, SEA_LEVEL + 1, y));
+      colors.set([tmp.r, tmp.g, tmp.b], i * 3);
+    }
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, map, roughness: 1, metalness: 0 }));
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mesh; animate: (dt: number) => void } {
+  const normals = waterNormalTexture();
+  normals.repeat.set(size / 45, size / 45);
+  const mat = new THREE.MeshStandardMaterial({
+    color: "#1c6ea6",
+    roughness: 0.18,
+    metalness: 0.0,
+    normalMap: normals,
+    normalScale: new THREE.Vector2(0.35, 0.35),
+    transparent: true,
+    opacity: 0.96,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(cx, SEA_LEVEL, cz);
+  return {
+    mesh,
+    animate: (dt) => {
+      normals.offset.x += dt * 0.004;
+      normals.offset.y += dt * 0.0025;
+    },
+  };
+}
+
+function roadMeshes(pts: Route["points"], closed: boolean): THREE.Mesh[] {
+  const asphalt = asphaltTexture();
+  return [
+    ribbon(pts, closed, ROAD_WIDTH + 2.2, 0.02, "#b3a483"),
+    ribbon(pts, closed, ROAD_WIDTH, 0.05, "#55585f", { map: asphalt }),
+    ribbon(pts, closed, ROAD_WIDTH - 0.5, 0.07, "#e8e6dc", { lineWidth: 0.16, offset: (ROAD_WIDTH - 0.5) / 2 }),
+    ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }),
+  ];
+}
+
+function cloudLayers(cx: number, cz: number): { meshes: THREE.Mesh[]; animate: (dt: number) => void } {
+  const meshes: THREE.Mesh[] = [];
+  const speeds: number[] = [];
+  for (const [alt, coverage, seed, rep, speed] of [
+    [700, 0.28, 61, 6, 0.0012],
+    [1600, 0.18, 62, 3, 0.0005],
+  ] as const) {
+    const tex = cloudTexture(coverage, seed);
+    tex.repeat.set(rep, rep);
+    const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0.85 });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(FAR_SIZE * 2, FAR_SIZE * 2), mat);
+    m.rotation.x = Math.PI / 2;
+    m.position.set(cx, alt, cz);
+    m.renderOrder = 1;
+    meshes.push(m);
+    speeds.push(speed);
+  }
+  return {
+    meshes,
+    animate: (dt) => meshes.forEach((m, i) => ((m.material as THREE.MeshLambertMaterial).map!.offset.x += dt * speeds[i])),
+  };
+}
+
+function buildProceduralWorld(route: Route): WorldStatics {
   const sampler = new RouteSampler(route);
   const pts = route.points;
   const index = new RouteIndex(pts);
@@ -172,21 +328,8 @@ export function buildWorld(route: Route): WorldStatics {
   }
 
   // Sea and lake.
-  const waterNormals = waterNormalTexture();
-  waterNormals.repeat.set(400, 400);
-  const seaMat = new THREE.MeshStandardMaterial({
-    color: "#1c6ea6",
-    roughness: 0.18,
-    metalness: 0.0,
-    normalMap: waterNormals,
-    normalScale: new THREE.Vector2(0.35, 0.35),
-    transparent: true,
-    opacity: 0.96,
-  });
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(FAR_SIZE, FAR_SIZE), seaMat);
-  sea.rotation.x = -Math.PI / 2;
-  sea.position.set(cx, SEA_LEVEL, cz);
-  group.add(sea);
+  const sea = seaMesh(FAR_SIZE, cx, cz);
+  group.add(sea.mesh);
   const lakeNormals = waterNormalTexture();
   lakeNormals.repeat.set(12, 12);
   const lakeMat = new THREE.MeshStandardMaterial({
@@ -202,38 +345,22 @@ export function buildWorld(route: Route): WorldStatics {
   water.position.set(lake.x, lake.y, lake.z);
   group.add(water);
 
-  // Road: shoulder, asphalt, edge lines and a dashed centre line.
-  const asphalt = asphaltTexture();
-  group.add(ribbon(pts, route.closed, ROAD_WIDTH + 2.2, 0.02, "#b3a483"));
-  group.add(ribbon(pts, route.closed, ROAD_WIDTH, 0.05, "#55585f", { map: asphalt }));
-  group.add(ribbon(pts, route.closed, ROAD_WIDTH - 0.5, 0.07, "#e8e6dc", { lineWidth: 0.16, offset: (ROAD_WIDTH - 0.5) / 2 }));
-  group.add(ribbon(pts, route.closed, 0.16, 0.08, "#f2d75c", { dashed: true }));
+  group.add(...roadMeshes(pts, route.closed));
+  const clouds = cloudLayers(cx, cz);
+  group.add(...clouds.meshes);
 
-  // Clouds: two drifting layers with different scale for parallax.
-  const clouds: THREE.Mesh[] = [];
-  for (const [alt, coverage, seed, rep] of [
-    [700, 0.28, 61, 6],
-    [1600, 0.18, 62, 3],
-  ] as const) {
-    const tex = cloudTexture(coverage, seed);
-    tex.repeat.set(rep, rep);
-    const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0.85 });
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(FAR_SIZE * 2, FAR_SIZE * 2), mat);
-    m.rotation.x = Math.PI / 2;
-    m.position.set(cx, alt, cz);
-    m.renderOrder = 1;
-    clouds.push(m);
-    group.add(m);
-  }
-
-  group.add(vegetation(index, heightAt, lake, coastX, cx, cz, sampler));
+  const landInfo: Land = {
+    height: heightAt,
+    water: (x, z) => Math.hypot(x - lake.x, z - lake.z) < LAKE_RADIUS + 50 || x < coastX(z) + 120,
+    slope: () => 0,
+  };
+  const region = { x0: cx - TERRAIN_SIZE * 0.45, z0: cz - TERRAIN_SIZE * 0.45, w: TERRAIN_SIZE * 0.9, h: TERRAIN_SIZE * 0.9 };
+  group.add(vegetation(index, heightAt, landInfo, region, sampler, false));
 
   const animate = (dt: number) => {
-    waterNormals.offset.x += dt * 0.004;
-    waterNormals.offset.y += dt * 0.0025;
+    sea.animate(dt);
     lakeNormals.offset.x += dt * 0.01;
-    clouds[0].material instanceof THREE.MeshLambertMaterial && (clouds[0].material.map!.offset.x += dt * 0.0012);
-    clouds[1].material instanceof THREE.MeshLambertMaterial && (clouds[1].material.map!.offset.x += dt * 0.0005);
+    clouds.animate(dt);
   };
 
   return { group, heightAt, animate };
@@ -243,11 +370,10 @@ export function buildWorld(route: Route): WorldStatics {
 function vegetation(
   index: RouteIndex,
   heightAt: (x: number, z: number) => number,
-  lake: { x: number; z: number },
-  coastX: (z: number) => number,
-  cx: number,
-  cz: number,
+  land: Land,
+  region: { x0: number; z0: number; w: number; h: number },
   sampler: RouteSampler,
+  mediterranean: boolean,
 ): THREE.Group {
   const g = new THREE.Group();
   const rand = mulberry32(42);
@@ -285,22 +411,30 @@ function vegetation(
   bush.translate(0, 0.7, 0);
   const rock = new THREE.DodecahedronGeometry(1, 0);
 
-  const kinds = {
-    pine: { geos: [c1, c2], count: 1500, palette: ["#2f7d3a", "#3c8f3f", "#2b6b45", "#4a8f3e"] },
-    round: { geos: roundCrown, count: 900, palette: ["#3e8a3c", "#4f8f44", "#467a2f", "#5a9a44"] },
-    cypress: { geos: [cypress], count: 350, palette: ["#24502a", "#2b5a30", "#1f4524"] },
-  };
-  const bushes = { count: 1800, palette: ["#5f8233", "#75903f", "#6a7f34"] };
-  const rocks = { count: 400 };
+  const kinds = mediterranean
+    ? {
+        pine: { geos: [c1, c2], count: 3000, palette: ["#355f33", "#3f6f38", "#2f5530", "#4a7a3e"] },
+        round: { geos: roundCrown, count: 350, palette: ["#5f7f36", "#6b8a3e", "#55702c"] },
+        cypress: { geos: [cypress], count: 150, palette: ["#24502a", "#2b5a30", "#1f4524"] },
+      }
+    : {
+        pine: { geos: [c1, c2], count: 1500, palette: ["#2f7d3a", "#3c8f3f", "#2b6b45", "#4a8f3e"] },
+        round: { geos: roundCrown, count: 900, palette: ["#3e8a3c", "#4f8f44", "#467a2f", "#5a9a44"] },
+        cypress: { geos: [cypress], count: 350, palette: ["#24502a", "#2b5a30", "#1f4524"] },
+      };
+  const bushes = { count: mediterranean ? 3500 : 1800, palette: mediterranean ? ["#7f8f3a", "#8d9a48", "#6f7f30"] : ["#5f8233", "#75903f", "#6a7f34"] };
+  const rocks = { count: mediterranean ? 1500 : 400 };
 
   const canPlace = (x: number, z: number, minRoad: number): { ok: boolean; near: number } => {
-    if (Math.hypot(x - lake.x, z - lake.z) < LAKE_RADIUS + 50) return { ok: false, near: 0 };
-    if (x < coastX(z) + 120) return { ok: false, near: 0 };
+    if (land.water(x, z)) return { ok: false, near: 0 };
     const near = index.nearest(x, z, 240).d;
     if (near < ROAD_WIDTH / 2 + minRoad) return { ok: false, near };
     return { ok: true, near };
   };
-  const spot = () => [cx + (rand() - 0.5) * TERRAIN_SIZE * 0.9, cz + (rand() - 0.5) * TERRAIN_SIZE * 0.9] as const;
+  const spot = () => [region.x0 + rand() * region.w, region.z0 + rand() * region.h] as const;
+  // Real terrain: nothing on cliffs, thinning out with altitude.
+  const terrainOk = (x: number, z: number, y: number, maxSlope: number) =>
+    !mediterranean || (land.slope(x, z) < maxSlope && rand() > smoothstep(450, 950, y));
 
   const place = (geos: THREE.BufferGeometry[], count: number, palette: string[], withTrunk: boolean, density: (near: number, x: number, z: number) => number, sizeRange: [number, number], minRoad: number, mat = leafMat, shadows = true) => {
     const meshes = geos.map((geo) => new THREE.InstancedMesh(geo, mat, count));
@@ -311,7 +445,9 @@ function vegetation(
       const { ok, near } = canPlace(x, z, minRoad);
       if (!ok || rand() > density(near, x, z)) continue;
       const y = heightAt(x, z);
-      if (y > sampler.maxY + 45 || y < SEA_LEVEL + 3) continue;
+      if (y < SEA_LEVEL + 3) continue;
+      if (!mediterranean && y > sampler.maxY + 45) continue;
+      if (!terrainOk(x, z, y, geos === kinds.pine.geos ? 0.7 : 0.55)) continue;
       const s = sizeRange[0] + rand() * (sizeRange[1] - sizeRange[0]);
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * Math.PI * 2);
       m.compose(new THREE.Vector3(x, y - 0.1, z), q, new THREE.Vector3(s, s * (0.85 + rand() * 0.35), s));
@@ -334,12 +470,13 @@ function vegetation(
     }
   };
 
-  const forest = (near: number, x: number, z: number) => (0.2 + 0.8 * (1 - smoothstep(30, 500, near))) * (fbm(x, z, 300, 5) > 0.42 ? 1 : 0.1);
+  const forest = (near: number, x: number, z: number) =>
+    mediterranean ? (fbm(x, z, 350, 5) > 0.4 ? 0.9 : 0.15) : (0.2 + 0.8 * (1 - smoothstep(30, 500, near))) * (fbm(x, z, 300, 5) > 0.42 ? 1 : 0.1);
   place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, true, forest, [0.7, 1.4], 5);
   place(kinds.round.geos, kinds.round.count, kinds.round.palette, true, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
   place(kinds.cypress.geos, kinds.cypress.count, kinds.cypress.palette, true, (n) => 0.9 * (1 - smoothstep(12, 120, n)), [0.55, 1.0], 3);
   place([bush], bushes.count, bushes.palette, false, (n) => 0.9 * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, leafMat, false);
-  place([rock], rocks.count, ["#8d8880", "#7d7870", "#9a948a"], false, (n) => 0.8 * (1 - smoothstep(6, 160, n)), [0.3, 1.0], 1.8, rockMat, false);
+  place([rock], rocks.count, ["#8d8880", "#7d7870", "#9a948a"], false, (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.3, mediterranean ? 2.2 : 1.0], 1.8, rockMat, false);
   return g;
 }
 

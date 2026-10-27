@@ -96,6 +96,8 @@ export interface Route {
   name: string;
   points: RoutePoint[];
   closed: boolean;
+  /** Id of a real-world terrain under /worlds/, or null for a procedural world. */
+  world: string | null;
 }
 
 export interface StartupInfo {
@@ -103,4 +105,5 @@ export interface StartupInfo {
   sim: boolean;
   raw_logging: boolean;
   auto_sim: boolean;
+  route: string;
 }

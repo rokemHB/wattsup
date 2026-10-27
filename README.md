@@ -141,8 +141,43 @@ While riding, type `u` / `d` (shift), `erg <W>`, `sim`, `grade <%>` or `q`.
 | `--no-sim` | `WATTSUP_NO_SIM=1` | `--no-sim` | Hide the simulated devices |
 | `--raw` | `WATTSUP_RAW=1` | `--raw` | Log every Bluetooth packet as hex |
 | `--auto-sim` | `WATTSUP_AUTO_SIM=1` | | Connect the simulated trainer, strap and controller at startup |
+| `--route <id>` | `WATTSUP_ROUTE=<id>` | | Built-in route to ride: `sa-calobra` (default) or `lakeside` |
 
 The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
+
+## Worlds and routes
+
+Two routes ship with the app. *Lakeside loop* is a procedural 4.3 km test
+course. *Sa Calobra* is the real road from the Port de Sa Calobra up to the
+Coll dels Reis on Mallorca, 10.2 km at 6.7 % average, built from open data:
+
+- road geometry from OpenStreetMap (© OpenStreetMap contributors, ODbL),
+- elevation from the Copernicus DEM GLO-30 (© ESA), a 30 m surface model.
+
+`tools/build_route.py` turns those into a route file for the Rust core
+(`crates/core/routes/<id>.json`, a point every 5 m with elevation) and two
+heightmaps for the renderer (`ui/public/worlds/<id>-near.bin` at 15 m around
+the route, `<id>-far.bin` at 150 m over 36 km). To rebuild Sa Calobra or make
+another road:
+
+```sh
+python -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
+# the road: an Overpass query with `out geom;`, e.g. all ways tagged ref=Ma-2141 in a bounding box
+curl -A 'WattsUp route builder' -o sa_calobra.json -X POST https://overpass-api.de/api/interpreter \
+  --data-urlencode 'data=[out:json];way["highway"]["ref"="Ma-2141"](39.80,2.74,39.90,2.86);out geom;'
+# the elevation tile covering it (1° x 1°, named after its south-west corner)
+curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N39_00_E002_00_DEM/Copernicus_DSM_COG_10_N39_00_E002_00_DEM.tif
+.venv/bin/python tools/build_route.py --osm sa_calobra.json --dem dem.tif --id sa-calobra --name "Sa Calobra" \
+  --cut-at-top --smooth 15 --min-grade -6
+```
+
+The script chains the OSM way segments into one path from the lowest to the
+highest end (`--cut-at-top` stops at the summit), resamples it every 5 m,
+reads the elevation from the tile, smooths it and caps the grade: a 30 m
+surface model is tens of metres off on a cliff road with stacked hairpins,
+so the profile is plausible rather than exact. A 5 m terrain model (Spain's
+IGN publishes one) would fix that; the pipeline does not care about the
+source resolution.
 
 ## Tests
 
@@ -155,8 +190,9 @@ npx vitest run
 ```
 
 The Rust tests cover the physics, gearing and resistance maths, the byte-level
-codecs, the session's command timing and an end-to-end ride on the simulated
-devices. The UI tests cover the formatting helpers. CI runs all of this on
+codecs, the session's command timing, automatic shifting, the routes and an
+end-to-end ride on the simulated devices. The UI tests cover the formatting
+helpers and the route geometry. CI runs all of this on
 Ubuntu, Windows and macOS and builds the desktop bundles for each.
 
 ## License

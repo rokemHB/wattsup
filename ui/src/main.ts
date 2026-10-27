@@ -3,6 +3,7 @@ import { api, insideTauri } from "./api";
 import { describeCommand, distance, duration, isTypingTarget, KIND_LABEL, num, shiftForKey, stateLabel } from "./format";
 import { Hud } from "./hud";
 import type { ControllerButton, DeviceKind, DeviceStatus, DiscoveredDevice, EngineSnapshot, ScanResult } from "./types";
+import { loadWorld } from "./world/terrain";
 import { World } from "./world/world";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -225,7 +226,16 @@ function toggleDebug() {
 async function startWorld() {
   const route = await api.route();
   if (!route) return;
-  world = new World($<HTMLCanvasElement>("world"), route);
+  let terrain;
+  if (route.world) {
+    try {
+      terrain = await loadWorld(route.world);
+      $("attribution").textContent = terrain.attribution;
+    } catch (e) {
+      showError(`terrain for ${route.world} not loaded (${e}); riding a procedural world`);
+    }
+  }
+  world = new World($<HTMLCanvasElement>("world"), route, terrain);
   hud = new Hud(world.sampler);
   world.onFrame = () => hud?.frame();
   $("hud").hidden = false;
