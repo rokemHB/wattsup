@@ -24,6 +24,8 @@ export interface WorldStatics {
   group: THREE.Group;
   /** Terrain height at a ground position. */
   heightAt: (x: number, z: number) => number;
+  /** Whether a ground position lies inside a road tunnel, where the terrain above does not count. */
+  inTunnel?: (x: number, z: number) => boolean;
   /** Advances water and clouds. */
   animate: (dt: number) => void;
 }
@@ -121,11 +123,7 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   const corridor = (x: number, z: number, h: number): number => {
     if (x < box.x0 || x > box.x1 || z < box.z0 || z > box.z1) return h;
     const n = index.nearest(x, z, CORRIDOR_REACH);
-    if (n.d > CORRIDOR_REACH) return h;
-    const bed = n.y - 0.35;
-    if (n.d <= SHOULDER) return bed;
-    const out = n.d - SHOULDER;
-    return Math.min(Math.max(h, bed - out * FILL_SLOPE), bed + out * CUT_SLOPE);
+    return corridorHeight(h, n.d, n.y);
   };
   const heightAt = (x: number, z: number): number => corridor(x, z, raw(x, z));
   // Under the corridor strip the coarse grid is tucked away so its 10 m triangles cannot poke through.
@@ -208,6 +206,24 @@ export const CORRIDOR_REACH = 46;
 /** Rise over run of the cut bank above the road and the fill bank below it. */
 export const CUT_SLOPE = 2.4;
 export const FILL_SLOPE = 0.9;
+/** Over the last metres of the reach the banks blend back into the raw ground, so a cliff above or below the road meets the corridor without a wall. */
+export const CORRIDOR_BLEND_M = 14;
+
+/**
+ * The corridor field at distance `d` from the road (height `roadY` there):
+ * the road bed inside the shoulder, the ground kept between a fill slope
+ * dropping from the road and a cut slope rising from it outside, fading to
+ * the raw ground `h` at the reach.
+ */
+export function corridorHeight(h: number, d: number, roadY: number): number {
+  if (d > CORRIDOR_REACH) return h;
+  const bed = roadY - 0.35;
+  if (d <= SHOULDER) return bed;
+  const out = d - SHOULDER;
+  const shaped = Math.min(Math.max(h, bed - out * FILL_SLOPE), bed + out * CUT_SLOPE);
+  return lerp(shaped, h, smoothstep(CORRIDOR_REACH - CORRIDOR_BLEND_M, CORRIDOR_REACH, d));
+}
+
 /** Lateral offsets of the corridor strip's cross-section, shoulder outwards. */
 const CORRIDOR_OFFSETS = [0, SHOULDER, SHOULDER + 1.5, SHOULDER + 3.5, SHOULDER + 6.5, SHOULDER + 11, 24, 33, CORRIDOR_REACH];
 
@@ -422,6 +438,9 @@ export function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amou
 }
 
 /** A rectangular block of a heightmap grid with one photo stretched over it. */
+/** Half the inner width of a tunnel tube. */
+export const TUNNEL_HALF = REAL_ROAD_WIDTH / 2 + 1.2;
+
 export function gridBlockMesh(
   g: Grid,
   heightAt: (x: number, z: number) => number,
@@ -430,6 +449,8 @@ export function gridBlockMesh(
   map: THREE.Texture,
   detail: Detail | null,
   detailAmount = 1,
+  /** Vertices to leave out: every triangle touching one is dropped (the ground over a tunnel tube). */
+  skip?: (x: number, z: number) => boolean,
 ): THREE.Mesh {
   const [r0, r1] = rows;
   const [c0, c1] = cols;
@@ -438,6 +459,7 @@ export function gridBlockMesh(
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const uv = geo.attributes.uv as THREE.BufferAttribute;
+  const skipped = skip ? new Uint8Array(pos.count) : null;
   let i = 0;
   for (let iz = r0; iz <= r1; iz++) {
     for (let ix = c0; ix <= c1; ix++) {
@@ -446,8 +468,17 @@ export function gridBlockMesh(
       pos.setXYZ(i, x, heightAt(x, z), z);
       // Image row 0 is the north edge, which is the first grid row.
       uv.setXY(i, (ix - c0) / (c1 - c0), (iz - r0) / (r1 - r0));
+      if (skipped && skip!(x, z)) skipped[i] = 1;
       i++;
     }
+  }
+  if (skipped?.some((v) => v)) {
+    const old = geo.index!.array;
+    const kept: number[] = [];
+    for (let k = 0; k < old.length; k += 3) {
+      if (!skipped[old[k]] && !skipped[old[k + 1]] && !skipped[old[k + 2]]) kept.push(old[k], old[k + 1], old[k + 2]);
+    }
+    geo.setIndex(kept);
   }
   geo.computeVertexNormals();
   // The photo already carries the sun's shading; lit again it blows out, so reflect less.
@@ -526,6 +557,118 @@ export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_W
  * Low stone parapets along the road wherever the ground falls away beside it,
  * the way mountain roads are built. One box strip per continuous stretch.
  */
+/**
+ * A tunnel: a concrete tube around the road, a few metres past each portal,
+ * with a headwall at both ends to hide where the hillside meets the road.
+ */
+export function tunnelMesh(pts: Route["points"], stone: THREE.Texture): THREE.Group {
+  const n = pts.length;
+  const group = new THREE.Group();
+  if (n < 2) return group;
+  const half = TUNNEL_HALF;
+  const wallH = 4.4;
+  const archH = 1.4;
+  // Extend the run past both ends along its direction.
+  const ext = (a: Route["points"][number], b: Route["points"][number], m: number) => {
+    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    return { distance_m: a.distance_m - m, x: a.x + ((a.x - b.x) / l) * m, y: a.y + ((a.y - b.y) / l) * m, z: a.z + ((a.z - b.z) / l) * m };
+  };
+  const run = [ext(pts[0], pts[1], 6), ...pts, ext(pts[n - 1], pts[n - 2], 6)];
+  // Cross-section, a closed loop from under the road's middle round the walls
+  // and roof and back: the floor keeps the sea and the sunk far layer from
+  // showing beside the road.
+  const profile: [number, number][] = [
+    [0, -0.15],
+    [-half, -0.15],
+    [-half, wallH],
+    [-half * 0.7, wallH + archH * 0.7],
+    [0, wallH + archH],
+    [half * 0.7, wallH + archH * 0.7],
+    [half, wallH],
+    [half, -0.15],
+    [0, -0.15],
+  ];
+  const across = profile.length;
+  const verts: number[] = [];
+  const uvs: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < run.length; i++) {
+    const a = run[Math.max(i - 1, 0)];
+    const b = run[Math.min(i + 1, run.length - 1)];
+    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    const nx = -(b.z - a.z) / l;
+    const nz = (b.x - a.x) / l;
+    const p = run[i];
+    profile.forEach(([o, h], k) => {
+      verts.push(p.x + nx * o, p.y + h, p.z + nz * o);
+      uvs.push(p.distance_m / 4, k / (across - 1));
+    });
+  }
+  for (let i = 0; i < run.length - 1; i++) {
+    for (let k = 0; k < across - 1; k++) {
+      const a = i * across + k;
+      const b = (i + 1) * across + k;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  // Rough rock, lit only by the lamps: a dim self-light stands in for them, and fog is kept out.
+  const rock = stone.clone();
+  rock.needsUpdate = true;
+  const tube = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: "#4a4742", map: rock, emissive: "#0f0e0b", roughness: 1, side: THREE.DoubleSide, fog: false }));
+  tube.receiveShadow = true;
+  group.add(tube);
+  // Lamps along the roof every 25 m, with a little light on the road under each.
+  const lampGeo = new THREE.BoxGeometry(0.5, 0.15, 1.2);
+  const lampMat = new THREE.MeshBasicMaterial({ color: "#fff2c8" });
+  for (let d = 12; d < run[run.length - 1].distance_m - run[0].distance_m - 8; d += 25) {
+    let i = 0;
+    while (i < run.length - 2 && run[i + 1].distance_m - run[0].distance_m < d) i++;
+    const p = run[i];
+    const q = run[i + 1];
+    const lamp = new THREE.Mesh(lampGeo, lampMat);
+    lamp.position.set(p.x, p.y + wallH + archH - 0.3, p.z);
+    lamp.rotation.y = Math.atan2(q.x - p.x, q.z - p.z);
+    group.add(lamp);
+    const light = new THREE.PointLight("#ffe9b0", 2.5, 22, 2);
+    light.position.set(p.x, p.y + wallH + archH - 0.6, p.z);
+    group.add(light);
+  }
+  // Headwalls: a wide slab of stone around each portal mouth.
+  for (const [p, q] of [
+    [run[0], run[1]],
+    [run[run.length - 1], run[run.length - 2]],
+  ]) {
+    const l = Math.hypot(q.x - p.x, q.z - p.z) || 1;
+    const nx = -(q.z - p.z) / l;
+    const nz = (q.x - p.x) / l;
+    const dx = (q.x - p.x) / l;
+    const dz = (q.z - p.z) / l;
+    // Two piers and a lintel around the opening, 1.2 m thick, rooted 1.5 m into the ground.
+    const pier = 4.5;
+    const top = wallH + archH;
+    const lintel = 3.0;
+    const mat = new THREE.MeshStandardMaterial({ color: "#8d8577", map: stone, roughness: 1 });
+    const yaw = Math.atan2(nx, nz) + Math.PI / 2;
+    const place = (w: number, h: number, across: number, y: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 1.2), mat);
+      m.position.set(p.x + dx * 0.6 + nx * across, y, p.z + dz * 0.6 + nz * across);
+      m.rotation.y = yaw;
+      m.castShadow = true;
+      m.receiveShadow = true;
+      group.add(m);
+    };
+    place(pier, top + lintel + 1.5, -(half + pier / 2), p.y + (top + lintel + 1.5) / 2 - 1.5);
+    place(pier, top + lintel + 1.5, half + pier / 2, p.y + (top + lintel + 1.5) / 2 - 1.5);
+    place(half * 2, lintel, 0, p.y + top + lintel / 2);
+  }
+  return group;
+}
+
 export function parapets(pts: Route["points"], heightAt: (x: number, z: number) => number, width: number, stone: THREE.Texture): THREE.Mesh {
   const n = pts.length;
   const offset = width / 2 + 0.75;

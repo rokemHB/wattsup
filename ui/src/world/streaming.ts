@@ -6,11 +6,12 @@ import * as THREE from "three";
 import { api } from "../api";
 import { NetworkIndex, type RoadNetwork } from "./network";
 import {
+  CORRIDOR_BLEND_M,
   CORRIDOR_REACH,
+  corridorHeight,
   corridorMesh,
   CUT_SLOPE,
   type Detail,
-  FILL_SLOPE,
   gridBlockMesh,
   imageTexture,
   type Land,
@@ -21,6 +22,8 @@ import {
   SEA_LEVEL,
   SHOULDER,
   smoothstep,
+  TUNNEL_HALF,
+  tunnelMesh,
   vegetation,
 } from "./scene";
 import { faceCamera, signPost, type SignPost } from "./signs";
@@ -98,6 +101,12 @@ export class TileManager {
   private index: NetworkIndex;
   private asphalt = asphaltTexture();
   private farBase: Float32Array | null = null;
+  /** 1 where a road point lies in a tunnel (the camera stays in the tube there). */
+  private inTunnel: Uint8Array;
+  /** 1 where the ground is left as it is: inside a tunnel, but not its first and last 20 m, so the hillside is cut open to the portal. */
+  private uncut: Uint8Array;
+  /** 1 where the ground mesh gets a hole for the tube: the tunnel and the last metres of road into each portal. */
+  private tubeZone: Uint8Array;
 
   constructor(
     private scene: THREE.Group,
@@ -109,6 +118,21 @@ export class TileManager {
   ) {
     this.frame = new Frame(meta.origin.lat, meta.origin.lon);
     this.index = new NetworkIndex(net);
+    this.inTunnel = new Uint8Array(net.points);
+    this.uncut = new Uint8Array(net.points);
+    this.tubeZone = new Uint8Array(net.points);
+    for (const e of net.edges) {
+      if (!e.tunnel) continue;
+      this.inTunnel.fill(1, e.start, e.start + e.count);
+      this.tubeZone.fill(1, e.start, e.start + e.count);
+      if (e.count > 4) this.uncut.fill(1, e.start + 2, e.start + e.count - 2);
+      // The last 20 m of the roads leading to the portals count too: their cut banks would cross the tube's mouth.
+      for (const f of net.edges) {
+        if (f.tunnel) continue;
+        if (f.a === e.a || f.a === e.b) this.tubeZone.fill(1, f.start, Math.min(f.start + 3, f.start + f.count));
+        if (f.b === e.a || f.b === e.b) this.tubeZone.fill(1, Math.max(f.start, f.start + f.count - 3), f.start + f.count);
+      }
+    }
     if (farMesh) this.farBase = Float32Array.from((farMesh.geometry.attributes.position as THREE.BufferAttribute).array);
   }
 
@@ -116,6 +140,12 @@ export class TileManager {
   heightAt = (x: number, z: number): number => {
     const raw = this.rawAt(x, z);
     return this.corridor(x, z, raw);
+  };
+
+  /** Is this ground position inside a tunnel (over its road, within the tube)? The camera must not climb out through the mountain there. */
+  tunnelAt = (x: number, z: number): boolean => {
+    const n = this.index.nearest(x, z, 12);
+    return n.i >= 0 && n.d < 12 && this.inTunnel[n.i] === 1;
   };
 
   private rawAt(x: number, z: number): number {
@@ -131,11 +161,8 @@ export class TileManager {
 
   private corridor(x: number, z: number, h: number): number {
     const n = this.index.nearest(x, z, CORRIDOR_REACH);
-    if (n.i < 0 || n.d > CORRIDOR_REACH) return h;
-    const bed = n.y - 0.35;
-    if (n.d <= SHOULDER) return bed;
-    const out = n.d - SHOULDER;
-    return Math.min(Math.max(h, bed - out * FILL_SLOPE), bed + out * CUT_SLOPE);
+    if (n.i < 0 || this.uncut[n.i]) return h;
+    return corridorHeight(h, n.d, n.y);
   }
 
   /** Call every frame with the rider's position and the camera position. */
@@ -250,7 +277,9 @@ export class TileManager {
     const lon0 = t.j * dlon;
     const lon1 = (t.j + 1) * dlon;
     const url = dem.replace("{lat0}", lat0.toFixed(5)).replace("{lat1}", lat1.toFixed(5)).replace("{lon0}", lon0.toFixed(5)).replace("{lon1}", lon1.toFixed(5));
+    const t0 = performance.now();
     const [tiff, photo] = await Promise.all([api.fetchCached(url), this.fetchOrtho(lat0, lat1, lon0, lon1, ortho, orthoZoom)]);
+    const t1 = performance.now();
     const geo = parseGeoTiff(tiff);
     // Every other sample: 10 m is plenty for the mesh, the corridor adds the fine shape near the road.
     const step = 2;
@@ -271,14 +300,21 @@ export class TileManager {
     const tucked = (x: number, z: number) => {
       const h = this.rawAt(x, z);
       const n = this.index.nearest(x, z, CORRIDOR_REACH);
-      if (n.i < 0 || n.d > CORRIDOR_REACH) return h;
+      if (n.i < 0 || n.d > CORRIDOR_REACH || this.uncut[n.i]) return h;
       const bed = n.y - 0.35;
       const top = n.d <= SHOULDER ? bed : bed + (n.d - SHOULDER) * CUT_SLOPE;
       const depth = 1.2 + 2.5 * Math.min(1.5, gridSlope(grid, x, z));
-      return Math.min(h, top) - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
+      // The same fade as the corridor field, so the grid never steps where the strip ends.
+      const t = smoothstep(CORRIDOR_REACH - CORRIDOR_BLEND_M, CORRIDOR_REACH, n.d);
+      return lerp(Math.min(h, top), h, t) - depth * (1 - t);
     };
     const tex = imageTexture(photo.bitmap);
-    group.add(gridBlockMesh(grid, tucked, [0, rows - 1], [0, cols - 1], tex, this.detail));
+    // No ground over a tunnel tube: the coarse surface would otherwise cross the tube where the mountain comes down to the portal.
+    const overTunnel = (x: number, z: number) => {
+      const n = this.index.nearest(x, z, TUNNEL_HALF + 1);
+      return n.i >= 0 && n.d < TUNNEL_HALF + 1 && this.tubeZone[n.i] === 1;
+    };
+    group.add(gridBlockMesh(grid, tucked, [0, rows - 1], [0, cols - 1], tex, this.detail, 1, overTunnel));
 
     // Roads in this tile: the stretches of each edge inside it, plus one point beyond for continuity.
     const inside = (x: number, z: number) => x >= t.x0 && x < t.x1 && z >= t.z0 && z < t.z1;
@@ -291,8 +327,12 @@ export class TileManager {
       const flush = () => {
         if (run.length >= 2) {
           group.add(...roadMeshes(run, false, REAL_ROAD_WIDTH, true, this.asphalt));
-          group.add(corridorMesh(run, this.index, this.heightAt, null, this.detail.grain, photo.colorAt, this.detail, ei, e.start + runStart));
-          group.add(parapets(run, this.heightAt, REAL_ROAD_WIDTH, this.detail.rock));
+          if (e.tunnel) {
+            group.add(tunnelMesh(run, this.detail.rock));
+          } else {
+            group.add(corridorMesh(run, this.index, this.heightAt, null, this.detail.grain, photo.colorAt, this.detail, ei, e.start + runStart));
+            group.add(parapets(run, this.heightAt, REAL_ROAD_WIDTH, this.detail.rock));
+          }
         }
         run = [];
       };
@@ -340,6 +380,7 @@ export class TileManager {
     this.scene.add(group);
     this.sinkFar(t, true);
     t.state = "ready";
+    console.info(`tile ${t.key}: fetched in ${(t1 - t0).toFixed(0)} ms, built in ${(performance.now() - t1).toFixed(0)} ms`);
   }
 
   /** Bearing in degrees (x east, z south) of an edge leaving `node`. */

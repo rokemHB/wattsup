@@ -146,6 +146,7 @@ export class World {
     return {
       group,
       heightAt: tiles.heightAt,
+      inTunnel: tiles.tunnelAt,
       animate: (dt) => {
         sea.animate(dt);
         clouds.animate(dt);
@@ -209,12 +210,16 @@ export class World {
 
   /** Raises `pos` until it is above the ground and sees `eye` without terrain in between. */
   private clearTerrain(pos: THREE.Vector3, eye: THREE.Vector3) {
+    const inTunnel = this.statics.inTunnel ?? (() => false);
+    // Inside a tunnel the mountain above is not in the way: the camera stays in the tube.
+    if (inTunnel(pos.x, pos.z)) return;
     for (let pass = 0; pass < 3; pass++) {
       let lift = Math.max(0, this.statics.heightAt(pos.x, pos.z) + 1.2 - pos.y);
       for (let t = 0.12; t < 1; t += 0.08) {
         const px = eye.x + (pos.x - eye.x) * t;
         const pz = eye.z + (pos.z - eye.z) * t;
         const py = eye.y + (pos.y - eye.y) * t;
+        if (inTunnel(px, pz)) continue;
         const need = this.statics.heightAt(px, pz) + 1.0 - py;
         // A blockage at fraction t needs the camera end raised by need / t.
         if (need > 0) lift = Math.max(lift, need / t);
