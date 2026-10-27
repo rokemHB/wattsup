@@ -118,8 +118,10 @@ npm run tauri dev          # hot-reloading dev build
 npm run tauri build        # bundles in target/release/bundle/
 ```
 
-Flags go after a double `--`, e.g. `npm run tauri dev -- -- --sim-only`, or
-use the environment variables below.
+The easiest way to pass startup flags in development is the environment
+variables below, e.g. `WATTSUP_SIM_ONLY=1 WATTSUP_AUTO_SIM=1 npm run tauri dev`.
+(The Tauri CLI only forwards arguments after a *second* `--`, so the flag form
+is `npm run tauri dev -- -- -- --sim-only`.)
 
 ### Terminal tool
 
