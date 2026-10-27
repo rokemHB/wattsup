@@ -37,6 +37,9 @@
       <div class="menu-right">
         <h2>Routes</h2>
         <div id="route-list" class="route-list"></div>
+        <h2 class="spaced">Workouts</h2>
+        <div id="workout-list" class="route-list"></div>
+        <button id="menu-new-workout" class="small">New workout</button>
       </div>
     </section>
 
@@ -50,6 +53,20 @@
         <div class="field"><span>Jersey accent</span><div id="rider-accents" class="choices"></div></div>
         <div class="field"><span>Bike</span><div id="rider-bikes" class="choices"></div></div>
         <p class="hint">The rider behind this panel shows your choices live. Save keeps them; Back discards them.</p>
+      </div>
+    </section>
+
+    <!-- Workout editor -->
+    <section id="screen-workout" class="screen panel" hidden>
+      <header class="panel-head"><h2>Workout</h2><span class="row"><button id="workout-start" class="primary">Start</button><button id="workout-save">Save</button><button id="workout-delete" class="small">Delete</button><button class="back" data-back>Back</button></span></header>
+      <div class="panel-body">
+        <label class="field">Name <input id="workout-name" type="text" maxlength="40" /></label>
+        <div class="field"><span>Preset</span><select id="workout-preset"><option value="">Load a preset…</option></select><span class="hint">at FTP</span><input id="workout-ftp" type="number" min="50" max="600" step="5" /><span class="hint">W</span></div>
+        <div class="field"><span>Ride on</span><select id="workout-route"></select></div>
+        <div id="workout-steps" class="steps"></div>
+        <div class="row"><button id="workout-add" class="small">Add step</button><span id="workout-summary" class="hint"></span></div>
+        <canvas id="workout-preview" class="workout-preview"></canvas>
+        <p class="hint">ERG mode: the trainer holds each step's watts whatever you do. The clock only runs while you pedal.</p>
       </div>
     </section>
 
@@ -80,6 +97,7 @@
         <h2>Paused</h2>
         <nav class="menu-nav">
           <button id="pause-resume" class="primary">Resume</button>
+          <button id="pause-end-workout" hidden>End workout</button>
           <button id="pause-restart">Restart ride</button>
           <button id="pause-settings">Settings</button>
           <button id="pause-menu">Main menu</button>
@@ -112,6 +130,10 @@
       </div>
       <div class="hud-route">
         <b id="hud-route-name"></b> · lap <span id="hud-lap">1</span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+      </div>
+      <div id="hud-workout" class="hud-workout" hidden>
+        <div class="hud-workout-text"><b id="hud-workout-watts">250 W</b><span id="hud-workout-step">interval 1 / 8</span><span id="hud-workout-left">4:32 left</span><span id="hud-workout-next">next 120 W</span><span id="hud-workout-paused" class="paused" hidden>pedal to start</span></div>
+        <canvas id="hud-workout-bar"></canvas>
       </div>
       <div class="hud-bottom">
         <canvas id="minimap" class="minimap"></canvas>

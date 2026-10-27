@@ -124,6 +124,45 @@ impl Default for AutoShift {
     }
 }
 
+/// One step of an ERG workout: hold `watts` for `seconds`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkoutStep {
+    pub watts: f64,
+    pub seconds: f64,
+}
+
+/// A structured ERG workout: the trainer holds each step's watts in turn.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Workout {
+    pub name: String,
+    pub steps: Vec<WorkoutStep>,
+}
+
+impl Workout {
+    pub fn total_seconds(&self) -> f64 {
+        self.steps.iter().map(|s| s.seconds).sum()
+    }
+}
+
+/// Where a running workout stands.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkoutSnapshot {
+    pub name: String,
+    /// Zero-based index of the current step.
+    pub step: usize,
+    pub steps: usize,
+    pub step_watts: f64,
+    pub step_seconds: f64,
+    pub step_elapsed_s: f64,
+    pub total_seconds: f64,
+    pub elapsed_s: f64,
+    /// Watts of the step after this one, if any.
+    pub next_watts: Option<f64>,
+    /// The workout clock only runs while pedalling.
+    pub paused: bool,
+    pub done: bool,
+}
+
 pub const MIN_TARGET_CADENCE: f64 = 50.0;
 pub const MAX_TARGET_CADENCE: f64 = 130.0;
 
@@ -180,6 +219,7 @@ pub struct SessionSnapshot {
     pub lap: u32,
     /// The end of an open route has been reached.
     pub finished: bool,
+    pub workout: Option<WorkoutSnapshot>,
     /// Pedal power the virtual road asks for at the current cadence, gear and
     /// grade. In SIM mode the trainer should make the rider produce about this
     /// much; the gap to `power_w` shows how far the [`TrainerProfile`] is off.
@@ -212,6 +252,9 @@ pub struct RideSession {
     auto_shift: AutoShift,
     /// Clock reading when the current ride started; `elapsed_s` counts from here.
     ride_start_s: f64,
+    /// A running workout, with the seconds of it ridden so far.
+    workout: Option<(Workout, f64)>,
+    workout_paused: bool,
     /// How long the cadence has been outside the auto-shift band, signed (+ = too fast).
     cadence_off_s: f64,
     last_auto_shift_at: f64,
@@ -241,6 +284,8 @@ impl RideSession {
             drive_ratio_estimate: None,
             auto_shift: AutoShift::default(),
             ride_start_s: 0.0,
+            workout: None,
+            workout_paused: false,
             cadence_off_s: 0.0,
             last_auto_shift_at: f64::MIN / 4.0,
             last_manual_shift_at: f64::MIN / 4.0,
@@ -379,11 +424,93 @@ impl RideSession {
         self.urgent = true;
     }
 
+    /// Starts an ERG workout from its first step. Empty workouts are ignored.
+    pub fn start_workout(&mut self, workout: Workout) {
+        if workout.steps.is_empty() {
+            return;
+        }
+        self.set_mode(ControlMode::Erg);
+        self.set_erg_target(workout.steps[0].watts);
+        self.workout = Some((workout, 0.0));
+        self.workout_paused = true;
+    }
+
+    /// Ends the workout and returns to free riding.
+    pub fn stop_workout(&mut self) {
+        if self.workout.take().is_some() {
+            self.set_mode(ControlMode::Sim);
+        }
+    }
+
+    pub fn workout(&self) -> Option<WorkoutSnapshot> {
+        let (w, elapsed) = self.workout.as_ref()?;
+        let total = w.total_seconds();
+        let mut acc = 0.0;
+        let mut step = w.steps.len() - 1;
+        for (i, s) in w.steps.iter().enumerate() {
+            if *elapsed < acc + s.seconds {
+                step = i;
+                break;
+            }
+            acc += s.seconds;
+        }
+        let done = *elapsed >= total;
+        let step_start: f64 = w.steps[..step].iter().map(|s| s.seconds).sum();
+        Some(WorkoutSnapshot {
+            name: w.name.clone(),
+            step,
+            steps: w.steps.len(),
+            step_watts: w.steps[step].watts,
+            step_seconds: w.steps[step].seconds,
+            step_elapsed_s: (elapsed - step_start).clamp(0.0, w.steps[step].seconds),
+            total_seconds: total,
+            elapsed_s: elapsed.min(total),
+            next_watts: w.steps.get(step + 1).map(|s| s.watts),
+            paused: self.workout_paused && !done,
+            done,
+        })
+    }
+
+    /// Advances the workout clock while the rider pedals; moves the ERG target along the steps.
+    fn workout_step(&mut self, dt: f64, pedalling: bool) {
+        let Some((workout, elapsed)) = self.workout.as_mut() else {
+            return;
+        };
+        let total = workout.total_seconds();
+        if *elapsed >= total {
+            return;
+        }
+        self.workout_paused = !pedalling;
+        if !pedalling {
+            return;
+        }
+        let before = Self::step_index(workout, *elapsed);
+        *elapsed += dt;
+        let after = Self::step_index(workout, *elapsed);
+        if after != before {
+            let watts = workout.steps[after].watts;
+            self.set_erg_target(watts);
+        }
+    }
+
+    fn step_index(workout: &Workout, elapsed: f64) -> usize {
+        let mut acc = 0.0;
+        for (i, s) in workout.steps.iter().enumerate() {
+            if elapsed < acc + s.seconds {
+                return i;
+            }
+            acc += s.seconds;
+        }
+        workout.steps.len() - 1
+    }
+
     /// Advances time by `dt` seconds. Returns a command when the trainer needs a new one.
     pub fn tick(&mut self, dt: f64) -> Option<TrainerCommand> {
         self.clock_s += dt;
         let timeout = self.config.data_timeout_s;
         let now = self.clock_s;
+        let pedalling = self.cadence.fresh(now, timeout).is_some_and(|c| c >= 20.0);
+        self.workout_step(dt, pedalling);
 
         let power = self.power.fresh(now, timeout).unwrap_or(0.0);
         self.virtual_speed_mps = step_speed(
@@ -489,6 +616,7 @@ impl RideSession {
             route_position_m,
             lap,
             finished,
+            workout: self.workout(),
             model_power_w,
             last_command: self.last_command,
             last_command_age_s: self.last_command.map(|_| now - self.last_command_at),
@@ -780,6 +908,55 @@ mod tests {
         s.set_route(Some(Route::demo()));
         s.distance_m = 20_000.0;
         assert!(!s.snapshot().finished, "loops never finish");
+    }
+
+    #[test]
+    fn workout_steps_through_erg_targets_and_pauses_when_coasting() {
+        let mut s = RideSession::default();
+        let w = Workout {
+            name: "test".into(),
+            steps: vec![
+                WorkoutStep {
+                    watts: 120.0,
+                    seconds: 10.0,
+                },
+                WorkoutStep {
+                    watts: 250.0,
+                    seconds: 20.0,
+                },
+                WorkoutStep {
+                    watts: 100.0,
+                    seconds: 10.0,
+                },
+            ],
+        };
+        s.start_workout(w);
+        assert_eq!(s.snapshot().mode, ControlMode::Erg);
+        assert_eq!(s.tick(0.25), Some(TrainerCommand::TargetPower { watts: 120 }));
+        // Not pedalling: the clock waits.
+        for _ in 0..40 {
+            s.tick(0.25);
+        }
+        let snap = s.snapshot().workout.unwrap();
+        assert!(snap.paused);
+        assert_eq!(snap.elapsed_s, 0.0);
+        // Pedal through the first step into the second.
+        run(&mut s, 12.0, 150.0, 85.0);
+        let snap = s.snapshot().workout.unwrap();
+        assert!(!snap.paused);
+        assert_eq!(snap.step, 1);
+        assert_eq!(snap.step_watts, 250.0);
+        assert!((snap.step_elapsed_s - 2.0).abs() < 0.3, "{}", snap.step_elapsed_s);
+        assert_eq!(snap.next_watts, Some(100.0));
+        assert_eq!(s.snapshot().erg_target_w, 250.0);
+        run(&mut s, 30.0, 150.0, 85.0);
+        let snap = s.snapshot().workout.unwrap();
+        assert!(snap.done);
+        assert_eq!(snap.step, 2);
+        assert_eq!(snap.elapsed_s, 40.0);
+        s.stop_workout();
+        assert!(s.snapshot().workout.is_none());
+        assert_eq!(s.snapshot().mode, ControlMode::Sim);
     }
 
     #[test]

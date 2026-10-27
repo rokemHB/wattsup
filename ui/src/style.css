@@ -144,3 +144,17 @@ button.big { font-size: 20px; padding: 14px 36px; }
 .hud-bottom { display: flex; align-items: flex-end; gap: 12px; background: none; padding: 0; }
 .minimap { width: 220px; height: 220px; flex: none; }
 .hud-profile { flex: 1; background: rgba(15, 18, 27, 0.6); border-radius: 12px; padding: 8px 10px 4px; }
+
+/* --- workouts ------------------------------------------------------------ */
+h2.spaced { margin-top: 18px; }
+.steps { display: flex; flex-direction: column; gap: 6px; }
+.step-row { display: grid; grid-template-columns: 32px 1fr 1fr auto; gap: 8px; align-items: center; }
+.step-row span { color: var(--muted); font-size: 13px; }
+.step-row input { width: 100%; }
+.workout-preview { width: 100%; height: 90px; background: rgba(0, 0, 0, 0.25); border-radius: 8px; }
+select { background: var(--panel-2); color: var(--text); border: 1px solid #2d3550; border-radius: 8px; padding: 8px; font: inherit; }
+.hud-workout { margin-top: 10px; align-self: center; width: min(720px, 100%); background: rgba(15, 18, 27, 0.78); border-radius: 12px; padding: 10px 14px 8px; }
+.hud-workout-text { display: flex; gap: 16px; align-items: baseline; font-size: 14px; color: var(--muted); }
+.hud-workout-text b { font-size: 28px; color: var(--text); }
+.hud-workout-text .paused { color: var(--busy); font-weight: 600; }
+#hud-workout-bar { display: block; width: 100%; height: 54px; margin-top: 6px; }

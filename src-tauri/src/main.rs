@@ -11,7 +11,7 @@ use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo, BUILTIN_ROUTES};
-use wattsup_core::session::ControlMode;
+use wattsup_core::session::{ControlMode, Workout};
 use wattsup_devices::{DeviceId, DeviceKind};
 use wattsup_engine::{Engine, EngineConfig, EngineSnapshot, ScanResult};
 
@@ -94,6 +94,18 @@ async fn set_route(state: State<'_, AppState>, id: String) -> CmdResult<()> {
 #[tauri::command]
 async fn reset_ride(state: State<'_, AppState>) -> CmdResult<()> {
     state.engine.reset_ride().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_workout(state: State<'_, AppState>, workout: Workout) -> CmdResult<()> {
+    state.engine.start_workout(workout).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_workout(state: State<'_, AppState>) -> CmdResult<()> {
+    state.engine.stop_workout().await;
     Ok(())
 }
 
@@ -214,6 +226,8 @@ fn main() {
             routes,
             set_route,
             reset_ride,
+            start_workout,
+            stop_workout,
             scan,
             connect,
             disconnect,

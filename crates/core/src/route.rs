@@ -32,7 +32,7 @@ pub struct Route {
 }
 
 /// Ids accepted by [`Route::builtin`].
-pub const BUILTIN_ROUTES: [&str; 2] = ["sa-calobra", "lakeside"];
+pub const BUILTIN_ROUTES: [&str; 3] = ["sa-calobra", "lakeside", "flat"];
 
 /// What a route chooser needs to know, without the points.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -152,6 +152,7 @@ impl Route {
     pub fn builtin(id: &str) -> Option<Self> {
         match id {
             "lakeside" => Some(Self::demo()),
+            "flat" => Some(Self::flat()),
             "sa-calobra" => {
                 Some(serde_json::from_str(include_str!("../routes/sa-calobra.json")).expect("valid built-in route"))
             }
@@ -216,6 +217,24 @@ impl Route {
         let raw = d / spacing;
         let i = (raw.floor() as usize).min(self.points.len().saturating_sub(2));
         (i, (raw - i as f64).clamp(0.0, 1.0))
+    }
+
+    /// A flat 5 km loop for workouts: nothing to shift for, nothing to look at.
+    pub fn flat() -> Self {
+        let c = |x: f64, z: f64| ControlPoint { x, y: 12.0, z };
+        let control = [
+            c(0.0, 0.0),
+            c(700.0, -80.0),
+            c(1400.0, 100.0),
+            c(1700.0, 500.0),
+            c(1500.0, 900.0),
+            c(900.0, 1050.0),
+            c(200.0, 950.0),
+            c(-200.0, 500.0),
+        ];
+        let mut route = Self::from_control_points("Flat road", &control, 5.0, true);
+        route.points.iter_mut().for_each(|p| p.y = 12.0);
+        route
     }
 
     /// The built-in demo course: a 6 km lakeside loop with one real climb.
@@ -301,7 +320,8 @@ mod tests {
             assert!(Route::builtin(id).is_some(), "{id}");
         }
         let list = Route::builtin_list();
-        assert_eq!(list.len(), 2);
+        assert_eq!(list.len(), 3);
+        assert!(list[2].climb_m < 1.0 && list[2].closed, "{:?}", list[2]);
         assert_eq!(list[0].id, "sa-calobra");
         assert!(
             list[0].climb_m > 650.0 && list[0].climb_m < 760.0,

@@ -12,6 +12,7 @@ import type {
   ScanResult,
   ShiftDirection,
   StartupInfo,
+  Workout,
 } from "./types";
 
 export const insideTauri = (): boolean => "__TAURI_INTERNALS__" in window;
@@ -23,6 +24,8 @@ export const api = {
   routes: () => invoke<RouteInfo[]>("routes"),
   setRoute: (id: string) => invoke<void>("set_route", { id }),
   resetRide: () => invoke<void>("reset_ride"),
+  startWorkout: (workout: Workout) => invoke<void>("start_workout", { workout }),
+  stopWorkout: () => invoke<void>("stop_workout"),
   scan: (seconds: number) => invoke<ScanResult>("scan", { seconds }),
   connect: (id: string, kind: DeviceKind) => invoke<void>("connect", { id, kind }),
   disconnect: (kind: DeviceKind) => invoke<void>("disconnect", { kind }),

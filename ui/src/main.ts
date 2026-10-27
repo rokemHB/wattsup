@@ -4,14 +4,15 @@ import { api, insideTauri } from "./api";
 import { latest, renderDebug, scan, showError, wireDebug } from "./debug";
 import { $, el } from "./dom";
 import { duration, isTypingTarget, num, shiftForKey } from "./format";
-import { Hud } from "./hud";
+import { drawWorkout, Hud } from "./hud";
 import { Minimap } from "./minimap";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
-import type { EngineSnapshot, Route, RouteInfo } from "./types";
+import type { EngineSnapshot, Route, RouteInfo, Workout } from "./types";
+import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadWorld, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 
-type Screen = "start" | "menu" | "rider" | "settings" | "ride" | "pause" | "finish";
+type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "ride" | "pause" | "finish";
 
 let screen: Screen = "start";
 let cameFrom: Screen = "menu";
@@ -25,15 +26,23 @@ let profile: Profile = loadProfile();
 /** The rider screen edits a draft; Save makes it the profile, Back throws it away. */
 let draft: Profile = { ...profile };
 let finishShown = false;
+let workouts: Workout[] = loadWorkouts();
+let ftp = loadFtp();
+/** The workout open in the editor and its index in the saved list (-1 = new). */
+let editing: Workout = { name: "", steps: [] };
+let editingIndex = -1;
+let activeWorkout: Workout | null = null;
 const stats = { samples: 0, power: 0, hr: 0, hrSamples: 0 };
 
 // --- screens -----------------------------------------------------------------
 
 function show(next: Screen) {
-  if (next === "settings" || next === "rider") cameFrom = screen === "pause" ? "pause" : "menu";
+  if (next === "settings" || next === "rider" || next === "workout") cameFrom = screen === "pause" ? "pause" : "menu";
   if (next === "rider") draft = { ...profile };
   screen = next;
-  for (const s of ["start", "menu", "rider", "settings", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
+  for (const s of ["start", "menu", "rider", "settings", "workout", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
+  if (next === "pause") $("pause-end-workout").hidden = !activeWorkout;
+  if (next === "menu") fillWorkoutList();
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
   if (next === "rider") fillRiderScreen();
   world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? "chase" : "orbit");
@@ -99,6 +108,117 @@ function fillRiderScreen() {
   $<HTMLButtonElement>("rider-save").disabled = !draftChanged();
 }
 
+// --- workouts ------------------------------------------------------------------
+
+function fillWorkoutList() {
+  const card = (w: Workout, onEdit: () => void, saved: boolean) => {
+    const c = el(
+      "div",
+      { className: "route-card" },
+      el("b", {}, w.name),
+      el("button", { className: "primary", textContent: saved ? "Edit" : "Open" }),
+      el("span", { className: "meta" }, describe(w)),
+    );
+    c.onclick = onEdit;
+    return c;
+  };
+  $("workout-list").replaceChildren(
+    ...workouts.map((w, i) => card(w, () => openWorkout(w, i), true)),
+    ...PRESETS.map((p) => card(fromPreset(p, ftp), () => openWorkout(fromPreset(p, ftp), -1), false)),
+  );
+}
+
+function openWorkout(w: Workout, index: number) {
+  editing = { name: w.name, steps: w.steps.map((s) => ({ ...s })) };
+  editingIndex = index;
+  show("workout");
+  fillWorkoutEditor();
+}
+
+function fillWorkoutEditor() {
+  $<HTMLInputElement>("workout-name").value = editing.name;
+  $<HTMLInputElement>("workout-ftp").value = String(ftp);
+  const preset = $<HTMLSelectElement>("workout-preset");
+  preset.replaceChildren(el("option", { value: "", textContent: "Load a preset…" }), ...PRESETS.map((p, i) => el("option", { value: String(i), textContent: p.name })));
+  const routeSel = $<HTMLSelectElement>("workout-route");
+  const current = routeSel.value || "flat";
+  routeSel.replaceChildren(...routes.map((r) => el("option", { value: r.id, textContent: r.name })));
+  routeSel.value = routes.some((r) => r.id === current) ? current : routes[0]?.id ?? "";
+  $("workout-delete").hidden = editingIndex < 0;
+  $("workout-steps").replaceChildren(
+    ...editing.steps.map((step, i) => {
+      const numberInput = (min: string, max: string, stepSize: string, value: number) => {
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = min;
+        input.max = max;
+        input.step = stepSize;
+        input.value = String(value);
+        return input;
+      };
+      const watts = numberInput("0", "1500", "5", step.watts);
+      const minutes = numberInput("0.5", "180", "0.5", step.seconds / 60);
+      watts.addEventListener("input", () => {
+        step.watts = Number(watts.value);
+        refreshWorkoutSummary();
+      });
+      minutes.addEventListener("input", () => {
+        step.seconds = Number(minutes.value) * 60;
+        refreshWorkoutSummary();
+      });
+      const remove = el("button", { className: "small", textContent: "×" });
+      remove.onclick = () => {
+        editing.steps.splice(i, 1);
+        fillWorkoutEditor();
+      };
+      const row = el("div", { className: "step-row" });
+      const wattsField = el("label", { className: "row" });
+      wattsField.append(watts, el("span", {}, "W"));
+      const minutesField = el("label", { className: "row" });
+      minutesField.append(minutes, el("span", {}, "min"));
+      row.append(el("span", {}, String(i + 1)), wattsField, minutesField, remove);
+      return row;
+    }),
+  );
+  refreshWorkoutSummary();
+}
+
+function refreshWorkoutSummary() {
+  const ok = editing.steps.length > 0 && editing.steps.every(validStep);
+  $("workout-summary").textContent = ok ? describe(editing) : editing.steps.length ? "every step needs watts and a duration" : "add a step or load a preset";
+  $<HTMLButtonElement>("workout-start").disabled = !ok;
+  $<HTMLButtonElement>("workout-save").disabled = !ok;
+  if (ok) drawWorkout($("workout-preview") as HTMLCanvasElement, editing, 0);
+}
+
+function saveWorkout() {
+  const w: Workout = { name: editing.name.trim() || "Workout", steps: editing.steps.map((s) => ({ ...s })) };
+  if (editingIndex >= 0) workouts[editingIndex] = w;
+  else {
+    workouts.push(w);
+    editingIndex = workouts.length - 1;
+  }
+  saveWorkouts(workouts);
+  fillWorkoutList();
+  show("menu");
+}
+
+async function startWorkout() {
+  const w: Workout = { name: editing.name.trim() || "Workout", steps: editing.steps.map((s) => ({ ...s })) };
+  const routeId = $<HTMLSelectElement>("workout-route").value || selectedRoute;
+  await startRide(routeId);
+  await api.startWorkout(w);
+  activeWorkout = w;
+  hud?.setWorkout(w);
+}
+
+async function endWorkout() {
+  if (!activeWorkout) return;
+  activeWorkout = null;
+  hud?.setWorkout(null);
+  await api.stopWorkout();
+}
+
 // --- routes and the world -----------------------------------------------------
 
 function fillRouteList() {
@@ -130,6 +250,7 @@ async function buildWorld() {
   $("loading-text").textContent = `Building ${route.name}…`;
   await new Promise((r) => setTimeout(r, 50));
   let terrain: WorldData | undefined;
+  $("attribution").textContent = "";
   if (route.world) {
     try {
       terrain = await loadWorld(route.world);
@@ -143,12 +264,14 @@ async function buildWorld() {
   world.onFrame = () => hud?.frame();
   hud = new Hud(world.sampler);
   minimap = new Minimap($<HTMLCanvasElement>("minimap"), route, terrain);
+  hud.setWorkout(activeWorkout);
   applyProfile(screen === "rider" ? draft : profile);
   show(screen);
   loading.hidden = true;
 }
 
 async function startRide(id: string) {
+  await endWorkout();
   if (id !== selectedRoute || !world) {
     await api.setRoute(id);
     selectedRoute = id;
@@ -176,7 +299,7 @@ function onSnapshot(snap: EngineSnapshot) {
       stats.hrSamples++;
       stats.hr += snap.session.heart_rate_bpm;
     }
-    if (snap.session.finished && !finishShown) {
+    if ((snap.session.finished || snap.session.workout?.done) && !finishShown) {
       finishShown = true;
       showFinish(snap);
     }
@@ -187,7 +310,8 @@ function showFinish(snap: EngineSnapshot) {
   const s = snap.session;
   const avgPower = stats.samples ? stats.power / stats.samples : null;
   const avgHr = stats.hrSamples ? stats.hr / stats.hrSamples : null;
-  $("finish-title").textContent = `${profile.avatar} ${route?.name ?? "Ride"}: done!`;
+  $("finish-title").textContent = activeWorkout ? `${profile.avatar} ${activeWorkout.name}: complete!` : `${profile.avatar} ${route?.name ?? "Ride"}: done!`;
+  endWorkout().catch(showError);
   const item = (label: string, value: string) => [el("span", {}, label), el("b", {}, value)];
   $("finish-stats").replaceChildren(
     ...item("Time", duration(s.elapsed_s)),
@@ -208,11 +332,53 @@ function wire() {
   $("menu-rider").onclick = () => show("rider");
   $("menu-settings").onclick = () => show("settings");
   $("menu-quit").onclick = () => api.quit().catch(showError);
-  document.querySelectorAll<HTMLButtonElement>("[data-back]").forEach((b) => (b.onclick = back));
+  // Back buttons: delegated at the document, so they work whatever else happens to the panels.
+  document.addEventListener("click", (e) => {
+    if ((e.target as Element | null)?.closest?.("[data-back]")) {
+      e.preventDefault();
+      back();
+    }
+  });
   $("pause-resume").onclick = () => show("ride");
+  $("pause-end-workout").onclick = () => {
+    endWorkout().catch(showError);
+    show("ride");
+  };
+  $("menu-new-workout").onclick = () => openWorkout({ name: "", steps: [] }, -1);
+  $("workout-save").onclick = saveWorkout;
+  $("workout-start").onclick = () => startWorkout().catch(showError);
+  $("workout-delete").onclick = () => {
+    if (editingIndex >= 0) workouts.splice(editingIndex, 1);
+    saveWorkouts(workouts);
+    fillWorkoutList();
+    show("menu");
+  };
+  $("workout-add").onclick = () => {
+    const last = editing.steps[editing.steps.length - 1];
+    editing.steps.push({ watts: last?.watts ?? Math.round(ftp * 0.6), seconds: last?.seconds ?? 300 });
+    fillWorkoutEditor();
+  };
+  $<HTMLInputElement>("workout-name").oninput = () => (editing.name = $<HTMLInputElement>("workout-name").value);
+  $<HTMLSelectElement>("workout-preset").onchange = () => {
+    const i = Number($<HTMLSelectElement>("workout-preset").value);
+    if (Number.isFinite(i) && PRESETS[i]) {
+      const w = fromPreset(PRESETS[i], ftp);
+      editing.name = w.name;
+      editing.steps = w.steps;
+      fillWorkoutEditor();
+    }
+  };
+  $<HTMLInputElement>("workout-ftp").onchange = () => {
+    ftp = Math.min(600, Math.max(50, Number($<HTMLInputElement>("workout-ftp").value) || 200));
+    saveFtp(ftp);
+    fillWorkoutEditor();
+  };
   $("pause-restart").onclick = () => startRide(selectedRoute).catch(showError);
   $("pause-settings").onclick = () => show("settings");
-  $("pause-menu").onclick = () => show("menu");
+  $("pause-menu").onclick = () => {
+    endWorkout().catch(showError);
+    show("menu");
+  };
   $("finish-again").onclick = () => startRide(selectedRoute).catch(showError);
   $("finish-menu").onclick = () => show("menu");
   $("toggle-debug").onclick = toggleDebug;
@@ -274,10 +440,17 @@ async function start() {
   await api.onSnapshot(onSnapshot);
   onSnapshot(await api.snapshot());
   const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");
-  show((["start", "menu", "rider", "settings", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
+  if (wanted === "workout") openWorkout(fromPreset(PRESETS[0], ftp), -1);
+  else show((["start", "menu", "rider", "settings", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
   await buildWorld();
   if (startup.camera && world) world.setCamera(startup.camera);
   scan().catch(showError);
+  if (startup.screen === "workout-ride") {
+    // For looking at the workout HUD: ride the first preset on the flat road.
+    openWorkout(fromPreset(PRESETS[0], ftp), -1);
+    $<HTMLSelectElement>("workout-route").value = "flat";
+    await startWorkout();
+  }
 }
 
 start().catch(showError);

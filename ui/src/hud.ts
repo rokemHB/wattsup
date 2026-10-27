@@ -1,6 +1,6 @@
 // The ride overlay: live numbers and the elevation profile with the rider's position.
-import { num } from "./format";
-import type { EngineSnapshot } from "./types";
+import { duration, num } from "./format";
+import type { EngineSnapshot, Workout } from "./types";
 import type { RouteSampler } from "./world/route";
 
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
@@ -18,8 +18,18 @@ export class Hud {
     window.addEventListener("resize", () => (this.lastKey = ""));
   }
 
+  private workout: Workout | null = null;
+  private workoutKey = "";
+
+  /** The workout being ridden, for the interval bar. */
+  setWorkout(w: Workout | null) {
+    this.workout = w;
+    this.workoutKey = "";
+  }
+
   update(snap: EngineSnapshot) {
     const s = snap.session;
+    this.updateWorkout(snap);
     $("hud-power").textContent = num(s.power_w);
     $("hud-cadence").textContent = num(s.cadence_rpm);
     $("hud-hr").textContent = num(s.heart_rate_bpm);
@@ -33,6 +43,24 @@ export class Hud {
     grade.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(1)} %`;
     grade.className = g > 3 ? "climb" : g < -3 ? "descent" : "";
     this.drawProfile(s.route_position_m / this.sampler.length);
+  }
+
+  private updateWorkout(snap: EngineSnapshot) {
+    const w = snap.session.workout;
+    const box = $("hud-workout");
+    box.hidden = !w;
+    if (!w) return;
+    const left = Math.max(0, w.step_seconds - w.step_elapsed_s);
+    $("hud-workout-watts").textContent = `${Math.round(w.step_watts)} W`;
+    $("hud-workout-step").textContent = `interval ${w.step + 1} / ${w.steps}`;
+    $("hud-workout-left").textContent = `${duration(left)} left · ${duration(Math.max(0, w.total_seconds - w.elapsed_s))} total`;
+    $("hud-workout-next").textContent = w.next_watts === null ? "last interval" : `next ${Math.round(w.next_watts)} W`;
+    $("hud-workout-paused").hidden = !w.paused;
+    const bar = $("hud-workout-bar") as HTMLCanvasElement;
+    const key = `${bar.clientWidth}:${w.elapsed_s.toFixed(0)}`;
+    if (key === this.workoutKey || !this.workout) return;
+    this.workoutKey = key;
+    drawWorkout(bar, this.workout, w.elapsed_s);
   }
 
   /** Called once per rendered frame; shows the rate once a second. */
@@ -89,4 +117,38 @@ export class Hud {
     ctx.lineWidth = 2;
     ctx.stroke();
   }
+}
+
+/** The intervals as bars: width is time, height is watts, the ridden part lit. */
+export function drawWorkout(canvas: HTMLCanvasElement, w: Workout, elapsed: number) {
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (!width) return;
+  const dpr = Math.min(window.devicePixelRatio, 2);
+  if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+  }
+  const ctx = canvas.getContext("2d")!;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  const total = w.steps.reduce((s, x) => s + x.seconds, 0) || 1;
+  const maxW = Math.max(...w.steps.map((s) => s.watts), 1);
+  let t = 0;
+  for (const step of w.steps) {
+    const x0 = (t / total) * width;
+    const x1 = ((t + step.seconds) / total) * width;
+    const h = Math.max(3, (step.watts / maxW) * (height - 4));
+    const done = Math.min(Math.max((elapsed - t) / step.seconds, 0), 1);
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
+    ctx.fillRect(x0 + 1, height - h, Math.max(1, x1 - x0 - 2), h);
+    if (done > 0) {
+      ctx.fillStyle = "#ffc400";
+      ctx.fillRect(x0 + 1, height - h, Math.max(1, (x1 - x0 - 2) * done), h);
+    }
+    t += step.seconds;
+  }
+  const x = (Math.min(elapsed, total) / total) * width;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(x - 1, 0, 2, height);
 }

@@ -15,7 +15,7 @@ use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo};
-use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot};
+use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot, Workout};
 use wattsup_devices::sim::{SimConfig, SimProvider};
 use wattsup_devices::{
     event_channel, ConnectionState, Controller, DeviceError, DeviceEvent, DeviceId, DeviceKind, DeviceProvider,
@@ -188,6 +188,16 @@ impl Engine {
         self.inner.session.lock().unwrap().set_route(Some(route));
         self.inner.send_now().await;
         Ok(())
+    }
+
+    pub async fn start_workout(&self, workout: Workout) {
+        self.inner.session.lock().unwrap().start_workout(workout);
+        self.inner.send_now().await;
+    }
+
+    pub async fn stop_workout(&self) {
+        self.inner.session.lock().unwrap().stop_workout();
+        self.inner.send_now().await;
     }
 
     /// Back to the start of the current route.

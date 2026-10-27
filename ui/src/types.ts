@@ -38,6 +38,7 @@ export interface SessionSnapshot {
   route_position_m: number;
   lap: number;
   finished: boolean;
+  workout: WorkoutSnapshot | null;
   model_power_w: number;
   last_command: TrainerCommand | null;
   last_command_age_s: number | null;
@@ -99,6 +100,30 @@ export interface Route {
   closed: boolean;
   /** Id of a real-world terrain under /worlds/, or null for a procedural world. */
   world: string | null;
+}
+
+export interface WorkoutStep {
+  watts: number;
+  seconds: number;
+}
+
+export interface Workout {
+  name: string;
+  steps: WorkoutStep[];
+}
+
+export interface WorkoutSnapshot {
+  name: string;
+  step: number;
+  steps: number;
+  step_watts: number;
+  step_seconds: number;
+  step_elapsed_s: number;
+  total_seconds: number;
+  elapsed_s: number;
+  next_watts: number | null;
+  paused: boolean;
+  done: boolean;
 }
 
 export interface RouteInfo {
