@@ -3,6 +3,9 @@
 import * as THREE from "three";
 
 const WHEEL_R = 0.34;
+const TYRE = 0.024;
+/** How far the tyre reaches below the hub height minus the wheel radius. */
+export const TYRE_BULGE = TYRE;
 const CRANK = 0.17;
 const BB = new THREE.Vector3(0.02, 0.29, 0); // bottom bracket
 const SADDLE = new THREE.Vector3(-0.2, 1.0, 0);
@@ -41,7 +44,7 @@ export class Rider {
     };
 
     // Wheels with spokes.
-    const tyre = new THREE.TorusGeometry(WHEEL_R, 0.024, 10, 36);
+    const tyre = new THREE.TorusGeometry(WHEEL_R, TYRE, 10, 36);
     const rimGeo = new THREE.TorusGeometry(WHEEL_R - 0.028, 0.012, 6, 36);
     const hub = new THREE.CylinderGeometry(0.03, 0.03, 0.1, 8);
     hub.rotateX(Math.PI / 2);

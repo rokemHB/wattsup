@@ -3,9 +3,9 @@
 import * as THREE from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
-import { Rider } from "./rider";
+import { Rider, TYRE_BULGE } from "./rider";
 import { RouteSampler } from "./route";
-import { buildWorld, type WorldStatics } from "./scene";
+import { buildWorld, ROAD_LIFT, type WorldStatics } from "./scene";
 
 export type CameraMode = "chase" | "side" | "front" | "drone";
 const MODES: CameraMode[] = ["chase", "side", "front", "drone"];
@@ -154,8 +154,12 @@ export class World {
     // Ride on the right-hand side of the lane, not on the centre line.
     const right = new THREE.Vector3(-this.heading.z, 0, this.heading.x);
     const g = this.rider.group;
-    g.position.set(pose.x, pose.y, pose.z).add(right.clone().multiplyScalar(1.6));
     const pitch = Math.atan(pose.grade / 100);
+    // The road surface sits ROAD_LIFT above the route line and the tyre bulges
+    // TYRE_BULGE below the hub height; pitching about the bike's middle dips one
+    // wheel by half the wheelbase times the slope.
+    const clearance = ROAD_LIFT + TYRE_BULGE + 0.5 * Math.abs(Math.sin(pitch)) + 0.005;
+    g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(1.6));
     g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), this.heading.clone().negate(), up));
     g.rotateY(-Math.PI / 2);
     g.rotateZ(pitch);

@@ -7,6 +7,8 @@ import { RouteSampler } from "./route";
 import { asphaltTexture, cloudTexture, grassTexture, rockTexture, waterNormalTexture } from "./textures";
 
 export const ROAD_WIDTH = 7;
+/** Height of the top road layer (the markings) above the route line. */
+export const ROAD_LIFT = 0.08;
 const TERRAIN_SIZE = 3400;
 const TERRAIN_SEGMENTS = 240;
 const FAR_SIZE = 18000;
