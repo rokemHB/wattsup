@@ -13,7 +13,10 @@ Open items, roughly in the order they are worth doing.
 - [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
 - [ ] Ride recording to FIT or TCX for Strava.
 - [ ] Multiplayer over a WebSocket server (engine snapshots in, other riders out).
-- [ ] More of Mallorca: the pipeline works for any road; next candidates Puig Major, Coll de Sóller, Formentor.
+- [x] The Tramuntana as a road network: Ma-10 and the known climbs, tunnels, map with a start picker, turns, signs, terrain download.
+- [ ] Island, known rough edges: a flat pale strip section shows at some hairpins (Ma-2100 near Orient, 0.6 km from 39.7390,2.7190); the tube pokes a little past the headwall at portals; from the drone camera a slot is visible in the ground over tunnels; the map picture still has a lighter band where the imagery zoom changes over the sea.
+- [ ] Island: the far layer (150 m) is coarse where tiles have not loaded; a 30 m middle layer for the Tramuntana would hide that.
+- [ ] More roads can be added to the whitelist in `~/wattsup-data/refs.txt` (see README, "The island").
 
 ## Ideas
 
