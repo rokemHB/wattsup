@@ -118,6 +118,8 @@ export interface NetworkEdge {
   count: number;
   length_m: number;
   tunnel?: boolean;
+  /** Confirmation signs along the edge: at point `at` (edge-local), for riders heading toward b or a, the next towns with km. */
+  markers?: { at: number; toward_b: boolean; to: [string, number][] }[];
 }
 
 export interface Place {

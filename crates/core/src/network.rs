@@ -41,6 +41,18 @@ pub struct NetworkEdge {
     /// The road runs through a tunnel: no corridor is cut and a tube is drawn around it.
     #[serde(default)]
     pub tunnel: bool,
+    /// Confirmation signs along the edge (the renderer places them).
+    #[serde(default)]
+    pub markers: Vec<Marker>,
+}
+
+/// A confirmation sign between junctions: at edge-local point `at`, for riders
+/// heading toward `b` (or `a`), the next towns with their distance in km.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Marker {
+    pub at: usize,
+    pub toward_b: bool,
+    pub to: Vec<(String, f64)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -602,6 +614,7 @@ mod tests {
                 count: n,
                 length_m: 100.0,
                 tunnel: false,
+                markers: vec![],
             });
         };
         add(0, 1, [0.0, 0.0], [100.0, 0.0], Some("Ma-10"));

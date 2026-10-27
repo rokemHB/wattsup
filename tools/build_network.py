@@ -32,7 +32,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_route import EARTH_LAT_M, EARTH_LON_M, Dem, Ortho, mercator_tile  # noqa: E402
 
-SPACING = 10.0
+SPACING = 5.0
 MAX_GRADE = 0.14
 ROAD_KINDS = {"primary": 0, "secondary": 1, "tertiary": 2, "unclassified": 3, "primary_link": 1, "secondary_link": 2, "tertiary_link": 3}
 
@@ -100,8 +100,40 @@ def smooth(values, half):
     return np.convolve(padded, np.ones(k) / k, mode="valid")
 
 
+def spline(xz, step=1.0):
+    """A centripetal Catmull-Rom curve through the mapped points, densified to about `step` metres,
+    so a road bends instead of kinking at every mapped node."""
+    pts = [p for i, p in enumerate(xz) if i == 0 or np.linalg.norm(p - xz[i - 1]) > 0.5]
+    if len(pts) < 3:
+        return np.array(pts)
+    pts = np.array(pts)
+    padded = np.vstack([pts[0] + (pts[0] - pts[1]), pts, pts[-1] + (pts[-1] - pts[-2])])
+    out = [pts[0]]
+    for i in range(1, len(padded) - 2):
+        p0, p1, p2, p3 = padded[i - 1], padded[i], padded[i + 1], padded[i + 2]
+        n = max(2, int(np.ceil(np.linalg.norm(p2 - p1) / step)))
+        # Centripetal parametrisation: no loops or overshoot on uneven spacing.
+        t0 = 0.0
+        t1 = t0 + np.linalg.norm(p1 - p0) ** 0.5
+        t2 = t1 + np.linalg.norm(p2 - p1) ** 0.5
+        t3 = t2 + np.linalg.norm(p3 - p2) ** 0.5
+        if t1 == t0 or t2 == t1 or t3 == t2:
+            out.append(p2)
+            continue
+        for k in range(1, n + 1):
+            t = t1 + (t2 - t1) * k / n
+            a1 = (t1 - t) / (t1 - t0) * p0 + (t - t0) / (t1 - t0) * p1
+            a2 = (t2 - t) / (t2 - t1) * p1 + (t - t1) / (t2 - t1) * p2
+            a3 = (t3 - t) / (t3 - t2) * p2 + (t - t2) / (t3 - t2) * p3
+            b1 = (t2 - t) / (t2 - t0) * a1 + (t - t0) / (t2 - t0) * a2
+            b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
+            out.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
+    return np.array(out)
+
+
 def resample(xz, spacing):
-    """Points every `spacing` metres along a polyline (linear), keeping the end."""
+    """Points every `spacing` metres along the splined polyline, keeping the end."""
+    xz = spline(xz)
     out = [xz[0]]
     travelled = 0.0
     nxt = spacing
@@ -413,6 +445,7 @@ def main():
         heap = [(0.0, start_node)]
         found = []
         seen = set()
+        dist_at = {}
         while heap and len(found) < want:
             d, n = heapq.heappop(heap)
             if d > dist.get(n, math.inf) or d > limit_m:
@@ -421,6 +454,7 @@ def main():
                 if pi not in seen and (not found or place_list[pi]["kind"] != "hamlet"):
                     seen.add(pi)
                     found.append(pi)
+                    dist_at[pi] = d
             for m, w, ei in adj[n]:
                 if n == start_node and ei == via_edge:
                     continue
@@ -428,7 +462,7 @@ def main():
                 if nd < dist.get(m, math.inf):
                     dist[m] = nd
                     heapq.heappush(heap, (nd, m))
-        return [place_list[pi]["name"] for pi in found[:want]]
+        return [(place_list[pi]["name"], dist_at[pi]) for pi in found[:want]]
 
     for ni, n in enumerate(nodes_out):
         if len(adj[ni]) < 3:
@@ -440,9 +474,32 @@ def main():
             if e["destination"]:
                 dests = [d.strip() for d in e["destination"].split(";")][:2]
             if not dests:
-                dests = destinations(m, ei)
+                dests = [name for name, _d in destinations(m, ei)]
             signs.append({"edge": ei, "ref": e["ref"] or e["destination_ref"], "to": dests})
         n["signs"] = signs
+
+    # Confirmation signs along the road: every 2 km or so on roads with a
+    # number, "Sóller 7" for the next towns ahead, one per direction.
+    for ei, e in enumerate(edges_out):
+        if not e["ref"] or e["length_m"] < 1200 or e["tunnel"]:
+            continue
+        markers = []
+        for toward_b in (True, False):
+            end_node = e["b"] if toward_b else e["a"]
+            dests = destinations(end_node, ei)
+            if not dests:
+                continue
+            k = 0
+            d = 900.0
+            while d < e["length_m"] - 600:
+                i = int(d / SPACING)
+                # Distance to the town: from here to the edge end, then along the graph.
+                rest = (e["length_m"] - d) if toward_b else d
+                markers.append({"at": i, "toward_b": toward_b, "to": [[name, round((rest + dd) / 1000, 1)] for name, dd in dests[:2]]})
+                d += 2300.0
+                k += 1
+        if markers:
+            e["markers"] = markers
 
     out_core = repo / "crates/core/worlds" / args.id
     out_core.mkdir(parents=True, exist_ok=True)
