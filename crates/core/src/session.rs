@@ -406,6 +406,16 @@ impl RideSession {
         self.config.route.as_ref()
     }
 
+    /// Replaces the road without touching the ride: for a navigator that
+    /// extends or re-plans the route ahead. The new route must agree with
+    /// the old one up to the rider's position.
+    pub fn replace_route(&mut self, route: Route) {
+        self.config.route = Some(route);
+        if let Some(r) = &self.config.route {
+            self.road_grade_pct = r.grade_at(self.distance_m);
+        }
+    }
+
     /// Switches the road and starts a fresh ride on it.
     pub fn set_route(&mut self, route: Option<Route>) {
         self.config.route = route;

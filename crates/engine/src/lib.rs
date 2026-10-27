@@ -6,6 +6,7 @@
 //! subscribe here as well, publishing snapshots and receiving other riders'.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Mutex as AsyncMutex};
 use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
+use wattsup_core::network::{Junction, Navigator, Network, NetworkInfo};
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo};
 use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot, Workout};
@@ -73,7 +75,14 @@ pub struct EngineSnapshot {
     pub providers: Vec<String>,
     /// Newest last.
     pub log: Vec<LogLine>,
+    /// Bumps whenever the route's points change (a new route, or a navigator extending or re-planning it).
+    pub route_version: u64,
+    /// The next junction with a choice, when riding a road network.
+    pub junction: Option<Junction>,
 }
+
+/// How far ahead the rider is told about a junction.
+const JUNCTION_LOOKAHEAD_M: f64 = 500.0;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ScanResult {
@@ -97,6 +106,9 @@ struct Inner {
     log: Mutex<(u64, VecDeque<LogLine>)>,
     events: EventSender,
     snapshots: watch::Sender<EngineSnapshot>,
+    navigator: Mutex<Option<Navigator>>,
+    junction: Mutex<Option<Junction>>,
+    route_version: AtomicU64,
 }
 
 const LOG_LINES: usize = 60;
@@ -147,6 +159,8 @@ impl Engine {
             devices: vec![],
             providers: providers.iter().map(|p| p.name().to_string()).collect(),
             log: vec![],
+            route_version: 0,
+            junction: None,
         };
         let inner = Arc::new(Inner {
             providers,
@@ -156,6 +170,9 @@ impl Engine {
             log: Mutex::new((0, VecDeque::new())),
             events,
             snapshots: watch::channel(first).0,
+            navigator: Mutex::new(None),
+            junction: Mutex::new(None),
+            route_version: AtomicU64::new(0),
         });
         tokio::spawn(event_loop(inner.clone(), rx));
         tokio::spawn(tick_loop(inner.clone(), tick));
@@ -185,9 +202,62 @@ impl Engine {
     /// Switches to a built-in route and starts a fresh ride on it.
     pub async fn set_route(&self, id: &str) -> Result<(), String> {
         let route = Route::builtin(id).ok_or_else(|| format!("unknown route {id}"))?;
+        *self.inner.navigator.lock().unwrap() = None;
+        *self.inner.junction.lock().unwrap() = None;
         self.inner.session.lock().unwrap().set_route(Some(route));
+        self.inner.route_version.fetch_add(1, Ordering::Relaxed);
         self.inner.send_now().await;
         Ok(())
+    }
+
+    /// Everything a map needs about a world's road network, without the points.
+    pub fn network_info(&self, world: &str) -> Option<NetworkInfo> {
+        Network::builtin(world).map(|n| n.info())
+    }
+
+    /// The network's points as little-endian f32 x, y, z triples.
+    pub fn network_points(&self, world: &str) -> Option<Vec<u8>> {
+        Network::builtin(world).map(|n| n.point_bytes())
+    }
+
+    /// Starts a free ride on a road network at the road point nearest `(x, z)`,
+    /// riding toward the edge's end node if `forward`. The route then grows
+    /// ahead of the rider and follows their choices at junctions.
+    pub async fn start_on_network(&self, world: &str, x: f64, z: f64, forward: bool) -> Result<(), String> {
+        let net = Network::builtin(world).ok_or_else(|| format!("no road network for {world}"))?;
+        let (edge, index) = net.nearest(x, z).ok_or("empty network")?;
+        let nav = Navigator::start(world, net, edge, index, forward);
+        let route = nav.route(net);
+        *self.inner.navigator.lock().unwrap() = Some(nav);
+        self.inner.session.lock().unwrap().set_route(Some(route));
+        self.inner.route_version.fetch_add(1, Ordering::Relaxed);
+        self.inner.navigate();
+        self.inner.send_now().await;
+        Ok(())
+    }
+
+    /// Takes `edge` at the next junction. Returns false when that is not an option there.
+    pub async fn choose_turn(&self, edge: usize) -> bool {
+        let changed = {
+            let mut nav = self.inner.navigator.lock().unwrap();
+            let Some(nav) = nav.as_mut() else { return false };
+            let Some(net) = Network::builtin(nav.world()) else {
+                return false;
+            };
+            let distance = self.inner.session.lock().unwrap().snapshot().distance_m;
+            if !nav.choose(net, distance, edge) {
+                return false;
+            }
+            let route = nav.route(net);
+            self.inner.session.lock().unwrap().replace_route(route);
+            true
+        };
+        if changed {
+            self.inner.route_version.fetch_add(1, Ordering::Relaxed);
+            self.inner.navigate();
+            self.inner.send_now().await;
+        }
+        changed
     }
 
     pub async fn start_workout(&self, workout: Workout) {
@@ -383,6 +453,22 @@ impl Inner {
         }
     }
 
+    /// Keeps the planned road ahead of the rider and refreshes the next junction.
+    fn navigate(&self) {
+        let mut nav = self.navigator.lock().unwrap();
+        let Some(nav) = nav.as_mut() else { return };
+        let Some(net) = Network::builtin(nav.world()) else {
+            return;
+        };
+        let distance = self.session.lock().unwrap().snapshot().distance_m;
+        if nav.keep_ahead(net, distance) {
+            let route = nav.route(net);
+            self.session.lock().unwrap().replace_route(route);
+            self.route_version.fetch_add(1, Ordering::Relaxed);
+        }
+        *self.junction.lock().unwrap() = nav.junction(net, distance, JUNCTION_LOOKAHEAD_M);
+    }
+
     fn publish(&self) {
         let session = self.session.lock().unwrap().snapshot();
         let devices = {
@@ -390,10 +476,14 @@ impl Inner {
             KINDS.iter().map(|k| statuses[k].clone()).collect()
         };
         let log = self.log.lock().unwrap().1.iter().cloned().collect();
+        let junction = self.junction.lock().unwrap().clone();
+        let route_version = self.route_version.load(Ordering::Relaxed);
         self.snapshots.send_modify(|s| {
             s.session = session;
             s.devices = devices;
             s.log = log;
+            s.junction = junction;
+            s.route_version = route_version;
         });
     }
 }
@@ -442,6 +532,7 @@ async fn tick_loop(inner: Arc<Inner>, period: Duration) {
         if let Some(cmd) = cmd {
             inner.send(cmd).await;
         }
+        inner.navigate();
         inner.publish();
     }
 }
@@ -533,6 +624,45 @@ mod tests {
         let s = engine.snapshot().session;
         assert_eq!(s.last_command, Some(TrainerCommand::TargetPower { watts: 260 }));
         assert!((s.power_w.unwrap() - 260.0).abs() < 15.0, "{:?}", s.power_w);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rides_the_road_network_and_takes_turns() {
+        let engine = sim_engine();
+        engine
+            .connect(&DeviceId::new("sim", "trainer"), DeviceKind::Trainer)
+            .await
+            .unwrap();
+        // Somewhere on the Ma-10 west of Sóller: the network's nearest road point is used.
+        let net = Network::builtin("mallorca").unwrap();
+        let ma10 = net
+            .edges
+            .iter()
+            .position(|e| e.road_ref.as_deref() == Some("Ma-10") && e.count > 50)
+            .unwrap();
+        let p = net.points[net.edges[ma10].start + 10];
+        engine
+            .start_on_network("mallorca", p[0] as f64, p[2] as f64, true)
+            .await
+            .unwrap();
+        let s = engine.snapshot();
+        assert!(s.route_version >= 1);
+        let route = engine.route().unwrap();
+        assert!(
+            route.length_m() > wattsup_core::network::PLAN_AHEAD_M,
+            "{}",
+            route.length_m()
+        );
+        assert_eq!(route.world.as_deref(), Some("mallorca"));
+        ride(120).await;
+        let s = engine.snapshot();
+        assert!(s.session.distance_m > 200.0, "{}", s.session.distance_m);
+        assert!(!s.session.finished);
+        assert!(engine.network_info("mallorca").is_some());
+        assert!(engine.network_points("mallorca").unwrap().len() > 1_000_000);
+        assert!(!engine.choose_turn(usize::MAX).await, "nonsense edges are refused");
+        engine.set_route("flat").await.unwrap();
+        assert!(engine.snapshot().junction.is_none());
     }
 
     #[tokio::test(start_paused = true)]

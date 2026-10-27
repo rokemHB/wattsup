@@ -1,0 +1,721 @@
+//! Road networks: a graph of roads with sampled geometry and elevation, and
+//! a navigator that turns the rider's choices at junctions into a linear
+//! [`Route`] the session can ride. Built by `tools/build_network.py`.
+
+use std::sync::OnceLock;
+
+use serde::{Deserialize, Serialize};
+
+use crate::route::{Route, RoutePoint};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Sign {
+    pub edge: usize,
+    #[serde(rename = "ref")]
+    pub road_ref: Option<String>,
+    pub to: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NetworkNode {
+    pub x: f64,
+    pub z: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub signs: Option<Vec<Sign>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NetworkEdge {
+    pub a: usize,
+    pub b: usize,
+    #[serde(rename = "ref")]
+    pub road_ref: Option<String>,
+    pub name: Option<String>,
+    /// 0 primary, 1 secondary, 2 tertiary, 3 unclassified.
+    pub kind: u8,
+    /// First point and number of points in the network's point array.
+    pub start: usize,
+    pub count: usize,
+    pub length_m: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Place {
+    pub name: String,
+    pub kind: String,
+    pub x: f64,
+    pub z: f64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct NetworkFile {
+    name: String,
+    origin: Origin,
+    nodes: Vec<NetworkNode>,
+    edges: Vec<NetworkEdge>,
+    #[serde(default)]
+    places: Vec<Place>,
+    points: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Origin {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct Network {
+    pub name: String,
+    pub origin: Origin,
+    pub nodes: Vec<NetworkNode>,
+    pub edges: Vec<NetworkEdge>,
+    pub places: Vec<Place>,
+    /// x, y (elevation), z per point.
+    pub points: Vec<[f32; 3]>,
+    /// Edge ids touching each node.
+    pub adjacency: Vec<Vec<usize>>,
+}
+
+/// What a map screen needs: everything but the points, which come separately as bytes.
+#[derive(Clone, Debug, Serialize)]
+pub struct NetworkInfo {
+    pub name: String,
+    pub origin: Origin,
+    pub nodes: Vec<NetworkNode>,
+    pub edges: Vec<NetworkEdge>,
+    pub places: Vec<Place>,
+    pub points: usize,
+}
+
+static MALLORCA: OnceLock<Option<Network>> = OnceLock::new();
+
+impl Network {
+    /// Parses the two files `build_network.py` writes.
+    pub fn parse(json: &str, points: &[u8]) -> Result<Self, String> {
+        let file: NetworkFile = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        if points.len() != file.points * 12 {
+            return Err(format!(
+                "point data has {} bytes, expected {}",
+                points.len(),
+                file.points * 12
+            ));
+        }
+        let pts = points
+            .chunks_exact(12)
+            .map(|c| {
+                let f = |i: usize| f32::from_le_bytes([c[i], c[i + 1], c[i + 2], c[i + 3]]);
+                [f(0), f(4), f(8)]
+            })
+            .collect();
+        let mut adjacency = vec![Vec::new(); file.nodes.len()];
+        for (i, e) in file.edges.iter().enumerate() {
+            adjacency[e.a].push(i);
+            adjacency[e.b].push(i);
+        }
+        Ok(Self {
+            name: file.name,
+            origin: file.origin,
+            nodes: file.nodes,
+            edges: file.edges,
+            places: file.places,
+            points: pts,
+            adjacency,
+        })
+    }
+
+    /// The network shipped for a world id, parsed once.
+    pub fn builtin(world: &str) -> Option<&'static Network> {
+        match world {
+            "mallorca" => MALLORCA
+                .get_or_init(|| {
+                    Self::parse(
+                        include_str!("../worlds/mallorca/network.json"),
+                        include_bytes!("../worlds/mallorca/network.bin"),
+                    )
+                    .map_err(|e| log_err(&e))
+                    .ok()
+                })
+                .as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn info(&self) -> NetworkInfo {
+        NetworkInfo {
+            name: self.name.clone(),
+            origin: self.origin,
+            nodes: self.nodes.clone(),
+            edges: self.edges.clone(),
+            places: self.places.clone(),
+            points: self.points.len(),
+        }
+    }
+
+    /// Point bytes as the file holds them, for a UI that draws the roads.
+    pub fn point_bytes(&self) -> Vec<u8> {
+        self.points
+            .iter()
+            .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
+            .collect()
+    }
+
+    /// The nearest road point to a ground position: edge and index within it.
+    pub fn nearest(&self, x: f64, z: f64) -> Option<(usize, usize)> {
+        let mut best = (f64::INFINITY, 0, 0);
+        for (ei, e) in self.edges.iter().enumerate() {
+            for i in 0..e.count {
+                let p = self.points[e.start + i];
+                let d = (p[0] as f64 - x).powi(2) + (p[2] as f64 - z).powi(2);
+                if d < best.0 {
+                    best = (d, ei, i);
+                }
+            }
+        }
+        (best.0.is_finite()).then_some((best.1, best.2))
+    }
+
+    pub fn other_end(&self, edge: usize, node: usize) -> usize {
+        let e = &self.edges[edge];
+        if e.a == node {
+            e.b
+        } else {
+            e.a
+        }
+    }
+
+    /// Bearing (radians, x east, z south) of an edge leaving `node`, measured over its first 30 m.
+    pub fn heading_out(&self, edge: usize, node: usize) -> f64 {
+        let e = &self.edges[edge];
+        let forward = e.a == node;
+        let n = e.count;
+        let k = 3.min(n - 1);
+        let (p0, p1) = if forward {
+            (self.points[e.start], self.points[e.start + k])
+        } else {
+            (self.points[e.start + n - 1], self.points[e.start + n - 1 - k])
+        };
+        ((p1[2] - p0[2]) as f64).atan2((p1[0] - p0[0]) as f64)
+    }
+
+    /// Bearing of an edge arriving at `node`.
+    pub fn heading_in(&self, edge: usize, node: usize) -> f64 {
+        let from = self.other_end(edge, node);
+        // Arriving heading = direction of travel at the node = opposite of leaving back the way we came.
+        self.heading_out(edge, node) + std::f64::consts::PI
+            - (self.heading_out(edge, node) - self.heading_out(edge, from) + std::f64::consts::PI)
+                .rem_euclid(2.0 * std::f64::consts::PI)
+            + std::f64::consts::PI
+    }
+
+    /// The edge a rider would naturally continue on at `node`, coming from `from_edge`:
+    /// the same road number if it continues, else the straightest option.
+    pub fn default_continuation(&self, node: usize, from_edge: usize) -> Option<usize> {
+        let arriving = self.arrival_heading(from_edge, node);
+        let same_ref = self.edges[from_edge].road_ref.clone();
+        self.adjacency[node]
+            .iter()
+            .copied()
+            .filter(|&e| e != from_edge)
+            .map(|e| {
+                let turn = angle_diff(self.heading_out(e, node), arriving).abs();
+                let bonus = if same_ref.is_some() && self.edges[e].road_ref == same_ref {
+                    1.0
+                } else {
+                    0.0
+                };
+                (turn - bonus, e)
+            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .map(|(_, e)| e)
+    }
+
+    /// Direction of travel when arriving at `node` along `edge`.
+    pub fn arrival_heading(&self, edge: usize, node: usize) -> f64 {
+        let e = &self.edges[edge];
+        let n = e.count;
+        let k = 3.min(n - 1);
+        let (p0, p1) = if e.b == node {
+            (self.points[e.start + n - 1 - k], self.points[e.start + n - 1])
+        } else {
+            (self.points[e.start + k], self.points[e.start])
+        };
+        ((p1[2] - p0[2]) as f64).atan2((p1[0] - p0[0]) as f64)
+    }
+}
+
+fn log_err(e: &str) -> String {
+    eprintln!("network: {e}");
+    e.to_string()
+}
+
+/// Signed difference a - b in (-π, π].
+fn angle_diff(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(2.0 * std::f64::consts::PI);
+    if d > std::f64::consts::PI {
+        d - 2.0 * std::f64::consts::PI
+    } else {
+        d
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Turn {
+    SharpLeft,
+    Left,
+    Straight,
+    Right,
+    SharpRight,
+    UTurn,
+}
+
+impl Turn {
+    /// From the signed turn angle in degrees (positive = right, in an x-east z-south frame).
+    pub fn from_degrees(deg: f64) -> Self {
+        let a = deg.abs();
+        if a < 25.0 {
+            Turn::Straight
+        } else if a > 160.0 {
+            Turn::UTurn
+        } else if a > 110.0 {
+            if deg > 0.0 {
+                Turn::SharpRight
+            } else {
+                Turn::SharpLeft
+            }
+        } else if deg > 0.0 {
+            Turn::Right
+        } else {
+            Turn::Left
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TurnOption {
+    pub edge: usize,
+    pub turn: Turn,
+    pub angle_deg: f64,
+    #[serde(rename = "ref")]
+    pub road_ref: Option<String>,
+    pub to: Vec<String>,
+    pub chosen: bool,
+}
+
+/// The next junction ahead of the rider.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Junction {
+    pub node: usize,
+    /// Route distance at which the junction lies.
+    pub at_m: f64,
+    /// Options from left to right.
+    pub options: Vec<TurnOption>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Leg {
+    edge: usize,
+    /// Riding from `a` to `b`.
+    forward: bool,
+    /// Index of the first point ridden on this edge (only the first leg starts mid-edge).
+    from_index: usize,
+}
+
+/// Turns legs through the network into the route the session rides, and
+/// extends or re-plans it as the rider goes.
+#[derive(Clone, Debug)]
+pub struct Navigator {
+    world: String,
+    legs: Vec<Leg>,
+    /// Route spacing in metres.
+    spacing: f64,
+}
+
+/// Keep at least this much road planned ahead of the rider.
+pub const PLAN_AHEAD_M: f64 = 6000.0;
+
+impl Navigator {
+    /// Starts on `edge` at point `index`, riding toward `b` if `forward`.
+    pub fn start(world: &str, net: &Network, edge: usize, index: usize, forward: bool) -> Self {
+        let mut nav = Self {
+            world: world.to_string(),
+            legs: vec![Leg {
+                edge,
+                forward,
+                from_index: index,
+            }],
+            spacing: 5.0,
+        };
+        nav.extend(net, PLAN_AHEAD_M * 2.0);
+        nav
+    }
+
+    pub fn world(&self) -> &str {
+        &self.world
+    }
+
+    fn leg_end_node(&self, net: &Network, leg: &Leg) -> usize {
+        let e = &net.edges[leg.edge];
+        if leg.forward {
+            e.b
+        } else {
+            e.a
+        }
+    }
+
+    /// Appends default continuations until at least `ahead_m` of road is planned beyond the current end.
+    fn extend(&mut self, net: &Network, ahead_m: f64) {
+        let mut added = 0.0;
+        while added < ahead_m {
+            let last = *self.legs.last().unwrap();
+            let node = self.leg_end_node(net, &last);
+            let Some(next) = net.default_continuation(node, last.edge) else {
+                break; // dead end
+            };
+            let forward = net.edges[next].a == node;
+            self.legs.push(Leg {
+                edge: next,
+                forward,
+                from_index: 0,
+            });
+            added += net.edges[next].length_m;
+            if self.legs.len() > 400 {
+                break;
+            }
+        }
+    }
+
+    /// Raw polyline of all legs, in order.
+    fn polyline(&self, net: &Network) -> Vec<[f32; 3]> {
+        let mut out: Vec<[f32; 3]> = Vec::new();
+        for (li, leg) in self.legs.iter().enumerate() {
+            let e = &net.edges[leg.edge];
+            let pts = &net.points[e.start..e.start + e.count];
+            let iter: Box<dyn Iterator<Item = &[f32; 3]>> = if leg.forward {
+                Box::new(pts[leg.from_index..].iter())
+            } else {
+                Box::new(pts[..e.count - leg.from_index].iter().rev())
+            };
+            for (k, p) in iter.enumerate() {
+                if li > 0 && k == 0 {
+                    continue; // the junction node is already the previous leg's last point
+                }
+                out.push(*p);
+            }
+        }
+        out
+    }
+
+    /// The route for the session: the planned legs resampled evenly.
+    pub fn route(&self, net: &Network) -> Route {
+        let poly = self.polyline(net);
+        let name = self
+            .legs
+            .first()
+            .and_then(|l| net.edges[l.edge].road_ref.clone())
+            .unwrap_or_else(|| net.name.clone());
+        Route::from_polyline(&name, &poly, self.spacing, Some(self.world.clone()))
+    }
+
+    /// Route distance at which each leg ends (the junction after it).
+    fn leg_ends(&self, net: &Network) -> Vec<f64> {
+        let mut ends = Vec::with_capacity(self.legs.len());
+        let mut d = 0.0;
+        for leg in &self.legs {
+            let e = &net.edges[leg.edge];
+            let pts = &net.points[e.start..e.start + e.count];
+            let slice: Vec<[f32; 3]> = if leg.forward {
+                pts[leg.from_index..].to_vec()
+            } else {
+                pts[..e.count - leg.from_index].iter().rev().copied().collect()
+            };
+            for w in slice.windows(2) {
+                d += ((w[1][0] - w[0][0]) as f64).hypot((w[1][2] - w[0][2]) as f64);
+            }
+            ends.push(d);
+        }
+        ends
+    }
+
+    /// Makes sure the plan reaches well beyond `distance_m`. Returns true when the route changed.
+    pub fn keep_ahead(&mut self, net: &Network, distance_m: f64) -> bool {
+        let planned = self.leg_ends(net).last().copied().unwrap_or(0.0);
+        if planned - distance_m < PLAN_AHEAD_M {
+            let before = self.legs.len();
+            self.extend(net, PLAN_AHEAD_M * 2.0);
+            return self.legs.len() != before;
+        }
+        false
+    }
+
+    /// The next junction (a node with a choice) ahead of `distance_m`, within `lookahead_m`.
+    pub fn junction(&self, net: &Network, distance_m: f64, lookahead_m: f64) -> Option<Junction> {
+        let ends = self.leg_ends(net);
+        for (li, leg) in self.legs.iter().enumerate() {
+            let at = ends[li];
+            if at < distance_m - 5.0 {
+                continue;
+            }
+            if at - distance_m > lookahead_m {
+                return None;
+            }
+            let node = self.leg_end_node(net, leg);
+            if net.adjacency[node].len() < 3 {
+                continue;
+            }
+            let arriving = net.arrival_heading(leg.edge, node);
+            let planned_next = self.legs.get(li + 1).map(|l| l.edge);
+            let signs = net.nodes[node].signs.as_deref().unwrap_or(&[]);
+            let mut options: Vec<TurnOption> = net.adjacency[node]
+                .iter()
+                .copied()
+                .filter(|&e| e != leg.edge)
+                .map(|e| {
+                    let deg = angle_diff(net.heading_out(e, node), arriving).to_degrees();
+                    let sign = signs.iter().find(|s| s.edge == e);
+                    TurnOption {
+                        edge: e,
+                        turn: Turn::from_degrees(deg),
+                        angle_deg: (deg * 10.0).round() / 10.0,
+                        road_ref: sign
+                            .and_then(|s| s.road_ref.clone())
+                            .or_else(|| net.edges[e].road_ref.clone()),
+                        to: sign.map(|s| s.to.clone()).unwrap_or_default(),
+                        chosen: planned_next == Some(e),
+                    }
+                })
+                .collect();
+            options.sort_by(|a, b| a.angle_deg.partial_cmp(&b.angle_deg).unwrap());
+            return Some(Junction {
+                node,
+                at_m: at,
+                options,
+            });
+        }
+        None
+    }
+
+    /// Takes `edge` at the next junction ahead of `distance_m`. Returns false if that is not an option there.
+    pub fn choose(&mut self, net: &Network, distance_m: f64, edge: usize) -> bool {
+        let ends = self.leg_ends(net);
+        let Some(li) = (0..self.legs.len())
+            .find(|&i| ends[i] >= distance_m - 5.0 && net.adjacency[self.leg_end_node(net, &self.legs[i])].len() >= 3)
+        else {
+            return false;
+        };
+        let node = self.leg_end_node(net, &self.legs[li]);
+        if !net.adjacency[node].contains(&edge) || edge == self.legs[li].edge {
+            return false;
+        }
+        self.legs.truncate(li + 1);
+        let forward = net.edges[edge].a == node;
+        self.legs.push(Leg {
+            edge,
+            forward,
+            from_index: 0,
+        });
+        self.extend(net, PLAN_AHEAD_M * 2.0);
+        true
+    }
+}
+
+impl Route {
+    /// A route along a polyline, resampled every `spacing` metres with linear elevation.
+    pub fn from_polyline(name: &str, poly: &[[f32; 3]], spacing: f64, world: Option<String>) -> Self {
+        let mut points = Vec::new();
+        if poly.is_empty() {
+            return Self {
+                name: name.into(),
+                points,
+                closed: false,
+                world,
+            };
+        }
+        points.push(RoutePoint {
+            distance_m: 0.0,
+            x: poly[0][0] as f64,
+            y: poly[0][1] as f64,
+            z: poly[0][2] as f64,
+        });
+        let mut travelled = 0.0;
+        let mut next = spacing;
+        for w in poly.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let seg = ((b[0] - a[0]) as f64).hypot((b[2] - a[2]) as f64);
+            while seg > 0.0 && travelled + seg >= next {
+                let t = (next - travelled) / seg;
+                points.push(RoutePoint {
+                    distance_m: next,
+                    x: a[0] as f64 + (b[0] - a[0]) as f64 * t,
+                    y: a[1] as f64 + (b[1] - a[1]) as f64 * t,
+                    z: a[2] as f64 + (b[2] - a[2]) as f64 * t,
+                });
+                next += spacing;
+            }
+            travelled += seg;
+        }
+        Self {
+            name: name.into(),
+            points,
+            closed: false,
+            world,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A T-junction: a straight road from west to east through node 1, and a branch north from node 1.
+    ///      2
+    ///      |
+    /// 0 -- 1 -- 3
+    fn t_network() -> Network {
+        let mut points = Vec::new();
+        let mut edges = Vec::new();
+        let mut add = |a: usize, b: usize, from: [f32; 2], to: [f32; 2], r: Option<&str>| {
+            let start = points.len();
+            let n = 11;
+            for i in 0..n {
+                let t = i as f32 / (n - 1) as f32;
+                points.push([from[0] + (to[0] - from[0]) * t, 10.0, from[1] + (to[1] - from[1]) * t]);
+            }
+            edges.push(NetworkEdge {
+                a,
+                b,
+                road_ref: r.map(String::from),
+                name: None,
+                kind: 1,
+                start,
+                count: n,
+                length_m: 100.0,
+            });
+        };
+        add(0, 1, [0.0, 0.0], [100.0, 0.0], Some("Ma-10"));
+        add(1, 3, [100.0, 0.0], [200.0, 0.0], Some("Ma-10"));
+        add(1, 2, [100.0, 0.0], [100.0, -100.0], Some("Ma-2"));
+        let nodes = vec![
+            NetworkNode {
+                x: 0.0,
+                z: 0.0,
+                y: 10.0,
+                signs: None,
+            },
+            NetworkNode {
+                x: 100.0,
+                z: 0.0,
+                y: 10.0,
+                signs: Some(vec![Sign {
+                    edge: 2,
+                    road_ref: Some("Ma-2".into()),
+                    to: vec!["Sóller".into()],
+                }]),
+            },
+            NetworkNode {
+                x: 100.0,
+                z: -100.0,
+                y: 10.0,
+                signs: None,
+            },
+            NetworkNode {
+                x: 200.0,
+                z: 0.0,
+                y: 10.0,
+                signs: None,
+            },
+        ];
+        let mut adjacency = vec![Vec::new(); 4];
+        for (i, e) in edges.iter().enumerate() {
+            adjacency[e.a].push(i);
+            adjacency[e.b].push(i);
+        }
+        Network {
+            name: "t".into(),
+            origin: Origin { lat: 0.0, lon: 0.0 },
+            nodes,
+            edges,
+            places: vec![],
+            points,
+            adjacency,
+        }
+    }
+
+    #[test]
+    fn default_continuation_prefers_the_same_road() {
+        let net = t_network();
+        assert_eq!(net.default_continuation(1, 0), Some(1));
+        // Coming up the branch, both ways along the Ma-10 are 90° turns; either is fine.
+        assert!(matches!(net.default_continuation(1, 2), Some(0) | Some(1)));
+    }
+
+    #[test]
+    fn navigator_plans_ahead_and_turns_on_request() {
+        let net = t_network();
+        let mut nav = Navigator::start("t", &net, 0, 0, true);
+        let route = nav.route(&net);
+        assert!((route.length_m() - 200.0).abs() < 6.0, "{}", route.length_m());
+        assert_eq!(route.world.as_deref(), Some("t"));
+        let j = nav.junction(&net, 20.0, 500.0).expect("a junction ahead");
+        assert_eq!(j.node, 1);
+        assert!((j.at_m - 100.0).abs() < 1e-6);
+        assert_eq!(j.options.len(), 2);
+        let left = j.options.iter().find(|o| o.edge == 2).unwrap();
+        assert_eq!(left.turn, Turn::Left, "{left:?}");
+        assert_eq!(left.to, vec!["Sóller".to_string()]);
+        assert!(!left.chosen);
+        let straight = j.options.iter().find(|o| o.edge == 1).unwrap();
+        assert_eq!(straight.turn, Turn::Straight);
+        assert!(straight.chosen);
+        // Turn left: the route now goes north from the junction.
+        assert!(nav.choose(&net, 20.0, 2));
+        let route = nav.route(&net);
+        let last = route.points.last().unwrap();
+        assert!(last.z < -90.0 && (last.x - 100.0).abs() < 1.0, "{last:?}");
+        assert!(
+            nav.junction(&net, 20.0, 500.0)
+                .unwrap()
+                .options
+                .iter()
+                .find(|o| o.edge == 2)
+                .unwrap()
+                .chosen
+        );
+        // Past the junction there is nothing more to choose.
+        assert!(nav.junction(&net, 150.0, 500.0).is_none());
+        assert!(!nav.choose(&net, 150.0, 1));
+    }
+
+    #[test]
+    fn nearest_point_and_mid_edge_start() {
+        let net = t_network();
+        assert_eq!(net.nearest(52.0, 3.0), Some((0, 5)));
+        let nav = Navigator::start("t", &net, 0, 5, true);
+        let route = nav.route(&net);
+        assert!((route.points[0].x - 50.0).abs() < 1e-6);
+        assert!((route.length_m() - 150.0).abs() < 6.0);
+        let back = Navigator::start("t", &net, 0, 5, false);
+        assert!((back.route(&net).length_m() - 50.0).abs() < 6.0, "dead end behind");
+    }
+
+    #[test]
+    fn turns_from_angles() {
+        assert_eq!(Turn::from_degrees(5.0), Turn::Straight);
+        assert_eq!(Turn::from_degrees(60.0), Turn::Right);
+        assert_eq!(Turn::from_degrees(-60.0), Turn::Left);
+        assert_eq!(Turn::from_degrees(130.0), Turn::SharpRight);
+        assert_eq!(Turn::from_degrees(175.0), Turn::UTurn);
+    }
+
+    #[test]
+    fn mallorca_network_loads() {
+        let net = Network::builtin("mallorca").expect("shipped network");
+        assert!(net.edges.len() > 1000, "{}", net.edges.len());
+        let km: f64 = net.edges.iter().map(|e| e.length_m).sum::<f64>() / 1000.0;
+        assert!(km > 500.0, "{km} km");
+        assert!(net.edges.iter().any(|e| e.road_ref.as_deref() == Some("Ma-10")));
+        assert!(net.nodes.iter().any(|n| n.signs.is_some()));
+    }
+}

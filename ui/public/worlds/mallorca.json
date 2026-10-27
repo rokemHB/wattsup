@@ -1,0 +1,48 @@
+{
+ "id": "mallorca",
+ "name": "Mallorca",
+ "origin": {
+  "lat": 39.71910715,
+  "lon": 2.8165319
+ },
+ "network": true,
+ "far": {
+  "file": "/worlds/mallorca-far.bin",
+  "cols": 686,
+  "rows": 553,
+  "x0": -44228.5,
+  "z0": -31059.4,
+  "spacing": 150.0,
+  "ortho": {
+   "rowEdges": [
+    0,
+    552
+   ],
+   "colEdges": [
+    0,
+    685
+   ],
+   "size": 2048,
+   "files": [
+    [
+     "/worlds/mallorca/ortho-far-0-0.jpg"
+    ]
+   ]
+  }
+ },
+ "map": {
+  "file": "/worlds/mallorca/map.jpg",
+  "lat_min": 39.25,
+  "lat_max": 40.0,
+  "lon_min": 2.3,
+  "lon_max": 3.5
+ },
+ "tiles": {
+  "dlat": 0.02,
+  "dlon": 0.025,
+  "dem": "https://servicios.idee.es/wcs-inspire/mdt?service=WCS&request=GetCoverage&version=2.0.1&coverageId=Elevacion4258_5&subset=Lat({lat0},{lat1})&subset=Long({lon0},{lon1})&format=image/tiff",
+  "ortho": "https://www.ign.es/wmts/pnoa-ma?service=WMTS&request=GetTile&version=1.0.0&layer=OI.OrthoimageCoverage&style=default&format=image/jpeg&tilematrixset=GoogleMapsCompatible&tilematrix={z}&tilerow={y}&tilecol={x}",
+  "orthoZoom": 15
+ },
+ "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0)."
+}

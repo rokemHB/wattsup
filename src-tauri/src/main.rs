@@ -4,11 +4,14 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod tiles;
+
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
+use wattsup_core::network::NetworkInfo;
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo, BUILTIN_ROUTES};
 use wattsup_core::session::{ControlMode, Workout};
@@ -95,6 +98,30 @@ async fn set_route(state: State<'_, AppState>, id: String) -> CmdResult<()> {
 async fn reset_ride(state: State<'_, AppState>) -> CmdResult<()> {
     state.engine.reset_ride().await;
     Ok(())
+}
+
+#[tauri::command]
+fn network_info(state: State<'_, AppState>, world: String) -> Option<NetworkInfo> {
+    state.engine.network_info(&world)
+}
+
+#[tauri::command]
+fn network_points(state: State<'_, AppState>, world: String) -> CmdResult<tauri::ipc::Response> {
+    state
+        .engine
+        .network_points(&world)
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| format!("no road network for {world}"))
+}
+
+#[tauri::command]
+async fn start_on_network(state: State<'_, AppState>, world: String, x: f64, z: f64, forward: bool) -> CmdResult<()> {
+    state.engine.start_on_network(&world, x, z, forward).await
+}
+
+#[tauri::command]
+async fn choose_turn(state: State<'_, AppState>, edge: usize) -> CmdResult<bool> {
+    Ok(state.engine.choose_turn(edge).await)
 }
 
 #[tauri::command]
@@ -217,6 +244,7 @@ fn main() {
                 engine,
                 startup: startup.clone(),
             });
+            app.manage(tiles::Tiles::new(app.handle()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -228,6 +256,11 @@ fn main() {
             reset_ride,
             start_workout,
             stop_workout,
+            network_info,
+            network_points,
+            start_on_network,
+            choose_turn,
+            tiles::fetch_cached,
             scan,
             connect,
             disconnect,

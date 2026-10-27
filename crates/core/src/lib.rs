@@ -5,6 +5,7 @@
 //! every rule here unit-testable without hardware.
 
 pub mod gearing;
+pub mod network;
 pub mod physics;
 pub mod protocol;
 pub mod resistance;
