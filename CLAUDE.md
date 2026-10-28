@@ -143,6 +143,11 @@ screen is `ui/src/rides.ts`.
 ## Gotchas
 
 - `node_modules` must never be symlinked into a git worktree of this repo.
+- localStorage keys: `wattsup.devices` (the real device last used per role;
+  `scan(true)` in `debug.ts` connects them after a scan), `wattsup.route`
+  and `wattsup.camera` (restored at startup unless `--route`/`--camera` is
+  given; `StartupInfo.route_given`), `wattsup.plans`, `wattsup.workouts`,
+  `wattsup.ftp`, `wattsup.virtualGearing`, `wattsup.pixelRatio`.
 - Overpass is often at capacity; use the Geofabrik PBF path.
 - The WCS caps one request at ~0.1°; chunks are 0.05° (pipeline) and
   0.02°×0.025° (ride-time tiles).

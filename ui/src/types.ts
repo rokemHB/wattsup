@@ -275,6 +275,8 @@ export interface StartupInfo {
   raw_logging: boolean;
   auto_sim: boolean;
   route: string;
+  /** The route came from the command line or environment; otherwise the last one ridden is restored. */
+  route_given: boolean;
   start_m: number;
   camera: string | null;
   screen: string | null;

@@ -100,7 +100,7 @@ function show(next: Screen) {
   if (next === "menu") fillWorkoutList();
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
   if (next === "rider") fillRiderScreen();
-  world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? "chase" : "orbit");
+  world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? (startupCamera ?? remembered(CAMERA_KEY) ?? "chase") : "orbit");
   world?.setIdle(next !== "ride");
 }
 
@@ -276,6 +276,28 @@ async function endWorkout() {
 }
 
 // --- the island map --------------------------------------------------------------
+
+/** The last route ridden and camera used, restored on the next start. */
+const ROUTE_KEY = "wattsup.route";
+const CAMERA_KEY = "wattsup.camera";
+/** A camera from the command line (for looking at a spot) beats the remembered one. */
+let startupCamera: string | null = null;
+
+function remember(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // storage may be unavailable
+  }
+}
+
+function remembered(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 
 /** The planned ride about to start: the HUD shows its whole profile, not a window. */
 let plannedRide = false;
@@ -547,6 +569,7 @@ async function startRide(id: string) {
   if (id !== selectedRoute || !world) {
     await api.setRoute(id);
     selectedRoute = id;
+    remember(ROUTE_KEY, id);
     fillRouteList();
     await buildWorld();
   }
@@ -740,7 +763,7 @@ function wire() {
       return;
     }
     if (e.key === "d" || e.key === "D") toggleDebug();
-    else if ((e.key === "c" || e.key === "C") && world && screen === "ride") world.cycleCamera();
+    else if ((e.key === "c" || e.key === "C") && world && screen === "ride") remember(CAMERA_KEY, world.cycleCamera());
     else if (e.key === "a" || e.key === "A") api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
   });
 }
@@ -761,6 +784,12 @@ async function start() {
   const startup = await api.startupInfo();
   routes = await api.routes();
   selectedRoute = startup.route;
+  startupCamera = startup.camera ?? null;
+  const lastRoute = remembered(ROUTE_KEY);
+  if (!startup.route_given && lastRoute && lastRoute !== selectedRoute && routes.some((r) => r.id === lastRoute)) {
+    await api.setRoute(lastRoute);
+    selectedRoute = lastRoute;
+  }
   fillRouteList();
   await api.onSnapshot(onSnapshot);
   api.setFtp(ftp).catch(console.error);
@@ -771,7 +800,7 @@ async function start() {
   // Trainer mode (`--trainer`): no world at all until the menu is opened.
   if (wanted !== "trainer") await buildWorld();
   if (startup.camera && world) world.setCamera(startup.camera);
-  scan().catch(showError);
+  scan(true).catch(showError);
   if (startup.screen === "island") {
     // For looking at the island: start at a given lat,lon (toward the edge's end unless ",back"), else on the Ma-10.
     if (await ensureNetwork()) {

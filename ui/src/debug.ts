@@ -13,6 +13,72 @@ let lastGearKey = "";
 let lastScan: ScanResult = { devices: [], errors: [] };
 export let latest: EngineSnapshot | null = null;
 
+// --- remembered devices: the real device last used in each role connects by itself after a scan.
+const DEVICES_KEY = "wattsup.devices";
+type Remembered = Partial<Record<DeviceKind, { id: string; name: string }>>;
+
+function loadRemembered(): Remembered {
+  try {
+    return JSON.parse(localStorage.getItem(DEVICES_KEY) ?? "{}") as Remembered;
+  } catch {
+    return {};
+  }
+}
+
+function saveRemembered(r: Remembered) {
+  try {
+    localStorage.setItem(DEVICES_KEY, JSON.stringify(r));
+  } catch {
+    // storage may be unavailable
+  }
+  renderRemembered();
+}
+
+/** Keeps a device the user chose for a role (simulated ones are not kept: they would ride by themselves). */
+function rememberDevice(kind: DeviceKind, d: DiscoveredDevice) {
+  if (d.simulated) return;
+  saveRemembered({ ...loadRemembered(), [kind]: { id: d.id, name: d.name } });
+}
+
+function forgetDevice(kind: DeviceKind) {
+  const r = loadRemembered();
+  delete r[kind];
+  saveRemembered(r);
+}
+
+function renderRemembered() {
+  const r = loadRemembered();
+  const kinds = (Object.keys(r) as DeviceKind[]).filter((k) => r[k]);
+  $("device-memory").replaceChildren(
+    ...kinds.map((kind) =>
+      el(
+        "div",
+        { className: "slot" },
+        el("span", { className: "role" }, `${KIND_LABEL[kind]} · remembered`),
+        el("span", { className: "name" }, `${r[kind]!.name} · connects by itself after a scan`),
+        el(
+          "span",
+          { className: "row" },
+          el("button", { className: "small", textContent: "Connect", onclick: () => scan(true).catch(showError) }),
+          el("button", { className: "small", textContent: "Forget", onclick: () => forgetDevice(kind) }),
+        ),
+      ),
+    ),
+  );
+}
+
+/** Connects the remembered devices the last scan found, where the role is still empty. */
+async function connectRemembered() {
+  const r = loadRemembered();
+  for (const kind of Object.keys(r) as DeviceKind[]) {
+    const want = r[kind];
+    const slot = latest?.devices.find((d) => d.kind === kind);
+    if (!want || (slot && slot.state.state !== "disconnected")) continue;
+    if (!lastScan.devices.some((d) => d.id === want.id && d.kinds.includes(kind))) continue;
+    await api.connect(want.id, kind).catch(showError);
+  }
+}
+
 export function showError(e: unknown) {
   $("scan-status").textContent = String(e);
 }
@@ -134,7 +200,15 @@ function renderScan() {
 
 function renderFound(d: DiscoveredDevice) {
   const buttons = d.kinds.map((kind: DeviceKind) =>
-    el("button", { className: "small", textContent: `Use as ${KIND_LABEL[kind].toLowerCase()}`, onclick: () => api.connect(d.id, kind).catch(showError) }),
+    el("button", {
+      className: "small",
+      textContent: `Use as ${KIND_LABEL[kind].toLowerCase()}`,
+      onclick: () =>
+        api
+          .connect(d.id, kind)
+          .then(() => rememberDevice(kind, d))
+          .catch(showError),
+    }),
   );
   const rssi = d.rssi === null ? "" : `${d.rssi} dBm`;
   return el(
@@ -155,7 +229,8 @@ export function applyStoredDrivetrain() {
   }
 }
 
-export async function scan() {
+/** Scans for devices; with `reconnect`, the remembered ones then connect by themselves. */
+export async function scan(reconnect = false) {
   const button = $<HTMLButtonElement>("scan");
   button.disabled = true;
   $("scan-status").textContent = "scanning…";
@@ -163,6 +238,7 @@ export async function scan() {
     lastScan = await api.scan(5);
     $("scan-status").textContent = `${lastScan.devices.length} found`;
     renderScan();
+    if (reconnect) await connectRemembered();
   } catch (e) {
     showError(e);
   } finally {
@@ -176,8 +252,9 @@ export function wireDebug() {
   $("shift-down").onclick = () => api.shift("down");
   $("mode-sim").onclick = () => api.setMode("sim");
   $("mode-erg").onclick = () => api.setMode("erg");
-  $("scan").onclick = scan;
+  $("scan").onclick = () => scan(true).catch(showError);
   $("show-sim").onchange = renderScan;
+  renderRemembered();
 
   const erg = $<HTMLInputElement>("erg-target");
   erg.onchange = () => api.setErgTarget(Number(erg.value));

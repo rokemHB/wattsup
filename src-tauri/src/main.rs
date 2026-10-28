@@ -36,6 +36,8 @@ struct StartupInfo {
     auto_sim: bool,
     /// Id of the built-in route to ride.
     route: String,
+    /// The route came from `--route` / WATTSUP_ROUTE; otherwise the UI may restore the last one ridden.
+    route_given: bool,
     /// Metres along the route to start at (for looking at a specific spot).
     start_m: f64,
     /// Camera mode to start in: chase, side, front or drone.
@@ -66,6 +68,7 @@ fn startup_from_env() -> StartupInfo {
         raw_logging: flag("--raw", "WATTSUP_RAW"),
         auto_sim: flag("--auto-sim", "WATTSUP_AUTO_SIM"),
         route: value("--route", "WATTSUP_ROUTE").unwrap_or_else(|| BUILTIN_ROUTES[0].to_string()),
+        route_given: value("--route", "WATTSUP_ROUTE").is_some(),
         start_m: value("--start", "WATTSUP_START_M")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),

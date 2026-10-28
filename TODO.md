@@ -12,7 +12,7 @@ Open items, roughly in the order they are worth doing.
 - [x] Rider model: the saddle clipped into the rider's backside; the saddle is lower, the pelvis sits on it.
 - [x] HUD: the junction prompt sits top right under the tiles, smaller, the road ahead clear.
 - [x] Bike through curves: yaw from the route tangent at the bike's own position, lean from the curvature (v²/gr); no more lagging heading.
-- [ ] Settings: remember the chosen route and camera, a "forget device" action.
+- [x] Settings: the real device last used in each role is remembered and connects by itself after the startup scan (Forget drops it); the last route and camera are restored.
 - [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
 - [x] Ride records: totals and one-second samples stored per ride, the Rides screen with weekly totals and graphs.
 - [x] Trainer mode: ERG workouts and quick blocks with no 3D world, +/− watts, skip, a small always-on-top window, for training beside a video.
