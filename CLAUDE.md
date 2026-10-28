@@ -32,6 +32,9 @@ workout|map|map-download|ride|island|workout-ride>`, `WATTSUP_ISLAND_AT=lat,lon[
 (network ride from there), `WATTSUP_START_M=<m>` and `WATTSUP_CAMERA=<chase|side|
 front|drone|orbit>` for single routes. The Tauri CLI swallows flags, so use env.
 
+Close the app when you are done with a piece of work (Robin does not want it
+running all the time): `tools/dev/stop.sh`.
+
 `tools/dev/shot.sh <start_m> <camera> <out.png>` restarts the dev app and
 screenshots its window (Hyprland `hyprctl` + `grim`); see its header. The
 app's `console.warn` lines are forwarded by Vite into the dev log, `console.info`
