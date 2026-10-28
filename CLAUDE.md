@@ -64,6 +64,21 @@ through `fetch_cached` (sha256 disk cache under the app cache dir,
 `src-tauri/src/tiles.rs`). The map screen's "Download all terrain" fetches the
 whole region (~175 MB). The IGN servers answer 502 now and then: fetchers retry.
 
+## Performance (measured 2026-10-28 on the Intel UHD 620 laptop)
+
+The frame is GPU fill-bound: time scales with pixels, not draw calls. The
+renderer adapts the pixel ratio (0.7–1.5) every 4 s with hysteresis; each
+change resizes the canvas and flashes once, so keep changes rare. What
+costs per pixel: anisotropic filtering (now 2 on photos, 4 on asphalt),
+MSAA, the detail shader, shadows, and a scene-wide environment map (removed:
+hemisphere light instead, the sky map only on chrome and water). The sky is
+baked once into a cube map. Tile builds yield to the frame every 5 ms.
+`World.perfStats` logs frame statistics every 10 s at info level; to read them
+in the dev log temporarily change that `console.info` to `console.warn`
+(Vite forwards warn, not info). Beware: with no `SCREEN=ride`/`island` the app
+idles in a menu at 15 fps and the statistics then measure nothing useful;
+with `AUTO_SIM=0` the connection banner animates and skews them too.
+
 ## Gotchas
 
 - `node_modules` must never be symlinked into a git worktree of this repo.

@@ -162,10 +162,24 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   if (near.ortho) {
     // Aerial imagery: one textured mesh per block of the near grid, photo on the far grid.
     const { rowEdges, colEdges, images } = near.ortho;
+    // Blocks with the road in or near them get every sample; the others every
+    // other one. The corridor strip carries the fine shape at the road, and
+    // half the triangles is a good part of a frame on an integrated GPU.
+    const sz = near.spacingZ ?? near.spacing;
+    const halves: Grid = { ...near, cols: Math.floor((near.cols - 1) / 2) + 1, rows: Math.floor((near.rows - 1) / 2) + 1, spacing: near.spacing * 2, spacingZ: sz * 2 };
     for (let br = 0; br < rowEdges.length - 1; br++) {
       for (let bc = 0; bc < colEdges.length - 1; bc++) {
         const tex = imageTexture(images[br][bc]);
-        group.add(gridBlockMesh(near, tucked, [rowEdges[br], rowEdges[br + 1]], [colEdges[bc], colEdges[bc + 1]], tex, detail));
+        const bx0 = near.x0 + colEdges[bc] * near.spacing - 400;
+        const bx1 = near.x0 + colEdges[bc + 1] * near.spacing + 400;
+        const bz0 = near.z0 + rowEdges[br] * sz - 400;
+        const bz1 = near.z0 + rowEdges[br + 1] * sz + 400;
+        const nearRoad = pts.some((p) => p.x >= bx0 && p.x <= bx1 && p.z >= bz0 && p.z <= bz1);
+        const k = nearRoad ? 1 : 2;
+        const g = k === 1 ? near : halves;
+        const rr: [number, number] = [Math.round(rowEdges[br] / k), Math.min(g.rows - 1, Math.round(rowEdges[br + 1] / k))];
+        const cc: [number, number] = [Math.round(colEdges[bc] / k), Math.min(g.cols - 1, Math.round(colEdges[bc + 1] / k))];
+        group.add(gridBlockMesh(g, tucked, rr, cc, tex, detail));
       }
     }
     const sampler = new OrthoSampler(near, near.ortho);
@@ -541,6 +555,7 @@ export function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mes
     envMapIntensity: 0.3,
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
+  mesh.userData.kind = "sea";
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(cx, SEA_LEVEL, cz);
   return {
@@ -1019,7 +1034,7 @@ export function vegetation(
   const bush = new THREE.SphereGeometry(1, 5, 4);
   bush.scale(1.4, 0.9, 1.4);
   bush.translate(0, 0.7, 0);
-  const rock = new THREE.IcosahedronGeometry(1, 0);
+  const rock = new THREE.IcosahedronGeometry(1, 1);
   rock.scale(1.3, 0.8, 1);
 
   const kinds = mediterranean

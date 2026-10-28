@@ -24,9 +24,9 @@ export class World {
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private sunDir: THREE.Vector3;
-  private sky: THREE.Object3D;
   private statics: WorldStatics;
   private rider = new Rider();
+  private envTex: THREE.Texture | null = null;
   private orbitAngle = 0;
   private distance = 0;
   private targetDistance = 0;
@@ -44,13 +44,13 @@ export class World {
   /** How far right of the centre line the rider rides. */
   private laneOffset: number;
   /** Render scale, tuned at runtime to hold the frame rate on weak GPUs. */
-  private pixelRatio = Math.min(window.devicePixelRatio, 1.5);
+  // Start where the last ride settled (an integrated GPU lands around 0.8), so the first seconds are not spent stepping down.
+  private pixelRatio = Math.min(window.devicePixelRatio, 1.5, Number(localStorage.getItem("wattsup.pixelRatio")) || 0.9);
   private frameTimes: number[] = [];
 
   constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData, network?: { data: NetworkWorldData; net: RoadNetwork }) {
     this.sampler = new RouteSampler(route);
-    // No multisampling: on an integrated GPU it costs as much as a third more resolution, which hides edges better than MSAA hides a blur.
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.debug.onShaderError = (gl, _program, vs, fs) => {
       console.warn(`shader error: vertex: ${gl.getShaderInfoLog(vs)} fragment: ${gl.getShaderInfoLog(fs)}`);
@@ -71,18 +71,30 @@ export class World {
     sky.material.uniforms.mieCoefficient.value = 0.002;
     sky.material.uniforms.mieDirectionalG.value = 0.8;
     sky.material.uniforms.sunPosition.value.copy(sunDir);
-    this.scene.add(sky);
-    this.sky = sky;
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    // The scattering shader is costly per pixel and the sky never changes, so
+    // it is rendered once into a cube map that serves as the background, and
+    // once more, blurred, as the environment light.
     const envScene = new THREE.Scene();
-    envScene.add(sky.clone());
-    this.scene.environment = pmrem.fromScene(envScene, 0.02).texture;
-    this.scene.environmentIntensity = 0.4;
+    envScene.add(sky);
+    const skyTarget = new THREE.WebGLCubeRenderTarget(1024, { generateMipmaps: false, type: THREE.HalfFloatType });
+    skyTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
+    // Baked in linear light without tone mapping: the main pass tone-maps it once, like everything else.
+    const mapping = this.renderer.toneMapping;
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    new THREE.CubeCamera(1, 100000, skyTarget).update(this.renderer, envScene);
+    this.renderer.toneMapping = mapping;
+    this.scene.background = skyTarget.texture;
+    // The blurred sky lights only the few shiny things (chrome, water): as a
+    // scene-wide environment map it cost a fifth of every frame on terrain
+    // that a hemisphere light lights just as well.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.envTex = pmrem.fromScene(envScene, 0.02).texture;
     envScene.clear();
+    pmrem.dispose();
     this.scene.fog = new THREE.Fog("#bccfe4", 900, 10000);
 
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 30000);
-    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 0.9));
+    this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 1.25));
     this.sun = new THREE.DirectionalLight("#fff1d6", 3.0);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1536, 1536);
@@ -98,6 +110,10 @@ export class World {
     this.scene.add(this.sun, this.sun.target);
 
     this.statics = network ? this.buildNetworkWorld(network.data, network.net) : buildWorld(route, world);
+    this.statics.group.traverse((o) => {
+      if (o.userData.kind === "sea") this.reflect(o);
+    });
+    this.reflect(this.rider.group);
     this.laneOffset = (world || network ? REAL_ROAD_WIDTH : ROAD_WIDTH) * 0.22;
     this.scene.add(this.statics.group, this.rider.group);
 
@@ -187,10 +203,25 @@ export class World {
     if ((MODES as string[]).includes(mode) || mode === "orbit") this.mode = mode as CameraMode;
   }
 
+  /** Gives an object's standard materials the sky as reflection map. */
+  private reflect(obj: THREE.Object3D) {
+    obj.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (m instanceof THREE.MeshStandardMaterial && !m.envMap) {
+          m.envMap = this.envTex;
+          m.envMapIntensity = m.envMapIntensity === 1 ? 0.4 : m.envMapIntensity;
+          m.needsUpdate = true;
+        }
+      }
+    });
+  }
+
   /** Swaps the rider model for one in these colours. */
   setRider(jersey: string, accent: string, bike: string) {
     const old = this.rider;
     this.rider = new Rider(jersey, accent, bike);
+    this.reflect(this.rider.group);
     this.rider.group.position.copy(old.group.position);
     this.rider.group.quaternion.copy(old.group.quaternion);
     this.scene.remove(old.group);
@@ -268,22 +299,26 @@ export class World {
     this.perfTimes = [];
   }
 
+  /** Every four seconds: lower the render scale when frames are slow, raise it when there is clear headroom.
+   *  A change resizes the canvas, which flashes the window, so it happens rarely and never oscillates. */
   private adaptResolution(dt: number) {
     this.frameTimes.push(dt);
-    if (this.frameTimes.length < 45) return;
+    if (this.frameTimes.length < 240) return;
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const median = sorted[sorted.length >> 1];
-    const p90 = sorted[Math.floor(sorted.length * 0.9)];
+    const p75 = sorted[Math.floor(sorted.length * 0.75)];
     this.frameTimes = [];
     const max = Math.min(window.devicePixelRatio, 1.5);
     let next = this.pixelRatio;
     // The display caps frames at its refresh rate (16.7 ms at 60 Hz), so "fast" means sitting on that cap, not below it.
-    if (median > 1 / 50 && this.pixelRatio > 0.6) next = Math.max(0.6, this.pixelRatio - 0.2);
-    else if (median < 0.0175 && p90 < 0.026 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.2);
-    if (next !== this.pixelRatio) {
+    // A step up needs clear headroom; a step down a clear shortfall; in between nothing changes.
+    if (median > 0.021 && this.pixelRatio > 0.7) next = Math.max(0.7, this.pixelRatio - 0.15);
+    else if (median < 0.0172 && p75 < 0.019 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.15);
+    if (Math.abs(next - this.pixelRatio) > 0.01) {
       this.pixelRatio = next;
       this.renderer.setPixelRatio(next);
       this.resize();
+      localStorage.setItem("wattsup.pixelRatio", next.toFixed(2));
     }
   }
 
@@ -393,7 +428,6 @@ export class World {
     this.camera.lookAt(this.camLook);
 
     // The sky dome and the sun's shadow box follow the rider: an island is wider than the dome.
-    this.sky.position.copy(this.camPos);
     this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(400));
     this.sun.target.position.copy(rider);
 
