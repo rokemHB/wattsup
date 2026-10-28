@@ -56,6 +56,9 @@ export interface NetworkWorldMeta {
 }
 
 /** Local metres <-> degrees, as the pipeline defines them. */
+/** Ground this far above a tunnel's road is high enough to stay: the tube (5.8 m) plus a margin. */
+const TUBE_CLEAR_M = 8;
+
 export class Frame {
   readonly kx: number;
   constructor(readonly lat0: number, readonly lon0: number) {
@@ -373,11 +376,6 @@ export class TileManager {
       const f = smoothstep(CORRIDOR_REACH - CORRIDOR_BLEND_M, CORRIDOR_REACH, n.d);
       return lerp(Math.min(h, top), h, f) - depth * (1 - f);
     };
-    // No ground over a tunnel tube: the coarse surface would otherwise cross the tube where the mountain comes down to the portal.
-    const overTunnel = (x: number, z: number) => {
-      const n = this.index.nearest(x, z, TUNNEL_HALF + 1);
-      return n.i >= 0 && n.d < TUNNEL_HALF + 1 && this.tubeZone[n.i] === 1;
-    };
     // The mesh grid: every `step / 2` sample of the 10 m data.
     const k = step / 2;
     const cols = Math.floor((grid.cols - 1) / k) + 1;
@@ -407,6 +405,13 @@ export class TileManager {
       }
     }
     const lookup = (x: number, z: number) => heights[(Math.round((z - g.z0) / sz) + 1) * ringCols + Math.round((x - g.x0) / sx) + 1];
+    // No ground over a tunnel tube where the surface would cross it (the mountain coming
+    // down to the portal); deep under the mountain the ground stays, so no slot shows from above.
+    const overTunnel = (x: number, z: number) => {
+      const n = this.index.nearest(x, z, TUNNEL_HALF + 1);
+      if (n.i < 0 || n.d >= TUNNEL_HALF + 1 || this.tubeZone[n.i] !== 1) return false;
+      return lookup(x, z) < this.net.xyz[n.i * 3 + 1] + TUBE_CLEAR_M;
+    };
     const midR = rows >> 1;
     const midC = cols >> 1;
     const meshes: THREE.Mesh[] = [];

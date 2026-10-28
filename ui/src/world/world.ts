@@ -376,7 +376,10 @@ export class World {
     const rider = g.position;
     let wantPos: THREE.Vector3;
     let wantLook: THREE.Vector3;
-    switch (this.mode) {
+    // In a tunnel the side and drone views would sit inside the mountain: ride along in the tube instead.
+    const inTube = this.statics.inTunnel?.(rider.x, rider.z) ?? false;
+    const view = inTube && (this.mode === "drone" || this.mode === "side") ? "chase" : this.mode;
+    switch (view) {
       case "orbit": {
         // Slow circle round the rider for the menus.
         this.orbitAngle += dt * 0.25;
@@ -416,14 +419,14 @@ export class World {
     const eye = rider.clone().add(up.clone().multiplyScalar(1.2));
     const before = wantPos.y;
     this.clearTerrain(wantPos, eye);
-    if (this.mode === "orbit") {
+    if (view === "orbit") {
       this.camPos.copy(wantPos);
       this.camLook.copy(wantLook);
     }
     // When the terrain forces the camera well up, bring it in closer too, so
     // hairpins cut into a slope are not watched from high above the bank.
     const lifted = wantPos.y - before;
-    if (lifted > 2 && this.mode === "chase") {
+    if (lifted > 2 && view === "chase") {
       const t = Math.min(1, (lifted - 2) / 8);
       wantPos.lerp(eye.clone().add(up.clone().multiplyScalar(lifted * 0.5)), 0.45 * t);
       this.clearTerrain(wantPos, eye);
