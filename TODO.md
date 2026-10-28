@@ -7,7 +7,7 @@ Open items, roughly in the order they are worth doing.
 - [x] Dropped Bluetooth connections during a ride hold the ride (clock, distance, workout) and show a banner until the trainer is back. Still to verify on real hardware.
 - [x] Riders without a Zwift Cog: the drivetrain setting turns virtual gearing off and hides the gear tile and auto-shift; cadence shows a dash unless the trainer reports it.
 - [ ] Trees and bushes as real models instead of primitives; place them from the aerial photo as now.
-- [ ] Parapet floats where the road bridges itself at the Nus de sa Corbata.
+- [x] Parapet floated where the road bridges itself at the Nus de sa Corbata: parapets now stand on a retaining wall down to the ground (12 m at most).
 - [ ] Rider model: face, better jersey, a proper helmet.
 - [x] Rider model: the saddle clipped into the rider's backside; the saddle is lower, the pelvis sits on it.
 - [x] HUD: the junction prompt sits top right under the tiles, smaller, the road ahead clear.

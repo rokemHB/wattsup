@@ -754,12 +754,16 @@ export function parapets(pts: Route["points"], heightAt: (x: number, z: number) 
   const verts: number[] = [];
   const uvs: number[] = [];
   const idx: number[] = [];
-  const pushQuad = (a: number[], b: number[], c: number[], d: number[], u0: number, u1: number) => {
+  const pushQuad = (a: number[], b: number[], c: number[], d: number[], u0: number, u1: number, v1 = 1) => {
     const base = verts.length / 3;
     verts.push(...a, ...b, ...c, ...d);
-    uvs.push(u0, 0, u1, 0, u0, 1, u1, 1);
+    uvs.push(u0, 0, u1, 0, u0, v1, u1, v1);
     idx.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
   };
+  // The outer face goes on down to the ground as a retaining wall, so a parapet
+  // over a drop (or over the road below, where the road bridges itself) does not float.
+  const SKIRT_MAX = 12;
+  const footing = (v: number[]) => Math.max(Math.min(v[1], heightAt(v[0], v[2]) - 0.3), v[1] - SKIRT_MAX);
   for (const side of [-1, 1]) {
     // Does the ground drop more than 1.5 m within 6 m beyond the shoulder here?
     const drop = pts.map((p, i) => {
@@ -793,8 +797,11 @@ export function parapets(pts: Route["points"], heightAt: (x: number, z: number) 
       const up = (v: number[]) => [v[0], v[1] + wallH, v[2]];
       const u0 = p.distance_m / 2;
       const u1 = q.distance_m / 2;
+      const foot0 = [outer0[0], footing(outer0), outer0[2]];
+      const foot1 = [outer1[0], footing(outer1), outer1[2]];
+      const tall = (Math.max(outer0[1] - foot0[1], outer1[1] - foot1[1]) + wallH) / wallH;
       pushQuad(inner0, inner1, up(inner0), up(inner1), u0, u1); // inner face
-      pushQuad(outer1, outer0, up(outer1), up(outer0), u0, u1); // outer face
+      pushQuad(foot1, foot0, up(outer1), up(outer0), u0, u1, tall); // outer face, down to the ground
       pushQuad(up(inner0), up(inner1), up(outer0), up(outer1), u0, u1); // top
     }
   }
