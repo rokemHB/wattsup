@@ -35,7 +35,7 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; }
 button.uturn { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 12px 5px 8px; font-size: 13px; background: rgba(15, 18, 27, 0.72); }
 button.uturn .arrow::before { content: "↶"; font-size: 18px; line-height: 1; }
 .hud-notice { background: rgba(255, 196, 0, 0.92); color: #1a1400; font-weight: 600; border-radius: 999px; padding: 6px 14px; font-size: 14px; }
-.hud-nav { margin-top: 10px; align-self: flex-start; width: min(560px, 100%); background: rgba(15, 18, 27, 0.82); backdrop-filter: blur(6px); border-radius: 14px; padding: 12px 16px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; }
+.hud-nav { margin-top: 10px; align-self: flex-start; width: min(560px, 54vw); background: rgba(15, 18, 27, 0.82); backdrop-filter: blur(6px); border-radius: 14px; padding: 12px 16px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; }
 .nav-turn { display: flex; align-items: center; gap: 12px; min-width: 200px; }
 .nav-icon { width: 56px; height: 56px; flex: none; color: #fff; background: var(--blue); border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; }
 .nav-icon svg { width: 44px; height: 44px; }
@@ -213,16 +213,18 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 .map-popup-actions button.free { color: var(--muted); }
 .download-row { margin-top: 8px; align-items: center; gap: 12px; }
 .download-row progress { flex: 1; height: 8px; accent-color: var(--blue); }
-.hud-junction { margin-top: 10px; align-self: center; width: min(760px, 100%); background: rgba(15, 18, 27, 0.82); border-radius: 12px; padding: 10px 14px; }
-.hud-junction-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
-.hud-junction-head b { font-size: 18px; }
-.hud-junction-options { display: flex; gap: 8px; }
-.hud-junction-options button { pointer-events: auto; flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; border: 2px solid #2d3550; }
+/* Top right, under the tiles, out of the rider's view of the road. */
+.hud-junction { position: absolute; top: 150px; right: 20px; width: min(400px, 44vw); background: rgba(15, 18, 27, 0.82); backdrop-filter: blur(6px); border-radius: 12px; padding: 8px 10px; }
+.hud-junction-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; gap: 8px; }
+.hud-junction-head b { font-size: 15px; }
+.hud-junction-head .hint { font-size: 11px; white-space: nowrap; }
+.hud-junction-options { display: flex; gap: 6px; }
+.hud-junction-options button { pointer-events: auto; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 9px; border: 2px solid #2d3550; }
 .hud-junction-options button.on { border-color: var(--accent); background: rgba(255, 196, 0, 0.12); }
-.hud-junction-options .arrow { width: 34px; height: 34px; display: inline-flex; }
-.hud-junction-options .arrow svg { width: 34px; height: 34px; }
-.hud-junction-options .road { font-weight: 600; }
-.hud-junction-options .to { color: var(--muted); font-size: 13px; }
+.hud-junction-options .arrow { width: 26px; height: 26px; display: inline-flex; }
+.hud-junction-options .arrow svg { width: 26px; height: 26px; }
+.hud-junction-options .road { font-weight: 600; font-size: 14px; }
+.hud-junction-options .to { color: var(--muted); font-size: 12px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-route.windowed .lap { display: none; }
 
 .hud-offline { margin-top: 10px; align-self: center; width: min(640px, 100%); background: rgba(90, 30, 30, 0.9); border: 2px solid var(--bad); border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
