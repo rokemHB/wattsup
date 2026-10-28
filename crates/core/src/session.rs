@@ -6,6 +6,8 @@
 //! time only moves through `tick(dt)`, which keeps it deterministic for
 //! tests and, later, for replaying the same inputs on a multiplayer server.
 
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 
 use crate::gearing::{implied_ratio, GearSet, Gearbox, ShiftDirection};
@@ -194,6 +196,77 @@ impl Reading {
     }
 }
 
+/// Totals of the ride so far: for the HUD, the finish screen and the stored ride record.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RideStats {
+    /// Seconds the bike was moving.
+    pub moving_s: f64,
+    /// Metres ridden since the ride started.
+    pub distance_m: f64,
+    pub ascent_m: f64,
+    pub descent_m: f64,
+    /// Over the whole ride clock, zeros included.
+    pub avg_power_w: Option<f64>,
+    pub max_power_w: f64,
+    /// Normalized power: the fourth-power mean of 30 s rolling averages (after the first 30 s).
+    pub normalized_power_w: Option<f64>,
+    pub avg_heart_rate_bpm: Option<f64>,
+    pub max_heart_rate_bpm: f64,
+    /// While pedalling.
+    pub avg_cadence_rpm: Option<f64>,
+    pub avg_speed_kmh: f64,
+    /// Work at the pedals in kilojoules (about the kilocalories burned).
+    pub energy_kj: f64,
+}
+
+/// One second of a ride, for the ride record and its graphs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RideSample {
+    /// Ride clock in seconds.
+    pub t_s: f64,
+    pub distance_m: f64,
+    pub elevation_m: f64,
+    pub grade_pct: f64,
+    pub speed_kmh: f64,
+    pub power_w: Option<f64>,
+    pub cadence_rpm: Option<f64>,
+    pub heart_rate_bpm: Option<f64>,
+}
+
+/// A finished (or abandoned) ride as the session knows it; the engine adds the clock time and stores it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RideReport {
+    pub route: String,
+    pub world: Option<String>,
+    pub workout: Option<String>,
+    /// The end of the route was reached.
+    pub finished: bool,
+    pub elapsed_s: f64,
+    pub stats: RideStats,
+    pub samples: Vec<RideSample>,
+}
+
+/// Seconds of power averaged for normalized power.
+const NP_WINDOW_S: usize = 30;
+
+/// Running sums behind [`RideStats`].
+#[derive(Clone, Debug, Default)]
+struct Totals {
+    power_ws: f64,
+    power_s: f64,
+    hr_bpm_s: f64,
+    hr_s: f64,
+    cadence_rpm_s: f64,
+    cadence_s: f64,
+    /// The last 30 one-second power values.
+    np_window: VecDeque<f64>,
+    np_sum4: f64,
+    np_n: f64,
+    last_elevation: Option<f64>,
+    /// Ride clock at which the next one-second sample is due.
+    next_sample_s: f64,
+}
+
 /// Everything the debug screen (and later the game and other riders) needs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
@@ -233,6 +306,7 @@ pub struct SessionSnapshot {
     pub last_command_age_s: Option<f64>,
     /// Chainring/cog ratio measured from the trainer's own speed and cadence.
     pub measured_drive_ratio: Option<f64>,
+    pub stats: RideStats,
 }
 
 #[derive(Clone, Debug)]
@@ -268,6 +342,10 @@ pub struct RideSession {
     cadence_off_s: f64,
     last_auto_shift_at: f64,
     last_manual_shift_at: f64,
+    stats: RideStats,
+    totals: Totals,
+    /// One sample per second of the ride clock.
+    samples: Vec<RideSample>,
 }
 
 impl RideSession {
@@ -301,6 +379,100 @@ impl RideSession {
             cadence_off_s: 0.0,
             last_auto_shift_at: f64::MIN / 4.0,
             last_manual_shift_at: f64::MIN / 4.0,
+            stats: RideStats::default(),
+            totals: Totals::default(),
+            samples: Vec::new(),
+        }
+    }
+
+    pub fn stats(&self) -> &RideStats {
+        &self.stats
+    }
+
+    /// The ride so far, with its one-second samples.
+    pub fn report(&self) -> RideReport {
+        let snap = self.snapshot();
+        RideReport {
+            route: self
+                .config
+                .route
+                .as_ref()
+                .map_or_else(|| "Free ride".to_string(), |r| r.name.clone()),
+            world: self.config.route.as_ref().and_then(|r| r.world.clone()),
+            workout: self.workout.as_ref().map(|(w, _)| w.name.clone()),
+            finished: snap.finished,
+            elapsed_s: snap.elapsed_s,
+            stats: self.stats.clone(),
+            samples: self.samples.clone(),
+        }
+    }
+
+    /// Adds this tick to the ride totals and takes the one-second sample when due.
+    fn account(&mut self, dt: f64, power: f64) {
+        let now = self.clock_s;
+        let timeout = self.config.data_timeout_s;
+        let elapsed = now - self.ride_start_s - self.held_s;
+        let t = &mut self.totals;
+        let s = &mut self.stats;
+        s.distance_m += self.virtual_speed_mps * dt;
+        if self.virtual_speed_mps > 0.5 {
+            s.moving_s += dt;
+        }
+        t.power_ws += power * dt;
+        t.power_s += dt;
+        s.max_power_w = s.max_power_w.max(power);
+        s.energy_kj += power * dt / 1000.0;
+        let heart_rate = self.heart_rate.fresh(now, timeout);
+        if let Some(hr) = heart_rate {
+            t.hr_bpm_s += hr * dt;
+            t.hr_s += dt;
+            s.max_heart_rate_bpm = s.max_heart_rate_bpm.max(hr);
+        }
+        let cadence = self.cadence.fresh(now, timeout);
+        if let Some(c) = cadence.filter(|c| *c >= 20.0) {
+            t.cadence_rpm_s += c * dt;
+            t.cadence_s += dt;
+        }
+        let elevation = self.config.route.as_ref().map(|r| r.elevation_at(self.distance_m));
+        if let (Some(y), Some(last)) = (elevation, t.last_elevation) {
+            let dy = y - last;
+            if dy > 0.0 {
+                s.ascent_m += dy;
+            } else {
+                s.descent_m -= dy;
+            }
+        }
+        t.last_elevation = elevation;
+        s.avg_power_w = (t.power_s > 0.0).then(|| t.power_ws / t.power_s);
+        s.avg_heart_rate_bpm = (t.hr_s > 0.0).then(|| t.hr_bpm_s / t.hr_s);
+        s.avg_cadence_rpm = (t.cadence_s > 0.0).then(|| t.cadence_rpm_s / t.cadence_s);
+        s.avg_speed_kmh = if s.moving_s > 0.0 {
+            mps_to_kmh(s.distance_m / s.moving_s)
+        } else {
+            0.0
+        };
+        if elapsed >= t.next_sample_s {
+            t.next_sample_s = elapsed.floor() + 1.0;
+            t.np_window.push_back(power);
+            if t.np_window.len() > NP_WINDOW_S {
+                t.np_window.pop_front();
+            }
+            if t.np_window.len() == NP_WINDOW_S {
+                let avg = t.np_window.iter().sum::<f64>() / NP_WINDOW_S as f64;
+                t.np_sum4 += avg.powi(4);
+                t.np_n += 1.0;
+                s.normalized_power_w = Some((t.np_sum4 / t.np_n).powf(0.25));
+            }
+            self.samples.push(RideSample {
+                t_s: elapsed,
+                distance_m: self.distance_m,
+                elevation_m: elevation.unwrap_or(0.0),
+                grade_pct: self.road_grade_pct,
+                speed_kmh: mps_to_kmh(self.virtual_speed_mps),
+                power_w: self.power.fresh(now, timeout),
+                cadence_rpm: cadence,
+                heart_rate_bpm: heart_rate,
+            });
         }
     }
 
@@ -454,6 +626,9 @@ impl RideSession {
         self.virtual_speed_mps = 0.0;
         self.ride_start_s = self.clock_s;
         self.held_s = 0.0;
+        self.stats = RideStats::default();
+        self.totals = Totals::default();
+        self.samples.clear();
         if let Some(route) = &self.config.route {
             self.road_grade_pct = route.grade_at(0.0);
         }
@@ -583,6 +758,9 @@ impl RideSession {
             // Not urgent: the deadband and interval decide when the trainer hears about it.
             self.road_grade_pct = route.grade_at(self.distance_m);
         }
+        if !self.trainer_offline {
+            self.account(dt, power);
+        }
 
         let cadence = self.cadence.fresh(now, timeout);
         let trainer_speed = self.trainer_speed.fresh(now, timeout).map(kmh_to_mps);
@@ -700,6 +878,7 @@ impl RideSession {
             last_command: self.last_command,
             last_command_age_s: self.last_command.map(|_| now - self.last_command_at),
             measured_drive_ratio: self.drive_ratio_estimate,
+            stats: self.stats.clone(),
         }
     }
 }
@@ -1088,6 +1267,42 @@ mod tests {
         assert_eq!(grade(cmd), 20.0, "clamped to the trainer's range");
         assert!(matches!(cmd, Some(TrainerCommand::Simulation(t)) if t.clamped.is_some()));
         assert!(!s.snapshot().virtual_gearing);
+    }
+
+    #[test]
+    fn ride_totals_and_samples_add_up() {
+        let mut s = RideSession::default();
+        s.set_route(Some(Route::demo()));
+        s.on_heart_rate(150.0);
+        run(&mut s, 60.0, 200.0, 90.0);
+        let st = s.snapshot().stats;
+        assert!((st.avg_power_w.unwrap() - 200.0).abs() < 1.0, "{st:?}");
+        assert_eq!(st.max_power_w, 200.0);
+        assert!((st.normalized_power_w.unwrap() - 200.0).abs() < 1.0, "{st:?}");
+        assert!((st.energy_kj - 12.0).abs() < 0.2, "{st:?}");
+        assert!(st.avg_cadence_rpm.unwrap() > 89.0);
+        assert!(st.moving_s > 50.0 && st.moving_s <= 60.0, "{st:?}");
+        assert!(st.distance_m > 100.0 && (st.distance_m - s.snapshot().distance_m).abs() < 0.01);
+        assert!(
+            st.ascent_m > 0.0 || st.descent_m > 0.0,
+            "the demo route is hilly: {st:?}"
+        );
+        let report = s.report();
+        assert_eq!(report.route, "Lakeside loop");
+        assert!(
+            report.samples.len() >= 59 && report.samples.len() <= 61,
+            "{}",
+            report.samples.len()
+        );
+        assert!((report.samples[10].t_s - 10.0).abs() < 0.3);
+        assert_eq!(report.samples[10].power_w, Some(200.0));
+        // Heart rate expired long ago: averaged only while it was fresh.
+        assert!(st.avg_heart_rate_bpm.unwrap() > 149.0);
+        assert!(s.snapshot().heart_rate_bpm.is_none());
+        // A new ride starts from zero.
+        s.reset_ride();
+        assert_eq!(s.snapshot().stats, RideStats::default());
+        assert!(s.report().samples.is_empty());
     }
 
     #[test]
