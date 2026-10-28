@@ -15,6 +15,9 @@ export type CameraMode = "chase" | "side" | "front" | "drone" | "orbit";
 /** The modes the C key cycles through; orbit is for the menus. */
 const MODES: CameraMode[] = ["chase", "side", "front", "drone"];
 
+/** Half the arc (m) over which the road's curvature is measured for the lean. */
+const CURVE_HALF_M = 3;
+
 export class World {
   sampler: RouteSampler;
   /** Present when the world streams tiles around a road network. */
@@ -338,13 +341,22 @@ export class World {
 
     const pose = this.sampler.pose(this.distance);
     const up = new THREE.Vector3(0, 1, 0);
+    // The bike points along the road's tangent at its own position: a heading
+    // that lags behind (smoothed in time) made it crab and slide sideways
+    // through hairpins. The smoothed heading is kept for the cameras only.
     const fwd = new THREE.Vector3(pose.dx, 0, pose.dz);
-    const turn = this.heading.clone().cross(fwd).y; // + = turning left
     this.heading.lerp(fwd, Math.min(1, dt * 10)).normalize();
-    this.lean += (Math.max(-0.35, Math.min(0.35, turn * this.speed * 3.5)) - this.lean) * Math.min(1, dt * 6);
+    // Lean into the curve as a real bike does: tan(lean) = v² / (g r), with the
+    // curvature from the tangents a few metres back and ahead.
+    const back = this.sampler.pose(this.distance - CURVE_HALF_M);
+    const ahead = this.sampler.pose(this.distance + CURVE_HALF_M);
+    const turn = Math.atan2(back.dz * ahead.dx - back.dx * ahead.dz, back.dx * ahead.dx + back.dz * ahead.dz); // + = left-hand turn, as rotateX(-lean) expects
+    const curvature = turn / (2 * CURVE_HALF_M);
+    const wantLean = Math.max(-0.4, Math.min(0.4, Math.atan((this.speed * this.speed * curvature) / 9.81)));
+    this.lean += (wantLean - this.lean) * Math.min(1, dt * 8);
 
     // Ride on the right-hand side of the lane, not on the centre line.
-    const right = new THREE.Vector3(-this.heading.z, 0, this.heading.x);
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
     const g = this.rider.group;
     const pitch = Math.atan(pose.grade / 100);
     // The road surface sits ROAD_LIFT above the route line and the tyre bulges
@@ -352,7 +364,7 @@ export class World {
     // wheel by half the wheelbase times the slope.
     const clearance = ROAD_LIFT + TYRE_BULGE + 0.5 * Math.abs(Math.sin(pitch)) + 0.005;
     g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(this.laneOffset));
-    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), this.heading.clone().negate(), up));
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), fwd.clone().negate(), up));
     g.rotateY(-Math.PI / 2);
     g.rotateZ(pitch);
     g.rotateX(-this.lean);
