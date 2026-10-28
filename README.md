@@ -53,6 +53,14 @@ rate and elevation graphs.
 - Runs ERG workouts: interval protocols with presets in percent of FTP or
   your own steps, the trainer holding each step's watts, the clock only
   running while you pedal.
+- Trainer mode (main menu → Trainer, or start with `--trainer`): the same
+  workouts, or a quick block of minutes at watts, with nothing but the
+  numbers on screen and no 3D world built. Made for training beside a
+  video: target, power, cadence, heart rate, the interval clock, + and −
+  to shift all watts, S to skip an interval, and a "Small window" button
+  that shrinks the window and keeps it on top (on a tiling compositor such
+  as Hyprland, float the window for that to take effect). Sessions are kept
+  in the ride list like any ride.
 - Comes with simulated devices, so everything can be developed and tested
   without a trainer.
 
@@ -179,6 +187,7 @@ While riding, type `u` / `d` (shift), `erg <W>`, `sim`, `grade <%>` or `q`.
 | `--route <id>` | `WATTSUP_ROUTE=<id>` | | Built-in route to ride: `sa-calobra` (default) or `lakeside` |
 | `--start <m>` | `WATTSUP_START_M=<m>` | | Start that many metres along the route (to look at a spot) |
 | `--camera <mode>` | `WATTSUP_CAMERA=<mode>` | | Start in the `chase`, `side`, `front` or `drone` view |
+| `--trainer` | `WATTSUP_TRAINER=1` | | Open the trainer screen (ERG only, no 3D world) |
 
 The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
 

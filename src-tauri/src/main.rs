@@ -70,7 +70,9 @@ fn startup_from_env() -> StartupInfo {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
         camera: value("--camera", "WATTSUP_CAMERA"),
-        screen: value("--screen", "WATTSUP_SCREEN"),
+        // `--trainer` / WATTSUP_TRAINER=1: the ERG-only trainer screen, no 3D world.
+        screen: value("--screen", "WATTSUP_SCREEN")
+            .or_else(|| flag("--trainer", "WATTSUP_TRAINER").then(|| "trainer".to_string())),
         island_at: value("--island-at", "WATTSUP_ISLAND_AT"),
         dev_js: std::env::var("WATTSUP_DEV_JS").ok().filter(|s| !s.is_empty()),
     }
@@ -215,6 +217,17 @@ async fn shift(state: State<'_, AppState>, direction: ShiftDirection) -> CmdResu
 }
 
 #[tauri::command]
+async fn set_workout_bias(state: State<'_, AppState>, watts: f64) -> CmdResult<()> {
+    state.engine.set_workout_bias(watts).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn skip_workout_step(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(state.engine.skip_workout_step().await)
+}
+
+#[tauri::command]
 async fn set_mode(state: State<'_, AppState>, mode: ControlMode) -> CmdResult<()> {
     state.engine.set_mode(mode).await;
     Ok(())
@@ -336,6 +349,8 @@ fn main() {
             disconnect,
             shift,
             set_mode,
+            set_workout_bias,
+            skip_workout_step,
             set_erg_target,
             set_road_grade,
             set_auto_shift,

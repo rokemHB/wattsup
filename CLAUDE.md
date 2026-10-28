@@ -102,6 +102,18 @@ once per animation frame, `NetworkIndex.nearest` searches in rings and stops
 early. Measured: a route of 10k points costs ~1 ms to compute, ~1.5 ms to
 draw.
 
+## Trainer mode
+
+`ui/src/trainer.ts` is the ERG-only screen (menu → Trainer, `WATTSUP_SCREEN=
+trainer` or `--trainer`): quick block or a saved/preset workout, started on
+the flat route with no world (`show("trainer")` disposes the world; the menu
+rebuilds it). The session has `set_workout_bias` (+/− watts on every step)
+and `skip_workout_step`; the snapshot's `WorkoutSnapshot.bias_w` shows it.
+"Small window" uses the Tauri window API (permissions in
+`src-tauri/capabilities/default.json`); Hyprland ignores the resize for tiled
+windows, which is expected. Keep the live view cheap: no canvas but the
+interval bar, redrawn once a second.
+
 ## Navigation and ride records
 
 `Navigator::turn_around` cuts the legs at the rider's nearest road point and

@@ -9,6 +9,7 @@ import { loadPlans, MapScreen, type RoadSpot, type SavedPlan } from "./map";
 import { Minimap, type NetworkView } from "./minimap";
 import { maneuverIcon } from "./nav";
 import { RidesScreen } from "./rides";
+import { TrainerScreen } from "./trainer";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
 import type { PlannedPath } from "./routing";
 import type { EngineSnapshot, Junction, Route, RouteInfo, Workout } from "./types";
@@ -18,7 +19,7 @@ import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWork
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 
-type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "ride" | "pause" | "finish";
+type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "trainer" | "ride" | "pause" | "finish";
 
 let screen: Screen = "start";
 let cameFrom: Screen = "menu";
@@ -48,16 +49,53 @@ let lastJunctionKey = "";
 /** A ride is under way (shown at least once) and not yet stored. */
 let rideOpen = false;
 const ridesScreen = new RidesScreen();
+const trainerScreen = new TrainerScreen({
+  start: (w) => startTrainerWorkout(w),
+  end: async () => {
+    await storeRide();
+    await endWorkout();
+  },
+  edit: (w, index) => openWorkout(w, index),
+  settings: () => show("settings"),
+});
+
+/** An ERG workout on the flat road with no world built: the trainer screen shows the numbers. */
+async function startTrainerWorkout(w: Workout) {
+  await storeRide();
+  await endWorkout();
+  if (selectedRoute !== "flat") {
+    await api.setRoute("flat");
+    selectedRoute = "flat";
+    fillRouteList();
+  }
+  await api.resetRide();
+  await api.startWorkout(w);
+  activeWorkout = w;
+  finishShown = false;
+  rideOpen = true;
+}
 
 // --- screens -----------------------------------------------------------------
 
 function show(next: Screen) {
-  if (next === "settings" || next === "rider" || next === "workout" || next === "map" || next === "rides") cameFrom = screen === "pause" ? "pause" : "menu";
+  if (next === "settings" || next === "rider" || next === "workout" || next === "map" || next === "rides") cameFrom = screen === "pause" || screen === "trainer" ? screen : "menu";
   if (next === "rider") draft = { ...profile };
   screen = next;
-  for (const s of ["start", "menu", "rider", "settings", "workout", "map", "rides", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
+  for (const s of ["start", "menu", "rider", "settings", "workout", "map", "rides", "trainer", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
   if (next === "map") mapScreen.scheduleDraw();
   if (next === "rides") ridesScreen.open().catch(showError);
+  if (next === "trainer") {
+    // Trainer mode runs without the 3D world: nothing renders behind the numbers.
+    world?.dispose();
+    world = null;
+    hud = null;
+    minimap = null;
+    $("world").hidden = true;
+    trainerScreen.open();
+  } else if (next === "menu" && !world) {
+    $("world").hidden = false;
+    buildWorld().catch(showError);
+  }
   if (next === "pause") $("pause-end-workout").hidden = !activeWorkout;
   if (next === "menu") fillWorkoutList();
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
@@ -218,7 +256,7 @@ function saveWorkout() {
   }
   saveWorkouts(workouts);
   fillWorkoutList();
-  show("menu");
+  show(cameFrom);
 }
 
 async function startWorkout() {
@@ -505,6 +543,7 @@ function onSnapshot(snap: EngineSnapshot) {
     hud?.setWindowed(true);
     hud?.notice("Off the planned route · free ride from here");
   }
+  if (screen === "trainer") trainerScreen.update(snap);
   if (screen === "ride" || screen === "pause") {
     hud?.update(snap);
     minimap?.update(snap);
@@ -546,6 +585,7 @@ function wire() {
   $("start-go").onclick = () => show("menu");
   $("menu-ride").onclick = () => startRide(selectedRoute || routes[0]?.id).catch(showError);
   $("menu-rides").onclick = () => show("rides");
+  $("menu-trainer").onclick = () => show("trainer");
   $("menu-rider").onclick = () => show("rider");
   $("menu-settings").onclick = () => show("settings");
   $("menu-quit").onclick = () =>
@@ -643,6 +683,10 @@ function wire() {
       api.turnAround().catch(showError);
       return;
     }
+    if (screen === "trainer" && trainerScreen.key(e.key)) {
+      e.preventDefault();
+      return;
+    }
     const dir = shiftForKey(e.key);
     if (dir) {
       e.preventDefault();
@@ -676,8 +720,9 @@ async function start() {
   onSnapshot(await api.snapshot());
   const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");
   if (wanted === "workout") openWorkout(fromPreset(PRESETS[0], ftp), -1);
-  else show((["start", "menu", "rider", "settings", "rides", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
-  await buildWorld();
+  else show((["start", "menu", "rider", "settings", "rides", "trainer", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
+  // Trainer mode (`--trainer`): no world at all until the menu is opened.
+  if (wanted !== "trainer") await buildWorld();
   if (startup.camera && world) world.setCamera(startup.camera);
   scan().catch(showError);
   if (startup.screen === "island") {

@@ -330,6 +330,19 @@ impl Engine {
         self.inner.send_now().await;
     }
 
+    /// Makes the running workout `watts` harder or easier from now on.
+    pub async fn set_workout_bias(&self, watts: f64) {
+        self.inner.session.lock().unwrap().set_workout_bias(watts);
+        self.inner.send_now().await;
+    }
+
+    /// Jumps to the next step of the running workout.
+    pub async fn skip_workout_step(&self) -> bool {
+        let skipped = self.inner.session.lock().unwrap().skip_workout_step();
+        self.inner.send_now().await;
+        skipped
+    }
+
     /// Back to the start of the current route.
     pub async fn reset_ride(&self) {
         self.inner.session.lock().unwrap().reset_ride();

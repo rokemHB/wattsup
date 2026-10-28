@@ -252,6 +252,8 @@ export interface WorkoutSnapshot {
   next_watts: number | null;
   paused: boolean;
   done: boolean;
+  /** Watts the rider added to every step during the workout. */
+  bias_w: number;
 }
 
 export interface RouteInfo {

@@ -1,7 +1,7 @@
 // Typed wrappers around the Tauri commands in src-tauri/src/main.rs.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { PlannedLeg } from "./routing";
 import type {
   ControlMode,
@@ -20,6 +20,9 @@ import type {
 } from "./types";
 
 export const insideTauri = (): boolean => "__TAURI_INTERNALS__" in window;
+
+/** The window size before compact mode, to restore it. */
+let normalSize: { w: number; h: number } | null = null;
 
 export const api = {
   startupInfo: () => invoke<StartupInfo>("startup_info"),
@@ -47,6 +50,9 @@ export const api = {
   /** Downloads a map data URL into the disk cache without sending it to the UI; answers its size in bytes. */
   cacheFetch: (url: string) => invoke<number>("cache_fetch", { url }),
   stopWorkout: () => invoke<void>("stop_workout"),
+  /** Makes the running workout `watts` harder or easier from now on. */
+  setWorkoutBias: (watts: number) => invoke<void>("set_workout_bias", { watts }),
+  skipWorkoutStep: () => invoke<boolean>("skip_workout_step"),
   scan: (seconds: number) => invoke<ScanResult>("scan", { seconds }),
   connect: (id: string, kind: DeviceKind) => invoke<void>("connect", { id, kind }),
   disconnect: (kind: DeviceKind) => invoke<void>("disconnect", { kind }),
@@ -59,6 +65,22 @@ export const api = {
   setVirtualGearing: (on: boolean) => invoke<void>("set_virtual_gearing", { on }),
   pressButton: (button: ControllerButton) => invoke<void>("press_button", { button }),
   quit: () => getCurrentWindow().close(),
+  /** A small always-on-top window (trainer mode beside a video), or back to the size before. */
+  compactWindow: async (on: boolean) => {
+    const win = getCurrentWindow();
+    const scale = await win.scaleFactor();
+    if (on) {
+      const size = await win.innerSize();
+      normalSize = { w: size.width / scale, h: size.height / scale };
+      await win.setMinSize(new LogicalSize(380, 240));
+      await win.setSize(new LogicalSize(440, 320));
+      await win.setAlwaysOnTop(true);
+    } else {
+      await win.setAlwaysOnTop(false);
+      await win.setMinSize(new LogicalSize(900, 600));
+      await win.setSize(new LogicalSize(normalSize?.w ?? 1280, normalSize?.h ?? 860));
+    }
+  },
   toggleFullscreen: async () => {
     const win = getCurrentWindow();
     await win.setFullscreen(!(await win.isFullscreen()));

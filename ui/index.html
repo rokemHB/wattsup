@@ -29,6 +29,7 @@
         </div>
         <nav class="menu-nav">
           <button id="menu-ride" class="primary">Ride</button>
+          <button id="menu-trainer">Trainer</button>
           <button id="menu-rides">Rides</button>
           <button id="menu-rider">Rider</button>
           <button id="menu-settings">Settings</button>
@@ -41,6 +42,44 @@
         <h2 class="spaced">Workouts</h2>
         <div id="workout-list" class="route-list"></div>
         <button id="menu-new-workout" class="small">New workout</button>
+      </div>
+    </section>
+
+    <!-- Trainer: ERG workouts without the 3D world, for training beside a video -->
+    <section id="screen-trainer" class="screen panel" hidden>
+      <header class="panel-head"><h2>Trainer</h2><span class="row"><button id="trainer-compact" class="small">Small window</button><button id="trainer-settings" class="small">Devices</button><button class="back" data-back>Back</button></span></header>
+      <div class="panel-body trainer-body">
+        <div id="trainer-setup">
+          <p id="trainer-devices" class="trainer-devices"></p>
+          <h3>Quick block</h3>
+          <div class="quick-block">
+            <label>Warm-up <input id="trainer-warm" type="number" min="0" max="60" step="1" value="5" /> min</label>
+            <label><input id="trainer-min" type="number" min="1" max="300" step="1" value="30" /> min at <input id="trainer-watts" type="number" min="0" max="1500" step="5" /> W</label>
+            <label>Cool-down <input id="trainer-cool" type="number" min="0" max="60" step="1" value="5" /> min</label>
+            <button id="trainer-quick" class="primary">Start</button>
+          </div>
+          <h3 class="row">Workouts <span class="hint ftp-field">FTP <input id="trainer-ftp" type="number" min="50" max="600" step="5" /> W</span></h3>
+          <div id="trainer-workouts" class="route-list"></div>
+          <p class="hint">ERG mode: the trainer holds the watts whatever gear or cadence you ride. The clock runs while you pedal. During the session + and − change all watts by 5, S skips to the next interval. Click a workout to edit it.</p>
+        </div>
+        <div id="trainer-live" hidden>
+          <div class="trainer-numbers">
+            <div class="tile target"><label>Target</label><b id="trainer-target">–</b><small id="trainer-bias">W</small></div>
+            <div class="tile"><label>Power</label><b id="trainer-power">–</b><small>W</small></div>
+            <div class="tile"><label>Cadence</label><b id="trainer-cadence">–</b><small>rpm</small></div>
+            <div class="tile"><label>Heart rate</label><b id="trainer-hr">–</b><small>bpm</small></div>
+          </div>
+          <div class="trainer-step"><b id="trainer-step-left">0:00</b><span id="trainer-step"></span><span id="trainer-next"></span><span id="trainer-total"></span><span id="trainer-paused" class="paused" hidden>pedal to start</span></div>
+          <canvas id="trainer-bar" class="trainer-bar"></canvas>
+          <div class="row trainer-actions">
+            <button id="trainer-minus">− 5 W</button><button id="trainer-plus">+ 5 W</button><button id="trainer-skip">Skip interval</button><span id="trainer-elapsed" class="hint"></span><button id="trainer-end" class="end">End</button>
+          </div>
+        </div>
+        <div id="trainer-done" hidden>
+          <h3 id="trainer-done-title">Done!</h3>
+          <div class="stats" id="trainer-done-stats"></div>
+          <button id="trainer-done-ok" class="primary">OK</button>
+        </div>
       </div>
     </section>
 

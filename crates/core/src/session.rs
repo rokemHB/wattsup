@@ -163,6 +163,8 @@ pub struct WorkoutSnapshot {
     /// The workout clock only runs while pedalling.
     pub paused: bool,
     pub done: bool,
+    /// Watts added to every step by the rider during the workout (the trainer holds step + bias).
+    pub bias_w: f64,
 }
 
 pub const MIN_TARGET_CADENCE: f64 = 50.0;
@@ -334,6 +336,7 @@ pub struct RideSession {
     /// A running workout, with the seconds of it ridden so far.
     workout: Option<(Workout, f64)>,
     workout_paused: bool,
+    workout_bias_w: f64,
     trainer_offline: bool,
     /// Seconds the ride clock has been held for an offline trainer.
     held_s: f64,
@@ -373,6 +376,7 @@ impl RideSession {
             ride_start_s: 0.0,
             workout: None,
             workout_paused: false,
+            workout_bias_w: 0.0,
             trainer_offline: false,
             held_s: 0.0,
             virtual_gearing: true,
@@ -651,9 +655,35 @@ impl RideSession {
             return;
         }
         self.set_mode(ControlMode::Erg);
+        self.workout_bias_w = 0.0;
         self.set_erg_target(workout.steps[0].watts);
         self.workout = Some((workout, 0.0));
         self.workout_paused = true;
+    }
+
+    /// Makes the whole workout `watts` harder (or easier, negative) from now on.
+    pub fn set_workout_bias(&mut self, watts: f64) {
+        self.workout_bias_w = watts.clamp(-300.0, 300.0).round();
+        if let Some((w, elapsed)) = &self.workout {
+            let step = Self::step_index(w, *elapsed);
+            let target = w.steps[step].watts + self.workout_bias_w;
+            self.set_erg_target(target);
+        }
+    }
+
+    /// Jumps to the start of the next step. False at the last step or without a workout.
+    pub fn skip_workout_step(&mut self) -> bool {
+        let Some((w, elapsed)) = self.workout.as_mut() else {
+            return false;
+        };
+        let step = Self::step_index(w, *elapsed);
+        if step + 1 >= w.steps.len() {
+            return false;
+        }
+        *elapsed = w.steps[..=step].iter().map(|s| s.seconds).sum();
+        let target = w.steps[step + 1].watts + self.workout_bias_w;
+        self.set_erg_target(target);
+        true
     }
 
     /// Ends the workout and returns to free riding.
@@ -689,6 +719,7 @@ impl RideSession {
             next_watts: w.steps.get(step + 1).map(|s| s.watts),
             paused: self.workout_paused && !done,
             done,
+            bias_w: self.workout_bias_w,
         })
     }
 
@@ -709,7 +740,7 @@ impl RideSession {
         *elapsed += dt;
         let after = Self::step_index(workout, *elapsed);
         if after != before {
-            let watts = workout.steps[after].watts;
+            let watts = workout.steps[after].watts + self.workout_bias_w;
             self.set_erg_target(watts);
         }
     }
@@ -1215,6 +1246,43 @@ mod tests {
         s.stop_workout();
         assert!(s.snapshot().workout.is_none());
         assert_eq!(s.snapshot().mode, ControlMode::Sim);
+    }
+
+    #[test]
+    fn workout_bias_and_skip() {
+        let mut s = RideSession::default();
+        s.start_workout(Workout {
+            name: "w".into(),
+            steps: vec![
+                WorkoutStep {
+                    watts: 150.0,
+                    seconds: 60.0,
+                },
+                WorkoutStep {
+                    watts: 250.0,
+                    seconds: 60.0,
+                },
+            ],
+        });
+        s.set_workout_bias(10.0);
+        assert_eq!(s.snapshot().erg_target_w, 160.0);
+        assert_eq!(s.workout().unwrap().bias_w, 10.0);
+        assert!(s.skip_workout_step());
+        assert_eq!(s.snapshot().erg_target_w, 260.0);
+        assert_eq!(s.workout().unwrap().step, 1);
+        assert!(!s.skip_workout_step(), "no step after the last");
+        s.set_workout_bias(-20.0);
+        assert_eq!(s.snapshot().erg_target_w, 230.0);
+        // A new workout starts without the bias.
+        s.start_workout(Workout {
+            name: "x".into(),
+            steps: vec![WorkoutStep {
+                watts: 100.0,
+                seconds: 60.0,
+            }],
+        });
+        assert_eq!(s.snapshot().erg_target_w, 100.0);
+        assert!(!s.skip_workout_step());
     }
 
     #[test]

@@ -3,5 +3,15 @@
   "identifier": "default",
   "description": "The main window may call the app's own commands and listen to its events.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-fullscreen", "core:window:allow-is-fullscreen", "core:window:allow-close"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-close",
+    "core:window:allow-set-size",
+    "core:window:allow-set-min-size",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-inner-size",
+    "core:window:allow-scale-factor"
+  ]
 }

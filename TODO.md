@@ -15,6 +15,8 @@ Open items, roughly in the order they are worth doing.
 - [ ] Settings: remember the chosen route and camera, a "forget device" action.
 - [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
 - [x] Ride records: totals and one-second samples stored per ride, the Rides screen with weekly totals and graphs.
+- [x] Trainer mode: ERG workouts and quick blocks with no 3D world, +/− watts, skip, a small always-on-top window, for training beside a video.
+- [ ] Trainer mode: a Hyprland window rule (or a separate small window) so "Small window" floats by itself; optional free-ERG without a workout (set watts, no clock).
 - [ ] Strava, like Zwift does it: keep x,z in the ride samples (lat/lon from the world origin at export time), write a TCX with power/HR/cadence (Garmin extension), an "Export TCX" button on the Rides screen; then the Strava API: Robin registers an API app (client id + secret, single-athlete mode is enough), OAuth once via the browser with a localhost redirect, refresh token in the app data folder, upload as VirtualRide with the trainer flag and "WattsUp" as creator, poll the upload status. Check whether real-road coordinates match real segments; fall back to no positions if they do.
 - [x] Turn around while riding (U); manual turns on a planned route end the plan; navigation panel with the next turn, distance and climbing left, time left and arrival.
 - [ ] Navigation: re-route back onto the plan after a wrong turn instead of ending it; the time left from the rider's FTP before a minute of riding.
