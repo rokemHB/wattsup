@@ -25,6 +25,9 @@ struct AppState {
     startup: StartupInfo,
     /// Rides on disk: `<app data dir>/rides`.
     rides: RideStore,
+    /// Start time of the ride last stored, so two windows (main and the trainer's small one)
+    /// never file the same ride twice.
+    last_saved_ms: std::sync::Mutex<u64>,
 }
 
 /// How the app was started, shown on the debug screen.
@@ -173,7 +176,21 @@ fn save_ride(state: State<'_, AppState>) -> CmdResult<RideSummary> {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let started_at_ms = now_ms.saturating_sub((report.elapsed_s * 1000.0) as u64);
-    state.rides.save(report, started_at_ms)
+    let mut last = state.last_saved_ms.lock().unwrap();
+    if started_at_ms.abs_diff(*last) < 2_000 {
+        // The same ride, stored already (by the other window): hand back its record.
+        if let Some(existing) = state
+            .rides
+            .list()
+            .into_iter()
+            .find(|r| r.started_at_ms.abs_diff(*last) < 2_000)
+        {
+            return Ok(existing);
+        }
+    }
+    let saved = state.rides.save(report, started_at_ms)?;
+    *last = started_at_ms;
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -358,6 +375,7 @@ fn main() {
                 engine,
                 startup: startup.clone(),
                 rides: RideStore::new(rides),
+                last_saved_ms: std::sync::Mutex::new(0),
             });
             app.manage(tiles::Tiles::new(app.handle()));
             Ok(())

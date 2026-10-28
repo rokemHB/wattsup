@@ -307,3 +307,6 @@ body.compact .trainer-step b { font-size: 24px; }
 body.compact .trainer-bar { height: 36px; }
 body.compact .trainer-actions button { padding: 4px 8px; font-size: 12px; }
 body.compact #trainer-elapsed, body.compact .trainer-devices, body.compact .panel-body > .hint { display: none; }
+#trainer-live.free .trainer-step, #trainer-live.free .trainer-bar, #trainer-live.free #trainer-skip { display: none; }
+/* The small window is the trainer only: no way into the menus from it. */
+body.compact #screen-trainer .back, body.compact #trainer-settings { display: none; }

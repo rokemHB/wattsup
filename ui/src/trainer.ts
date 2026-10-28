@@ -13,9 +13,15 @@ export interface TrainerCallbacks {
   start(w: Workout): Promise<void>;
   /** The workout is over or was ended: store the ride, stop the workout. */
   end(): Promise<void>;
+  /** Holds `watts` in ERG mode with no workout: no clock, no intervals. */
+  startFree(watts: number): Promise<void>;
+  /** The free session was ended: store the ride, back to SIM mode. */
+  endFree(): Promise<void>;
   /** Opens the workout editor on `w` (index into the saved list, -1 for a preset). */
   edit(w: Workout, index: number): void;
   settings(): void;
+  /** Opens the small always-on-top window (true), or closes it from inside (false). */
+  compact(on: boolean): Promise<void>;
 }
 
 type Phase = "setup" | "live" | "done";
@@ -35,6 +41,9 @@ export class TrainerScreen {
   private barKey = "";
   private ftp = loadFtp();
   private compact = false;
+  /** A free ERG session (a target, no workout). */
+  private free = false;
+  private lastTarget = 0;
 
   constructor(private cb: TrainerCallbacks) {
     $("trainer-quick").onclick = () => {
@@ -49,13 +58,14 @@ export class TrainerScreen {
       api.setFtp(this.ftp).catch(console.error);
       this.renderSetup();
     };
+    $("trainer-free").onclick = () => this.beginFree(Math.max(0, Number($<HTMLInputElement>("trainer-free-watts").value) || 0));
     $("trainer-minus").onclick = () => this.bias(-5);
     $("trainer-plus").onclick = () => this.bias(5);
     $("trainer-skip").onclick = () => api.skipWorkoutStep().catch(console.error);
     $("trainer-end").onclick = () => this.finish();
     $("trainer-done-ok").onclick = () => this.showSetup();
     $("trainer-settings").onclick = () => cb.settings();
-    $("trainer-compact").onclick = () => this.setCompact(!this.compact).catch(console.error);
+    $("trainer-compact").onclick = () => cb.compact(!this.compact).catch(console.error);
   }
 
   /** Shows the setup view (unless a workout is running, which keeps the live view). */
@@ -92,13 +102,33 @@ export class TrainerScreen {
       .finally(() => (this.starting = false));
   }
 
+  private beginFree(watts: number) {
+    this.workout = null;
+    this.free = true;
+    this.lastTarget = watts;
+    this.phase = "live";
+    this.starting = true;
+    this.show("live");
+    this.cb
+      .startFree(watts)
+      .catch((e) => {
+        console.error(e);
+        this.showSetup();
+      })
+      .finally(() => (this.starting = false));
+  }
+
   private finish() {
     if (this.phase !== "live") return;
     this.phase = "done";
-    this.cb.end().catch(console.error);
+    (this.free ? this.cb.endFree() : this.cb.end()).catch(console.error);
   }
 
   private bias(delta: number) {
+    if (this.free) {
+      api.setErgTarget(Math.max(0, this.lastTarget + delta)).catch(console.error);
+      return;
+    }
     const current = this.lastBias;
     api.setWorkoutBias(current + delta).catch(console.error);
   }
@@ -108,6 +138,7 @@ export class TrainerScreen {
   private showSetup() {
     this.phase = "setup";
     this.workout = null;
+    this.free = false;
     this.show("setup");
     this.renderSetup();
   }
@@ -115,13 +146,16 @@ export class TrainerScreen {
   private show(view: "setup" | "live" | "done") {
     $("trainer-setup").hidden = view !== "setup";
     $("trainer-live").hidden = view !== "live";
+    $("trainer-live").classList.toggle("free", this.free);
     $("trainer-done").hidden = view !== "done";
   }
 
   private renderSetup() {
     $<HTMLInputElement>("trainer-ftp").value = String(this.ftp);
-    const watts = $<HTMLInputElement>("trainer-watts");
-    if (!watts.value) watts.value = String(Math.round((0.7 * this.ftp) / 5) * 5);
+    for (const id of ["trainer-watts", "trainer-free-watts"]) {
+      const watts = $<HTMLInputElement>(id);
+      if (!watts.value) watts.value = String(Math.round((0.7 * this.ftp) / 5) * 5);
+    }
     const saved = loadWorkouts();
     const card = (w: Workout, index: number) => {
       const start = el("button", { className: "primary", textContent: "Start" });
@@ -143,6 +177,16 @@ export class TrainerScreen {
     if (this.phase === "done") {
       if (!$("trainer-done").hidden) return;
       this.renderDone(snap);
+      return;
+    }
+    if (!w && this.phase === "setup" && snap.session.mode === "erg" && !this.starting) {
+      // A free session running already (started in the other window).
+      this.free = true;
+      this.phase = "live";
+      this.show("live");
+    }
+    if (this.free) {
+      this.updateFree(snap);
       return;
     }
     if (!w) {
@@ -186,6 +230,25 @@ export class TrainerScreen {
     }
   }
 
+  /** The live view of a free session: the target and the rider, no clock. */
+  private updateFree(snap: EngineSnapshot) {
+    const s = snap.session;
+    if (s.mode !== "erg" && !this.starting) {
+      this.showSetup(); // ended elsewhere
+      return;
+    }
+    const target = s.erg_target_w;
+    this.lastTarget = target;
+    $("trainer-target").textContent = `${Math.round(target)}`;
+    $("trainer-bias").textContent = "W · free";
+    const power = $("trainer-power");
+    power.textContent = num(s.power_w);
+    power.className = s.power_w === null ? "" : Math.abs(s.power_w - target) <= Math.max(10, target * 0.08) ? "on" : "off";
+    $("trainer-cadence").textContent = num(s.cadence_rpm);
+    $("trainer-hr").textContent = num(s.heart_rate_bpm);
+    $("trainer-elapsed").textContent = `${duration(s.elapsed_s)} · ${(s.stats.distance_m / 1000).toFixed(1)} km · ${Math.round(s.stats.energy_kj)} kJ`;
+  }
+
   /** A workout started elsewhere: the bar needs its steps, which the snapshot does not carry; use the saved one by name. */
   private rebuild(snap: EngineSnapshot): Workout | null {
     const name = snap.session.workout?.name;
@@ -199,7 +262,7 @@ export class TrainerScreen {
     const st = s.stats;
     this.show("done");
     const w = snap.session.workout;
-    $("trainer-done-title").textContent = w ? `${w.name}: ${w.done ? "complete!" : "ended"}` : "Workout ended";
+    $("trainer-done-title").textContent = w ? `${w.name}: ${w.done ? "complete!" : "ended"}` : this.free ? "Free ERG ended" : "Workout ended";
     const item = (label: string, value: string) => [el("span", {}, label), el("b", {}, value)];
     $("trainer-done-stats").replaceChildren(
       ...item("Time", duration(s.elapsed_s)),
@@ -229,12 +292,11 @@ export class TrainerScreen {
     $("trainer-devices").replaceChildren(el("span", { className: ok ? "tone-ok" : "tone-bad" }, parts.join(" · ")), ok ? "" : el("span", { className: "hint" }, " — connect the trainer under Devices"));
   }
 
-  /** A small always-on-top window beside the video, or the normal one. */
-  async setCompact(on: boolean) {
+  /** This screen lives in the small always-on-top window (its button then goes back to the normal one). */
+  setCompactUi(on: boolean) {
     this.compact = on;
     $("screen-trainer").classList.toggle("compact", on);
     document.body.classList.toggle("compact", on);
     $("trainer-compact").textContent = on ? "Normal window" : "Small window";
-    await api.compactWindow(on);
   }
 }

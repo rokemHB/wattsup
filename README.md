@@ -62,10 +62,11 @@ to upload to Strava as a virtual ride.
   workouts, or a quick block of minutes at watts, with nothing but the
   numbers on screen and no 3D world built. Made for training beside a
   video: target, power, cadence, heart rate, the interval clock, + and −
-  to shift all watts, S to skip an interval, and a "Small window" button
-  that shrinks the window and keeps it on top (on a tiling compositor such
-  as Hyprland, float the window for that to take effect). Sessions are kept
-  in the ride list like any ride.
+  to shift all watts, S to skip an interval, "Free ERG" to hold a target
+  with no clock at all, and a "Small window" button that opens a small
+  always-on-top window with the numbers and hides the main one until it is
+  closed (its fixed size makes tiling compositors such as Hyprland float
+  it). Sessions are kept in the ride list like any ride.
 - Comes with simulated devices, so everything can be developed and tested
   without a trainer.
 

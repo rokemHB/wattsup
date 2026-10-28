@@ -49,15 +49,40 @@ let lastJunctionKey = "";
 /** A ride is under way (shown at least once) and not yet stored. */
 let rideOpen = false;
 const ridesScreen = new RidesScreen();
+/** This page is the trainer's small window: no world, no scan, the trainer screen only. */
+const compactWindow = api.isCompactWindow();
+
 const trainerScreen = new TrainerScreen({
   start: (w) => startTrainerWorkout(w),
   end: async () => {
     await storeRide();
     await endWorkout();
   },
+  startFree: (watts) => startFreeErg(watts),
+  endFree: async () => {
+    await storeRide();
+    await api.setMode("sim");
+  },
   edit: (w, index) => openWorkout(w, index),
   settings: () => show("settings"),
+  compact: (on) => (on ? api.openCompactWindow() : api.closeCompactWindow()),
 });
+
+/** ERG at a fixed target with no workout: the trainer holds the watts until End. */
+async function startFreeErg(watts: number) {
+  await storeRide();
+  await endWorkout();
+  if (selectedRoute !== "flat") {
+    await api.setRoute("flat");
+    selectedRoute = "flat";
+    fillRouteList();
+  }
+  await api.resetRide();
+  await api.setMode("erg");
+  await api.setErgTarget(watts);
+  finishShown = false;
+  rideOpen = true;
+}
 
 /** An ERG workout on the flat road with no world built: the trainer screen shows the numbers. */
 async function startTrainerWorkout(w: Workout) {
@@ -608,6 +633,8 @@ function onSnapshot(snap: EngineSnapshot) {
     }
   }
   if (screen === "trainer") trainerScreen.update(snap);
+  // The small window may end a session the main window started: it stores the ride then.
+  if (compactWindow && (snap.session.workout || snap.session.mode === "erg")) rideOpen = true;
   if (screen === "ride" || screen === "pause") {
     hud?.update(snap);
     minimap?.update(snap);
@@ -794,6 +821,11 @@ async function start() {
   await api.onSnapshot(onSnapshot);
   api.setFtp(ftp).catch(console.error);
   onSnapshot(await api.snapshot());
+  if (compactWindow) {
+    trainerScreen.setCompactUi(true);
+    show("trainer");
+    return;
+  }
   const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");
   if (wanted === "workout") openWorkout(fromPreset(PRESETS[0], ftp), -1);
   else show((["start", "menu", "rider", "settings", "rides", "trainer", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");

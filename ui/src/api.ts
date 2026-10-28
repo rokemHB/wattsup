@@ -1,7 +1,8 @@
 // Typed wrappers around the Tauri commands in src-tauri/src/main.rs.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { PlannedLeg } from "./routing";
 import type {
   ControlMode,
@@ -22,7 +23,10 @@ import type {
 export const insideTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 /** The window size before compact mode, to restore it. */
-let normalSize: { w: number; h: number } | null = null;
+
+/** The trainer's small window, in logical pixels. */
+const COMPACT_W = 440;
+const COMPACT_H = 320;
 
 export const api = {
   startupInfo: () => invoke<StartupInfo>("startup_info"),
@@ -70,20 +74,51 @@ export const api = {
   pressButton: (button: ControllerButton) => invoke<void>("press_button", { button }),
   quit: () => getCurrentWindow().close(),
   /** A small always-on-top window (trainer mode beside a video), or back to the size before. */
-  compactWindow: async (on: boolean) => {
-    const win = getCurrentWindow();
-    const scale = await win.scaleFactor();
-    if (on) {
-      const size = await win.innerSize();
-      normalSize = { w: size.width / scale, h: size.height / scale };
-      await win.setMinSize(new LogicalSize(380, 240));
-      await win.setSize(new LogicalSize(440, 320));
-      await win.setAlwaysOnTop(true);
-    } else {
-      await win.setAlwaysOnTop(false);
-      await win.setMinSize(new LogicalSize(900, 600));
-      await win.setSize(new LogicalSize(normalSize?.w ?? 1280, normalSize?.h ?? 860));
+  /** This page runs in the trainer's small window (`index.html?compact`). */
+  isCompactWindow: () => new URLSearchParams(location.search).has("compact"),
+  /**
+   * Opens the trainer's small always-on-top window (label "compact") and hides this one until
+   * it closes. The small window has a fixed size, which tiling compositors such as Hyprland
+   * float by themselves when the window maps (a live resize of this window would stay tiled).
+   */
+  openCompactWindow: async () => {
+    const existing = await WebviewWindow.getByLabel("compact");
+    if (existing) {
+      await existing.setFocus();
+      return;
     }
+    const win = new WebviewWindow("compact", {
+      url: "index.html?compact",
+      title: "WattsUp · Trainer",
+      width: COMPACT_W,
+      height: COMPACT_H,
+      minWidth: COMPACT_W,
+      maxWidth: COMPACT_W,
+      minHeight: COMPACT_H,
+      maxHeight: COMPACT_H,
+      alwaysOnTop: true,
+      resizable: false,
+    });
+    await new Promise<void>((resolve, reject) => {
+      win.once("tauri://created", () => resolve());
+      win.once("tauri://error", (e) => reject(e.payload));
+    });
+    const main = getCurrentWindow();
+    await main.hide();
+    // Back when the small window is gone, however it went (its button or the close box).
+    const poll = setInterval(async () => {
+      if (await WebviewWindow.getByLabel("compact")) return;
+      clearInterval(poll);
+      await main.show();
+      await main.setFocus();
+    }, 700);
+  },
+  /** From the small window: bring the main window back and close this one. */
+  closeCompactWindow: async () => {
+    const main = await WebviewWindow.getByLabel("main");
+    await main?.show();
+    await main?.setFocus();
+    await getCurrentWindow().close();
   },
   toggleFullscreen: async () => {
     const win = getCurrentWindow();

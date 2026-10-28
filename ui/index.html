@@ -58,6 +58,12 @@
             <label>Cool-down <input id="trainer-cool" type="number" min="0" max="60" step="1" value="5" /> min</label>
             <button id="trainer-quick" class="primary">Start</button>
           </div>
+          <h3>Free ERG</h3>
+          <div class="quick-block">
+            <label>Hold <input id="trainer-free-watts" type="number" min="0" max="1500" step="5" /> W</label>
+            <button id="trainer-free" class="primary">Start</button>
+            <span class="hint">no clock, no intervals: + and − change the watts, End when you are done</span>
+          </div>
           <h3 class="row">Workouts <span class="hint ftp-field">FTP <input id="trainer-ftp" type="number" min="50" max="600" step="5" /> W</span></h3>
           <div id="trainer-workouts" class="route-list"></div>
           <p class="hint">ERG mode: the trainer holds the watts whatever gear or cadence you ride. The clock runs while you pedal. During the session + and − change all watts by 5, S skips to the next interval. Click a workout to edit it.</p>

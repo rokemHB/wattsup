@@ -109,10 +109,15 @@ trainer` or `--trainer`): quick block or a saved/preset workout, started on
 the flat route with no world (`show("trainer")` disposes the world; the menu
 rebuilds it). The session has `set_workout_bias` (+/− watts on every step)
 and `skip_workout_step`; the snapshot's `WorkoutSnapshot.bias_w` shows it.
-"Small window" uses the Tauri window API (permissions in
-`src-tauri/capabilities/default.json`); Hyprland ignores the resize for tiled
-windows, which is expected. Keep the live view cheap: no canvas but the
-interval bar, redrawn once a second.
+"Free ERG" is a target with no workout (`set_mode erg` + `set_erg_target`;
+`TrainerScreen.free`). "Small window" opens a second Tauri window (label
+`compact`, `index.html?compact`, fixed 440×320, always on top; permissions in
+`src-tauri/capabilities/default.json`) and hides the main one until it closes:
+a fixed size is what Hyprland floats at map time, a live resize of a tiled
+window does nothing. The small window runs the same UI in `compactWindow`
+mode (trainer screen only, no world, no scan); `save_ride` dedups by start
+time so both windows can end and store the same ride. Keep the live view
+cheap: no canvas but the interval bar, redrawn once a second.
 
 ## Navigation and ride records
 
