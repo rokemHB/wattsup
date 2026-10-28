@@ -9,7 +9,7 @@ const TYRE = 0.024;
 export const TYRE_BULGE = TYRE;
 const CRANK = 0.17;
 const BB = new THREE.Vector3(0.02, 0.29, 0); // bottom bracket
-const SADDLE = new THREE.Vector3(-0.2, 1.0, 0);
+const SADDLE = new THREE.Vector3(-0.2, 0.93, 0); // top of the seat post; the hip joint sits ~0.1 m above
 const BARS = new THREE.Vector3(0.48, 0.98, 0);
 const HIP = new THREE.Vector3(-0.14, 1.03, 0);
 const SHOULDER = new THREE.Vector3(0.2, 1.33, 0);
@@ -117,8 +117,8 @@ export class Rider {
 
     // Rider body: pelvis, torso leaning to the bars, head, arms with elbows.
     const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), shorts);
-    pelvis.position.copy(HIP).add(new THREE.Vector3(0.02, 0.03, 0));
-    pelvis.scale.set(0.9, 0.8, 1.15);
+    pelvis.position.copy(HIP).add(new THREE.Vector3(0.02, 0.04, 0));
+    pelvis.scale.set(0.9, 0.72, 1.15); // its underside just meets the saddle top
     const torsoDir = SHOULDER.clone().sub(HIP);
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.135, torsoDir.length() - 0.1, 4, 10), kit);
     torso.position.copy(HIP).lerp(SHOULDER, 0.52);
