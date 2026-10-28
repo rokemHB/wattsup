@@ -26,10 +26,14 @@ from open data by `tools/build_route.py`; no hand-made assets yet.
 Beyond the single climb, the Serra de Tramuntana is rideable: the Ma-10 and
 the well-known climbs (Sa Calobra, Puig Major, Coll de Sóller, Coll de sa
 Batalla, Formentor, Orient, Valldemossa, Galilea, Sant Elm) and the roads
-that join them, tunnels included. Pick a start on the island map and ride
-the network freely. Terrain and imagery stream in around you (and are cached on
-disk), direction signs stand at every junction, and a prompt 500 m before
-each junction lets you choose the turn with the arrow keys.
+that join them, tunnels included. On the island map, click a road and plan a
+route the way you would on komoot: a start, a destination, as many stops in
+between as you like; the route finds its own way, you drag the line to bend it
+through somewhere else, and the panel shows distance, climbing and the
+profile. Save it and it appears in the main menu. Or start a free ride from any
+road and pick turns as you go. Terrain and imagery stream in around you (and
+are cached on disk), direction signs stand at every junction, and a prompt
+500 m before each junction lets you choose the turn with the arrow keys.
 
 ## What it does
 

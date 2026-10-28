@@ -14,6 +14,8 @@ Open items, roughly in the order they are worth doing.
 - [ ] Ride recording to FIT or TCX for Strava.
 - [ ] Multiplayer over a WebSocket server (engine snapshots in, other riders out).
 - [x] The Tramuntana as a road network: Ma-10 and the known climbs, tunnels, map with a start picker, turns, signs, terrain download.
+- [x] Route planner on the map (komoot-like): start, destination, waypoints, auto-routing, drag the line to reroute, saved routes in the menu.
+- [ ] Planner: a destination before the start ("Destination here" on an empty plan), routing preferences (avoid a road, prefer main roads), an estimated ride time from the rider's FTP, GPX import.
 - [ ] Island, known rough edges: a flat pale strip section shows at some hairpins (Ma-2100 near Orient, 0.6 km from 39.7390,2.7190); the tube pokes a little past the headwall at portals; from the drone camera a slot is visible in the ground over tunnels; the map picture still has a lighter band where the imagery zoom changes over the sea.
 - [ ] Island: the far layer (150 m) is coarse where tiles have not loaded; a 30 m middle layer for the Tramuntana would hide that.
 - [ ] More roads can be added to the whitelist in `~/wattsup-data/refs.txt` (see README, "The island").

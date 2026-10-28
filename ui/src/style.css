@@ -162,7 +162,38 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 /* --- map and junctions ----------------------------------------------------- */
 .panel.wide .panel-head, .panel.wide .panel-body { max-width: 1400px; }
 .map-body { flex: 1; min-height: 0; }
+.map-main { display: flex; gap: 16px; min-height: 0; }
+.map-stage { position: relative; flex: 1; min-width: 0; }
 .map-canvas { width: 100%; height: calc(100vh - 250px); display: block; border-radius: 12px; background: #0b0d14; cursor: crosshair; }
+.map-side { width: 300px; flex: none; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 250px); overflow: auto; }
+.map-side h3 { margin: 0; }
+.map-side .hint { line-height: 1.4; }
+.waypoints { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.waypoints li { display: flex; align-items: center; gap: 10px; background: var(--panel-2); border-radius: 8px; padding: 6px 8px; }
+.waypoints .name { flex: 1; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.waypoints .mark { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #0b0d14; background: #fff; flex: none; }
+.waypoints .mark.start { background: var(--ok); }
+.waypoints .mark.end { background: var(--bad); }
+.waypoints li button { padding: 0 6px; line-height: 1.4; }
+#map-plan { display: flex; flex-direction: column; gap: 10px; }
+#map-route-name { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid #2d3550; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
+.route-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.route-stats div { display: flex; flex-direction: column; background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
+.route-stats b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.route-stats span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
+.map-profile { width: 100%; height: 84px; display: block; background: rgba(0, 0, 0, 0.25); border-radius: 8px; }
+.map-actions { flex-wrap: wrap; }
+.map-actions .primary { flex: 1; }
+.saved-routes { display: flex; flex-direction: column; gap: 4px; }
+.saved-route { display: flex; gap: 6px; align-items: stretch; }
+.saved-route .name { flex: 1; text-align: left; display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.saved-route .name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-route .meta { color: var(--muted); font-size: 12px; flex: none; }
+.map-popup { position: absolute; z-index: 2; min-width: 220px; max-width: 300px; background: rgba(15, 18, 27, 0.96); border: 1px solid #2d3550; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5); }
+.map-popup b { font-size: 15px; }
+.map-popup-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.map-popup-actions button { text-align: left; padding: 7px 10px; font-size: 13px; }
+.map-popup-actions button.free { color: var(--muted); }
 .download-row { margin-top: 8px; align-items: center; gap: 12px; }
 .download-row progress { flex: 1; height: 8px; accent-color: var(--blue); }
 .hud-junction { margin-top: 10px; align-self: center; width: min(760px, 100%); background: rgba(15, 18, 27, 0.82); border-radius: 12px; padding: 10px 14px; }

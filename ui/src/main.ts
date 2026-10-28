@@ -5,9 +5,11 @@ import { applyStoredDrivetrain, latest, renderDebug, scan, showError, wireDebug 
 import { $, el } from "./dom";
 import { duration, isTypingTarget, num, shiftForKey } from "./format";
 import { drawWorkout, Hud } from "./hud";
+import { loadPlans, MapScreen, type RoadSpot, type SavedPlan } from "./map";
 import { Minimap, type NetworkView } from "./minimap";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
-import type { EngineSnapshot, Junction, Place, Route, RouteInfo, Turn, Workout } from "./types";
+import type { PlannedPath } from "./routing";
+import type { EngineSnapshot, Junction, Route, RouteInfo, Turn, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
@@ -50,7 +52,7 @@ function show(next: Screen) {
   if (next === "rider") draft = { ...profile };
   screen = next;
   for (const s of ["start", "menu", "rider", "settings", "workout", "map", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
-  if (next === "map") requestAnimationFrame(drawMap);
+  if (next === "map") mapScreen.scheduleDraw();
   if (next === "pause") $("pause-end-workout").hidden = !activeWorkout;
   if (next === "menu") fillWorkoutList();
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
@@ -232,40 +234,14 @@ async function endWorkout() {
 
 // --- the island map --------------------------------------------------------------
 
-interface MapView {
-  /** Map pixel at the canvas origin and pixels per canvas pixel. */
-  ox: number;
-  oy: number;
-  scale: number;
-  dragging: { x: number; y: number; ox: number; oy: number } | null;
-}
-const mapView: MapView = { ox: 0, oy: 0, scale: 1, dragging: null };
-let mapSel: { x: number; z: number; edge: number; i: number } | null = null;
-/** The roads as canvas paths in map-image pixels, built once per network: stroking a path is cheap, rebuilding it every frame was not. */
-let mapPaths: { byKind: { kind: number; path: Path2D }[]; bounds: { x0: number; y0: number; x1: number; y1: number }; places: Place[] } | null = null;
+/** The planned ride about to start: the HUD shows its whole profile, not a window. */
+let plannedRide = false;
 
-function buildMapPaths() {
-  const net = network!;
-  const xyz = net.xyz;
-  const bounds = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-  const byKind = [3, 2, 1, 0].map((kind) => ({ kind, path: new Path2D() }));
-  for (const e of net.edges) {
-    const path = byKind.find((k) => k.kind === e.kind)?.path ?? byKind[0].path;
-    for (let i = e.start; i < e.start + e.count; i++) {
-      const [px, py] = mapPixel(xyz[i * 3], xyz[i * 3 + 2]);
-      if (i === e.start) path.moveTo(px, py);
-      else path.lineTo(px, py);
-      if (px < bounds.x0) bounds.x0 = px;
-      if (px > bounds.x1) bounds.x1 = px;
-      if (py < bounds.y0) bounds.y0 = py;
-      if (py > bounds.y1) bounds.y1 = py;
-    }
-  }
-  // Only the places along the rideable roads get a label; the rest of the island is just the picture.
-  const places = net.places.filter((pl) => networkIndex!.nearest(pl.x, pl.z, 2500).d < 2500);
-  mapPaths = { byKind, bounds, places };
-  return mapPaths;
-}
+const mapScreen = new MapScreen({
+  freeRide: (at, forward) => startNetworkRide(at, forward).catch(showError),
+  plannedRide: (path, name, start) => startPlannedRide(path, name, start).catch(showError),
+});
+mapScreen.onPlansChanged = () => fillRouteList();
 
 async function ensureNetwork(): Promise<boolean> {
   if (network && networkWorld) return true;
@@ -275,7 +251,6 @@ async function ensureNetwork(): Promise<boolean> {
     network = net;
     networkIndex = new NetworkIndex(net);
     networkWorld = data;
-    mapPaths = null;
     return true;
   } catch (e) {
     showError(`island not available: ${e}`);
@@ -283,129 +258,20 @@ async function ensureNetwork(): Promise<boolean> {
   }
 }
 
-async function openMap() {
+async function openMap(plan?: SavedPlan) {
   $("loading-text").textContent = "Loading the island…";
   $("loading").hidden = false;
   const ok = await ensureNetwork();
   $("loading").hidden = true;
   if (!ok) return;
   $("map-title").textContent = networkWorld!.name;
-  mapSel = null;
-  mapView.scale = 0;
-  for (const id of ["map-ride-a", "map-ride-b"]) {
-    $<HTMLButtonElement>(id).disabled = true;
-    $(id).textContent = "Ride";
-  }
-  $("map-hint").textContent = "Click a road to start there. Scroll to zoom, drag to pan.";
+  mapScreen.open(network!, networkIndex!, networkWorld!);
   if (!downloading) {
     const est = worldDownloadEstimate(network!, networkWorld!);
     $("map-download-text").textContent = `Terrain streams in as you ride and is kept on disk. The whole region is about ${Math.round(est.bytes / 1e6)} MB (${est.files} files).`;
   }
   show("map");
-}
-
-/** Map image pixel of a local position. */
-let mapFrame: Frame | null = null;
-function mapPixel(x: number, z: number): [number, number] {
-  const w = networkWorld!;
-  const m = w.map!;
-  if (!mapFrame || mapFrame.lat0 !== w.origin.lat || mapFrame.lon0 !== w.origin.lon) mapFrame = new Frame(w.origin.lat, w.origin.lon);
-  const [lat, lon] = mapFrame.toLatLon(x, z);
-  return [((lon - m.lon_min) / (m.lon_max - m.lon_min)) * m.image.width, ((m.lat_max - lat) / (m.lat_max - m.lat_min)) * m.image.height];
-}
-
-function drawMap() {
-  if (!networkWorld?.map || !network || screen !== "map") return;
-  const canvas = $<HTMLCanvasElement>("map-canvas");
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  if (!w || !h) return;
-  const dpr = Math.min(window.devicePixelRatio, 2);
-  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-  }
-  const img = networkWorld.map.image;
-  const paths = mapPaths ?? buildMapPaths();
-  if (!mapView.scale) {
-    // Fit the roads' extent: the Tramuntana, not the whole island.
-    const b = paths.bounds;
-    mapView.scale = Math.max((b.x1 - b.x0) / w, (b.y1 - b.y0) / h) * 1.05;
-    mapView.ox = (b.x0 + b.x1) / 2 - (w / 2) * mapView.scale;
-    mapView.oy = (b.y0 + b.y1) / 2 - (h / 2) * mapView.scale;
-  }
-  const ctx = canvas.getContext("2d")!;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "#0b0d14";
-  ctx.fillRect(0, 0, w, h);
-  const s = mapView.scale;
-  // Only the part of the image inside the view: WebKit draws nothing when the source rectangle leaves the image.
-  const sx0 = Math.max(0, mapView.ox);
-  const sy0 = Math.max(0, mapView.oy);
-  const sx1 = Math.min(img.width, mapView.ox + w * s);
-  const sy1 = Math.min(img.height, mapView.oy + h * s);
-  if (sx1 > sx0 && sy1 > sy0) ctx.drawImage(img, sx0, sy0, sx1 - sx0, sy1 - sy0, (sx0 - mapView.ox) / s, (sy0 - mapView.oy) / s, (sx1 - sx0) / s, (sy1 - sy0) / s);
-  const toCanvas = (x: number, z: number) => {
-    const [px, py] = mapPixel(x, z);
-    return [(px - mapView.ox) / s, (py - mapView.oy) / s] as const;
-  };
-  // Roads: prebuilt paths in map-image pixels, drawn through the view transform.
-  ctx.save();
-  ctx.setTransform(dpr / s, 0, 0, dpr / s, (-mapView.ox * dpr) / s, (-mapView.oy * dpr) / s);
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  for (const { kind, path } of paths.byKind) {
-    ctx.strokeStyle = kind === 0 ? "#ffd166" : kind === 1 ? "#ffffff" : kind === 2 ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.35)";
-    ctx.lineWidth = (kind <= 1 ? 2.2 : 1.2) * s;
-    ctx.stroke(path);
-  }
-  ctx.restore();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.font = "bold 12px sans-serif";
-  for (const pl of paths.places) {
-    if (pl.kind === "hamlet" && s > 6) continue;
-    if (pl.kind === "village" && s > 12) continue;
-    const [cx, cy] = toCanvas(pl.x, pl.z);
-    if (cx < 0 || cy < 0 || cx > w || cy > h) continue;
-    ctx.fillStyle = "#0f121b";
-    ctx.fillText(pl.name, cx + 7, cy + 5);
-    ctx.fillStyle = pl.kind === "town" || pl.kind === "city" ? "#ffffff" : "rgba(255,255,255,0.8)";
-    ctx.fillText(pl.name, cx + 6, cy + 4);
-    ctx.beginPath();
-    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  if (mapSel) {
-    const [cx, cy] = toCanvas(mapSel.x, mapSel.z);
-    ctx.beginPath();
-    ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,196,0,0.35)";
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#ffc400";
-    ctx.stroke();
-  }
-}
-
-/** A short name for riding an edge toward one of its ends: the nearest town past that end, or the compass direction. */
-function directionLabel(edge: number, towardB: boolean): string {
-  const net = network!;
-  const e = net.edges[edge];
-  const node = net.nodes[towardB ? e.b : e.a];
-  let best: { name: string; d: number } | null = null;
-  for (const pl of net.places) {
-    if (pl.kind === "hamlet") continue;
-    const d = Math.hypot(pl.x - node.x, pl.z - node.z);
-    if (d < 6000 && (!best || d < best.d)) best = { name: pl.name, d };
-  }
-  const road = e.ref ?? e.name ?? "road";
-  if (best) return `${road} toward ${best.name}`;
-  const from = net.nodes[towardB ? e.a : e.b];
-  const dx = node.x - from.x;
-  const dz = node.z - from.z;
-  const dirs = ["east", "south-east", "south", "south-west", "west", "north-west", "north", "north-east"];
-  const idx = Math.round((Math.atan2(dz, dx) / (Math.PI / 4) + 8) % 8);
-  return `${road} ${dirs[idx]}`;
+  if (plan) mapScreen.load(plan);
 }
 
 let downloading: { cancelled: boolean } | null = null;
@@ -436,75 +302,23 @@ async function downloadTerrain() {
   text.textContent = cancelled ? "Download stopped. Click again to continue; what is already here stays." : failed ? `Done, but ${failed} files could not be fetched. Click again to retry them.` : "All terrain is on disk. Rides in this region work offline now.";
 }
 
-/** One redraw per frame, however many wheel or mouse events arrive. */
-let mapDrawQueued = false;
-function scheduleMapDraw() {
-  if (mapDrawQueued) return;
-  mapDrawQueued = true;
-  requestAnimationFrame(() => {
-    mapDrawQueued = false;
-    drawMap();
-  });
-}
-
-function wireMap() {
-  const canvas = $<HTMLCanvasElement>("map-canvas");
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2;
-    const ns = Math.min(40, Math.max(0.5, mapView.scale * factor));
-    mapView.ox += mx * (mapView.scale - ns);
-    mapView.oy += my * (mapView.scale - ns);
-    mapView.scale = ns;
-    scheduleMapDraw();
-  });
-  canvas.addEventListener("mousedown", (e) => (mapView.dragging = { x: e.clientX, y: e.clientY, ox: mapView.ox, oy: mapView.oy }));
-  window.addEventListener("mousemove", (e) => {
-    if (!mapView.dragging) return;
-    mapView.ox = mapView.dragging.ox - (e.clientX - mapView.dragging.x) * mapView.scale;
-    mapView.oy = mapView.dragging.oy - (e.clientY - mapView.dragging.y) * mapView.scale;
-    scheduleMapDraw();
-  });
-  window.addEventListener("mouseup", (e) => {
-    const drag = mapView.dragging;
-    mapView.dragging = null;
-    if (!drag || !networkIndex || !networkWorld?.map || screen !== "map") return;
-    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) return; // it was a pan
-    const rect = canvas.getBoundingClientRect();
-    const px = mapView.ox + (e.clientX - rect.left) * mapView.scale;
-    const py = mapView.oy + (e.clientY - rect.top) * mapView.scale;
-    const m = networkWorld.map;
-    const lon = m.lon_min + (px / m.image.width) * (m.lon_max - m.lon_min);
-    const lat = m.lat_max - (py / m.image.height) * (m.lat_max - m.lat_min);
-    const [x, z] = new Frame(networkWorld.origin.lat, networkWorld.origin.lon).toXZ(lat, lon);
-    const near = networkIndex.nearest(x, z, 3000);
-    if (near.i < 0) {
-      $("map-hint").textContent = "No road near there. Click closer to a road.";
-      return;
-    }
-    const xyz = network!.xyz;
-    mapSel = { x: xyz[near.i * 3], z: xyz[near.i * 3 + 2], edge: near.edge, i: near.i };
-    const edge = network!.edges[near.edge];
-    $("map-hint").textContent = `${edge.ref ?? ""} ${edge.name ?? ""}`.trim() || "unnamed road";
-    $<HTMLButtonElement>("map-ride-a").disabled = false;
-    $<HTMLButtonElement>("map-ride-b").disabled = false;
-    $("map-ride-a").textContent = `Ride ${directionLabel(near.edge, true)}`;
-    $("map-ride-b").textContent = `Ride ${directionLabel(near.edge, false)}`;
-    drawMap();
-  });
-  $("map-ride-a").onclick = () => startNetworkRide(true).catch(showError);
-  $("map-ride-b").onclick = () => startNetworkRide(false).catch(showError);
-  $("map-download").onclick = () => downloadTerrain().catch(showError);
-  window.addEventListener("resize", () => screen === "map" && drawMap());
-}
-
-async function startNetworkRide(forward: boolean) {
-  if (!mapSel) return;
+/** A free ride from a road point, toward the edge's end if `forward`. */
+async function startNetworkRide(at: RoadSpot, forward: boolean) {
   await endWorkout();
-  await api.startOnNetwork(NETWORK_WORLD, mapSel.x, mapSel.z, forward);
+  plannedRide = false;
+  await api.startOnNetwork(NETWORK_WORLD, at.x, at.z, forward);
+  await beginNetworkRide(at);
+}
+
+/** A ride along a route planned on the map. */
+async function startPlannedRide(path: PlannedPath, name: string, start: RoadSpot) {
+  await endWorkout();
+  plannedRide = true;
+  await api.startPlannedRide(NETWORK_WORLD, name, path.legs);
+  await beginNetworkRide(start);
+}
+
+async function beginNetworkRide(at: { x: number; z: number }) {
   selectedRoute = NETWORK_WORLD;
   await buildWorld();
   // The tiles around the start stream in; hold the loading screen until the ground is there.
@@ -518,7 +332,7 @@ async function startNetworkRide(forward: boolean) {
     const ticker = setInterval(() => {
       $("loading-text").textContent = tiles.pending ? `Loading the terrain around you… ${tiles.pending} tile${tiles.pending === 1 ? "" : "s"} to go` : "Loading the terrain around you…";
     }, 300);
-    await tiles.whenReady(start?.x ?? mapSel.x, start?.z ?? mapSel.z, 30000);
+    await tiles.whenReady(start?.x ?? at.x, start?.z ?? at.z, 30000);
     clearInterval(ticker);
     $("loading").hidden = true;
   }
@@ -568,11 +382,19 @@ function fillRouteList() {
     { className: "route-card" },
     el("b", {}, "Mallorca · Serra de Tramuntana"),
     el("button", { className: "primary", textContent: "Map" }),
-    el("span", { className: "meta" }, "free ride · every road of the range, the Ma-10 included · pick your start on the map"),
+    el("span", { className: "meta" }, "plan a route on the map or ride free · every road of the range, the Ma-10 included"),
   );
   island.onclick = () => openMap().catch(showError);
+  const plans = loadPlans()
+    .filter((p) => p.world === NETWORK_WORLD)
+    .map((p) => {
+      const card = el("div", { className: "route-card" }, el("b", {}, p.name), el("button", { className: "primary", textContent: "Map" }), el("span", { className: "meta" }, `${(p.length_m / 1000).toFixed(1)} km · planned on the map`));
+      card.onclick = () => openMap(p).catch(showError);
+      return card;
+    });
   $("route-list").replaceChildren(
     island,
+    ...plans,
     ...routes.map((r) => {
       const km = (r.length_m / 1000).toFixed(1);
       const card = el(
@@ -617,7 +439,7 @@ async function buildWorld() {
   world?.dispose();
   world = new World($<HTMLCanvasElement>("world"), route, terrain, networkView ? { data: networkView.data, net: network! } : undefined);
   world.onFrame = () => hud?.frame();
-  hud = new Hud(world.sampler, !!networkView);
+  hud = new Hud(world.sampler, !!networkView && !plannedRide);
   minimap = new Minimap($<HTMLCanvasElement>("minimap"), route, terrain, networkView);
   routeVersion = latest?.route_version ?? -1;
   hud.setWorkout(activeWorkout);
@@ -628,6 +450,7 @@ async function buildWorld() {
 
 async function startRide(id: string) {
   await endWorkout();
+  plannedRide = false;
   if (id !== selectedRoute || !world) {
     await api.setRoute(id);
     selectedRoute = id;
@@ -757,7 +580,7 @@ function wire() {
   $("finish-menu").onclick = () => show("menu");
   $("toggle-debug").onclick = toggleDebug;
   $("close-debug").onclick = toggleDebug;
-  wireMap();
+  $("map-download").onclick = () => downloadTerrain().catch(showError);
   const name = $<HTMLInputElement>("rider-name");
   name.oninput = () => {
     draft.name = name.value.slice(0, 24);
@@ -774,6 +597,7 @@ function wire() {
     if (isTypingTarget(e.target)) return;
     if (e.key === "Escape") {
       if (!$("debug").hidden) toggleDebug();
+      else if (screen === "map" && mapScreen.escape()) return;
       else if (screen === "ride") show("pause");
       else if (screen === "pause") show("ride");
       else if (screen === "rider" || screen === "settings") back();
@@ -830,24 +654,32 @@ async function start() {
     // For looking at the island: start at a given lat,lon (toward the edge's end unless ",back"), else on the Ma-10.
     if (await ensureNetwork()) {
       let forward = true;
+      let at: RoadSpot;
       if (startup.island_at) {
         const [lat, lon, dir] = startup.island_at.split(",");
         const [x, z] = new Frame(networkWorld!.origin.lat, networkWorld!.origin.lon).toXZ(Number(lat), Number(lon));
         const near = networkIndex!.nearest(x, z, 5000);
-        mapSel = { x: network!.xyz[near.i * 3], z: network!.xyz[near.i * 3 + 2], edge: near.edge, i: near.i };
+        at = { x: network!.xyz[near.i * 3], z: network!.xyz[near.i * 3 + 2], edge: near.edge, i: near.i };
         forward = dir !== "back";
       } else {
         const e = network!.edges.findIndex((x) => x.ref === "Ma-10" && x.count > 80);
         const p = network!.edges[e].start + 20;
-        mapSel = { x: network!.xyz[p * 3], z: network!.xyz[p * 3 + 2], edge: e, i: p };
+        at = { x: network!.xyz[p * 3], z: network!.xyz[p * 3 + 2], edge: e, i: p };
       }
-      await startNetworkRide(forward);
+      await startNetworkRide(at, forward);
       if (startup.camera && world) world.setCamera(startup.camera);
     }
   } else if (startup.screen === "map" || startup.screen === "map-download") {
     await openMap();
     // For testing the download: start it right away.
     if (startup.screen === "map-download") downloadTerrain().catch(showError);
+    // For looking at the planner: WATTSUP_ISLAND_AT="lat,lon;lat,lon[;…]" plans a route through those points.
+    if (startup.island_at?.includes(";")) mapScreen.planThrough(startup.island_at.split(";").map((p) => p.split(",").map(Number) as [number, number]));
+  }
+  if (startup.dev_js) {
+    // Test driving: WATTSUP_DEV_JS runs with `wattsup.map` (the map screen), `wattsup.api` and `wattsup.screen()` in scope.
+    Object.assign(window, { wattsup: { map: mapScreen, api, screen: () => screen } });
+    new Function(startup.dev_js)();
   }
   if (startup.screen === "workout-ride") {
     // For looking at the workout HUD: ride the first preset on the flat road.

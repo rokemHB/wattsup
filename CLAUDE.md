@@ -32,6 +32,15 @@ workout|map|map-download|ride|island|workout-ride>`, `WATTSUP_ISLAND_AT=lat,lon[
 (network ride from there), `WATTSUP_START_M=<m>` and `WATTSUP_CAMERA=<chase|side|
 front|drone|orbit>` for single routes. The Tauri CLI swallows flags, so use env.
 
+`WATTSUP_DEV_JS='<javascript>'` runs a script in the UI once it is up, with
+`wattsup.map` (the map screen object, private fields reachable), `wattsup.api`
+and `wattsup.screen()` in scope: the only way to click, hover and drag on the
+map from a script here (no mouse automation on this machine). Dispatch
+`MouseEvent`s on `map.canvas` (mousedown) and `window` (mousemove, mouseup)
+with `clientX/Y` from `canvas.getBoundingClientRect()`; log with
+`console.warn`. With `SCREEN=map`, `ISLAND_AT="lat,lon;lat,lon"` plans a
+route through those points at startup.
+
 Close the app when you are done with a piece of work (Robin does not want it
 running all the time): `tools/dev/stop.sh`.
 
@@ -78,6 +87,20 @@ in the dev log temporarily change that `console.info` to `console.warn`
 (Vite forwards warn, not info). Beware: with no `SCREEN=ride`/`island` the app
 idles in a menu at 15 fps and the statistics then measure nothing useful;
 with `AUTO_SIM=0` the connection banner animates and skews them too.
+
+## Route planner (map screen)
+
+`ui/src/map.ts` is the map screen (view, click menu, waypoints, side panel,
+saved plans in localStorage `wattsup.plans`); `ui/src/routing.ts` is the
+Dijkstra router over the junction graph with mid-edge starts, ends and
+waypoints (tests in `routing.test.ts`). A planned ride goes to the engine as
+`PlannedLeg`s (`start_planned_ride`); `Navigator::planned` validates that they
+join and the ride finishes at the last leg's end. Performance rules there:
+everything per frame is prebuilt (roads and route pieces as `Path2D`, every
+network point's map pixel in `pointPx`), a waypoint drag re-routes at most
+once per animation frame, `NetworkIndex.nearest` searches in rings and stops
+early. Measured: a route of 10k points costs ~1 ms to compute, ~1.5 ms to
+draw.
 
 ## Gotchas
 

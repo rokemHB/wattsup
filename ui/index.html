@@ -56,12 +56,44 @@
       </div>
     </section>
 
-    <!-- Map: pick a start on the island -->
+    <!-- Map: plan a route on the island, or pick a free-ride start -->
     <section id="screen-map" class="screen panel wide" hidden>
-      <header class="panel-head"><h2 id="map-title">Mallorca</h2><span class="row"><button id="map-ride-a" class="primary" disabled>Ride</button><button id="map-ride-b" class="primary" disabled>Ride</button><button class="back" data-back>Back</button></span></header>
+      <header class="panel-head"><h2 id="map-title">Mallorca</h2><span class="row"><button class="back" data-back>Back</button></span></header>
       <div class="panel-body map-body">
-        <canvas id="map-canvas" class="map-canvas"></canvas>
-        <p class="hint" id="map-hint">Click a road to start there. Scroll to zoom, drag to pan.</p>
+        <div class="map-main">
+          <div class="map-stage">
+            <canvas id="map-canvas" class="map-canvas"></canvas>
+            <div id="map-popup" class="map-popup" hidden>
+              <b id="map-popup-title"></b>
+              <span id="map-popup-sub" class="hint"></span>
+              <div id="map-popup-actions" class="map-popup-actions"></div>
+            </div>
+          </div>
+          <aside class="map-side">
+            <h3>Route</h3>
+            <p class="hint" id="map-empty">Click a road and choose <b>Start here</b>, then click where the ride should end. The route finds its own way; drag it to bend it.</p>
+            <ol id="map-waypoints" class="waypoints"></ol>
+            <div id="map-plan" hidden>
+              <input id="map-route-name" type="text" maxlength="48" placeholder="Route name" />
+              <div id="map-stats" class="route-stats" hidden>
+                <div><b id="map-stat-km">0</b><span>km</span></div>
+                <div><b id="map-stat-up">0</b><span>m up</span></div>
+                <div><b id="map-stat-down">0</b><span>m down</span></div>
+              </div>
+              <canvas id="map-profile" class="map-profile" hidden></canvas>
+              <div class="row map-actions">
+                <button id="map-ride" class="primary" disabled>Ride</button>
+                <button id="map-save" class="small" disabled>Save</button>
+                <button id="map-reverse" class="small" disabled>Reverse</button>
+                <button id="map-fit" class="small">Fit</button>
+                <button id="map-clear" class="small">Clear</button>
+              </div>
+            </div>
+            <p class="hint" id="map-hint">Click a road to plan a route or to ride from there. Scroll to zoom, drag to pan.</p>
+            <h3 id="map-saved-title" hidden>Saved routes</h3>
+            <div id="map-saved" class="saved-routes"></div>
+          </aside>
+        </div>
         <div class="row download-row">
           <span class="hint" id="map-download-text">Terrain streams in as you ride and is kept on disk.</span>
           <progress id="map-download-bar" max="1" value="0" hidden></progress>
