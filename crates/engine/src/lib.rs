@@ -26,6 +26,7 @@ use wattsup_devices::{
 };
 
 pub mod rides;
+pub mod tcx;
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {

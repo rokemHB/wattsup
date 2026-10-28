@@ -233,6 +233,9 @@ pub struct RideSample {
     pub power_w: Option<f64>,
     pub cadence_rpm: Option<f64>,
     pub heart_rate_bpm: Option<f64>,
+    /// Where on the world the sample was taken (route x, z), for exports with positions.
+    #[serde(default)]
+    pub xz: Option<[f64; 2]>,
 }
 
 /// A finished (or abandoned) ride as the session knows it; the engine adds the clock time and stores it.
@@ -482,6 +485,10 @@ impl RideSession {
                 power_w: self.power.fresh(now, timeout),
                 cadence_rpm: cadence,
                 heart_rate_bpm: heart_rate,
+                xz: self.config.route.as_ref().map(|r| {
+                    let (x, _, z) = r.position_at(self.distance_m);
+                    [x, z]
+                }),
             });
         }
     }

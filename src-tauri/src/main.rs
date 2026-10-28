@@ -11,12 +11,13 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
-use wattsup_core::network::{NetworkInfo, PlannedLeg};
+use wattsup_core::network::{Network, NetworkInfo, PlannedLeg};
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo, BUILTIN_ROUTES};
 use wattsup_core::session::{ControlMode, Workout};
 use wattsup_devices::{DeviceId, DeviceKind};
 use wattsup_engine::rides::{RideRecord, RideStore, RideSummary};
+use wattsup_engine::tcx;
 use wattsup_engine::{Engine, EngineConfig, EngineSnapshot, ScanResult};
 
 struct AppState {
@@ -190,6 +191,31 @@ fn delete_ride(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     state.rides.delete(&id)
 }
 
+/// Writes the ride as a TCX file into the Downloads folder (or the app data folder
+/// without one) and returns its path. Positions come from the world's origin.
+#[tauri::command]
+fn export_ride(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<String> {
+    let record = state.rides.load(&id)?;
+    let origin = record
+        .summary
+        .world
+        .as_deref()
+        .and_then(Network::builtin)
+        .map(|n| tcx::Origin {
+            lat: n.origin.lat,
+            lon: n.origin.lon,
+        });
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().app_data_dir().map(|d| d.join("exports")))
+        .map_err(|e| format!("no folder to write to: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(tcx::file_name(&record));
+    std::fs::write(&path, tcx::to_tcx(&record, origin)).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
 #[tauri::command]
 async fn start_workout(state: State<'_, AppState>, workout: Workout) -> CmdResult<()> {
     state.engine.start_workout(workout).await;
@@ -357,6 +383,7 @@ fn main() {
             rides,
             ride,
             delete_ride,
+            export_ride,
             tiles::fetch_cached,
             tiles::cache_fetch,
             scan,

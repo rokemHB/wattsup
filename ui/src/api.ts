@@ -47,6 +47,8 @@ export const api = {
   rides: () => invoke<RideSummary[]>("rides"),
   ride: (id: string) => invoke<RideRecord>("ride", { id }),
   deleteRide: (id: string) => invoke<void>("delete_ride", { id }),
+  /** Writes the ride as a TCX file (Strava and friends import it); returns the path. */
+  exportRide: (id: string) => invoke<string>("export_ride", { id }),
   /** Map data bytes through the app's disk cache. */
   fetchCached: (url: string) => invoke<ArrayBuffer>("fetch_cached", { url }),
   /** Downloads a map data URL into the disk cache without sending it to the UI; answers its size in bytes. */

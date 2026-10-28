@@ -154,13 +154,28 @@ export class RidesScreen {
       this.record = null;
       await this.open();
     };
+    const exportLine = el("span", { className: "hint export-line" });
+    const exp = el("button", { textContent: "Export TCX" });
+    exp.onclick = async () => {
+      exp.disabled = true;
+      exportLine.textContent = "writing…";
+      try {
+        const path = await api.exportRide(r.id);
+        exportLine.textContent = `Saved ${path} · upload it to Strava as a virtual ride`;
+      } catch (e) {
+        exportLine.textContent = `export failed: ${e}`;
+      } finally {
+        exp.disabled = false;
+      }
+    };
     box.replaceChildren(
       el(
         "header",
         {},
         el("div", {}, el("b", {}, r.workout ? `${r.workout} · ${r.route}` : r.route), el("span", { className: "when" }, `${dateLabel(r.started_at_ms)} · ${r.finished ? "finished" : "stopped early"} · ↑ ${Math.round(s.ascent_m)} m ↓ ${Math.round(s.descent_m)} m`)),
-        del,
+        el("span", { className: "row" }, exp, del),
       ),
+      exportLine,
       el(
         "div",
         { className: "ride-stats" },

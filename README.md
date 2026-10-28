@@ -42,7 +42,9 @@ re-routed from the end of the road you chose back to the destination, or, when
 there is no way, the plan ends and the road goes on as a free ride.
 Every ride is kept on disk (totals plus one-second samples, under the app's
 data folder) and the Rides screen shows them week by week with power, heart
-rate and elevation graphs.
+rate and elevation graphs. "Export TCX" writes a ride into your Downloads
+folder with power, cadence, heart rate and (for island rides) positions, ready
+to upload to Strava as a virtual ride.
 
 ## What it does
 

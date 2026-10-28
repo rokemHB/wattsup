@@ -138,7 +138,10 @@ and `wattsup_engine::rides::RideStore` files them as `<app data dir>/rides/
 ride-<unix ms>.json` plus `index.json` (rebuilt from the files if lost). The UI
 stores a ride through `api.saveRide()` when it ends or is replaced
 (`storeRide()` in `main.ts`: 500 m and a minute of moving at least); the Rides
-screen is `ui/src/rides.ts`.
+screen is `ui/src/rides.ts`. Samples carry `xz` (route position); `export_ride`
+writes `wattsup_engine::tcx::to_tcx` into the Downloads folder, positions from
+`Network::builtin(world).origin` in the UI's flat frame (same constants as
+`Frame` in `streaming.ts`).
 
 ## Gotchas
 

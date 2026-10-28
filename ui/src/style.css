@@ -256,6 +256,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 .rides-detail header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .rides-detail header > div { flex: 1; min-width: 0; }
 .rides-detail header b { font-size: 20px; display: block; }
+.rides-detail .export-line { display: block; margin: 6px 0 2px; word-break: break-all; }
+.rides-detail .export-line:empty { display: none; }
 .rides-detail header .when { color: var(--muted); font-size: 13px; }
 .ride-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .ride-stats div { display: flex; flex-direction: column; background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }

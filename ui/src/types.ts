@@ -74,6 +74,8 @@ export interface RideSample {
   power_w: number | null;
   cadence_rpm: number | null;
   heart_rate_bpm: number | null;
+  /** Route x, z of the sample (null in rides stored before positions were kept). */
+  xz: [number, number] | null;
 }
 
 /** A stored ride as the list shows it (crates/engine/src/rides.rs). */

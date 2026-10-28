@@ -187,6 +187,18 @@ impl Route {
         a + (b - a) * t
     }
 
+    /// Position (x, y, z) at a distance along the route (linear between samples).
+    pub fn position_at(&self, distance_m: f64) -> (f64, f64, f64) {
+        if self.points.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        let (d, _) = self.lap_position(distance_m);
+        let (i, t) = self.index_at(d);
+        let a = &self.points[i];
+        let b = &self.points[(i + 1).min(self.points.len() - 1)];
+        (a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+    }
+
     /// Road grade in percent at a distance, averaged over a short window.
     pub fn grade_at(&self, distance_m: f64) -> f64 {
         if self.points.len() < 2 {
