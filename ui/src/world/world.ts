@@ -49,7 +49,8 @@ export class World {
 
   constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData, network?: { data: NetworkWorldData; net: RoadNetwork }) {
     this.sampler = new RouteSampler(route);
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    // No multisampling: on an integrated GPU it costs as much as a third more resolution, which hides edges better than MSAA hides a blur.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.debug.onShaderError = (gl, _program, vs, fs) => {
       console.warn(`shader error: vertex: ${gl.getShaderInfoLog(vs)} fragment: ${gl.getShaderInfoLog(fs)}`);
@@ -130,10 +131,23 @@ export class World {
       : { grain: detailTexture(), rock: rockDetailTexture(), scrub: scrubDetailTexture(), normal: rockNormalTexture(), rockScale: 3.2, scrubScale: 2.6, rockMean: [0.5, 0.5, 0.5], scrubMean: [0.5, 0.5, 0.5] };
     const far = data.far;
     const farHeight = (x: number, z: number) => gridSampleOr(far, x, z) ?? -10;
-    let farMesh: THREE.Mesh | null = null;
+    // The far layer in 4×4 blocks: most of the island is behind the camera and gets culled.
+    const farMeshes: THREE.Mesh[] = [];
     if (far.ortho) {
-      farMesh = gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), detail, 0);
-      group.add(farMesh);
+      const farTex = imageTexture(far.ortho.images[0][0]);
+      const n = 4;
+      for (let br = 0; br < n; br++) {
+        for (let bc = 0; bc < n; bc++) {
+          const r0 = Math.floor((br * (far.rows - 1)) / n);
+          const r1 = Math.floor(((br + 1) * (far.rows - 1)) / n);
+          const c0 = Math.floor((bc * (far.cols - 1)) / n);
+          const c1 = Math.floor(((bc + 1) * (far.cols - 1)) / n);
+          const m = gridBlockMesh(far, farHeight, [r0, r1], [c0, c1], farTex, detail, 0, undefined, [0, far.rows - 1], [0, far.cols - 1]);
+          m.userData.block = { r0, r1, c0, c1 };
+          farMeshes.push(m);
+          group.add(m);
+        }
+      }
     }
     const cx = far.x0 + (far.cols * far.spacing) / 2;
     const cz = far.z0 + (far.rows * (far.spacingZ ?? far.spacing)) / 2;
@@ -141,7 +155,7 @@ export class World {
     group.add(sea.mesh);
     const clouds = cloudLayers(cx, cz);
     group.add(...clouds.meshes);
-    const tiles = new TileManager(group, data, net, far, farMesh, detail);
+    const tiles = new TileManager(group, data, net, far, farMeshes, detail);
     this.tiles = tiles;
     return {
       group,
@@ -230,16 +244,42 @@ export class World {
   }
 
   /** Every two seconds: lower the render scale when frames are slow, raise it when there is headroom. */
+  private idle = false;
+  private lastRender = 0;
+  private perfTimes: number[] = [];
+  private perfAt = 0;
+
+  /** Menus: render at a low rate; the world is only a backdrop there. */
+  setIdle(idle: boolean) {
+    this.idle = idle;
+  }
+
+  private perfStats(dt: number) {
+    this.perfTimes.push(dt * 1000);
+    const now = performance.now();
+    if (now - this.perfAt < 10000) return;
+    if (this.perfAt) {
+      const s = [...this.perfTimes].sort((a, b) => a - b);
+      const q = (f: number) => s[Math.min(s.length - 1, Math.floor(s.length * f))].toFixed(1);
+      const info = this.renderer.info.render;
+      console.info(`frames ${s.length}: median ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} worst ${s[s.length - 1].toFixed(0)} ms, >50ms ${s.filter((v) => v > 50).length}; calls ${info.calls} tris ${info.triangles} px ${this.pixelRatio}`);
+    }
+    this.perfAt = now;
+    this.perfTimes = [];
+  }
+
   private adaptResolution(dt: number) {
     this.frameTimes.push(dt);
     if (this.frameTimes.length < 45) return;
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const median = sorted[sorted.length >> 1];
+    const p90 = sorted[Math.floor(sorted.length * 0.9)];
     this.frameTimes = [];
     const max = Math.min(window.devicePixelRatio, 1.5);
     let next = this.pixelRatio;
+    // The display caps frames at its refresh rate (16.7 ms at 60 Hz), so "fast" means sitting on that cap, not below it.
     if (median > 1 / 50 && this.pixelRatio > 0.6) next = Math.max(0.6, this.pixelRatio - 0.2);
-    else if (median < 1 / 70 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.25);
+    else if (median < 0.0175 && p90 < 0.026 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.2);
     if (next !== this.pixelRatio) {
       this.pixelRatio = next;
       this.renderer.setPixelRatio(next);
@@ -284,7 +324,6 @@ export class World {
     this.rider.animate(this.cadence, this.speed, dt);
     this.statics.animate(dt);
     this.tiles?.update(g.position.x, g.position.z, this.camPos);
-    this.adaptResolution(dt);
 
     // Camera.
     const rider = g.position;
@@ -358,7 +397,16 @@ export class World {
     this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(400));
     this.sun.target.position.copy(rider);
 
+    this.perfStats(dt);
+    // Behind the menus 15 frames a second are plenty; the rest of the frame stays free for the UI.
+    if (this.idle && now - this.lastRender < 66) {
+      requestAnimationFrame(() => this.frame());
+      return;
+    }
+    const renderDt = this.lastRender ? Math.min((now - this.lastRender) / 1000, 0.1) : dt;
+    this.lastRender = now;
     this.renderer.render(this.scene, this.camera);
+    if (!this.idle) this.adaptResolution(renderDt);
     requestAnimationFrame(() => this.frame());
   }
 }

@@ -15,7 +15,7 @@ LOG=${WATTSUP_DEV_LOG:-/tmp/wattsup-dev.log}
 cd "$(dirname "$0")/../.."
 # Kill patterns must not appear verbatim in the caller's command line, or pkill kills that shell too.
 pkill -f 'target/debug/wattsup' 2>/dev/null; pkill -f 'node_modules/.bin/tauri' 2>/dev/null; pkill -f 'node_modules/.bin/vite' 2>/dev/null; pkill -f 'node_modules/vite/bin' 2>/dev/null; sleep 2
-WATTSUP_SIM_ONLY=1 WATTSUP_AUTO_SIM=1 WATTSUP_START_M=$START WATTSUP_CAMERA=$CAM WATTSUP_SCREEN=${SCREEN:-} WATTSUP_ISLAND_AT=${ISLAND_AT:-} setsid nohup npm run tauri dev > "$LOG" 2>&1 < /dev/null &
+WATTSUP_SIM_ONLY=1 WATTSUP_AUTO_SIM=${AUTO_SIM:-1} WATTSUP_START_M=$START WATTSUP_CAMERA=$CAM WATTSUP_SCREEN=${SCREEN:-} WATTSUP_ISLAND_AT=${ISLAND_AT:-} setsid nohup npm run tauri dev > "$LOG" 2>&1 < /dev/null &
 for i in $(seq 1 240); do
   if hyprctl clients -j 2>/dev/null | grep -qi '"title": "WattsUp"'; then break; fi
   if grep -qE '^error(\[|:)' "$LOG"; then echo BUILD-ERROR; grep -E '^error' -A 6 "$LOG" | head -30; exit 1; fi

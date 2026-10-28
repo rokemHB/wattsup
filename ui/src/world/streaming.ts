@@ -16,6 +16,7 @@ import {
   imageTexture,
   type Land,
   lerp,
+  mergeByKind,
   parapets,
   ROAD_CLASS,
   roadMeshes,
@@ -158,6 +159,12 @@ export async function prefetchWorld(net: RoadNetwork, meta: NetworkWorldMeta, on
   return failed;
 }
 
+/** How much of a frame a tile build may take before it yields: the rest is for drawing. */
+const BUILD_BUDGET_MS = 5;
+
+/** Resolves on the next animation frame: long builds yield here so the picture keeps moving. */
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
 interface Tile {
   key: string;
   i: number;
@@ -168,10 +175,24 @@ interface Tile {
   x1: number;
   z1: number;
   grid: Grid | null;
+  tex?: THREE.Texture;
   group: THREE.Group;
   posts: SignPost[];
   state: "loading" | "ready" | "failed";
+  /** The ground meshes, and whether they are the coarse (20 m) version that far tiles start with. */
+  ground: THREE.Mesh[];
+  coarse: boolean;
+  refining: boolean;
+  /** Trees, bushes and rocks: only built once the tile is near, and casting shadows only nearer still. */
+  veg: THREE.Group | null;
+  photoColor: ((x: number, z: number) => [number, number, number] | null) | null;
 }
+
+/** Vegetation casts shadows only this close to the rider: the shadow pass redraws every caster. */
+const SHADOW_RADIUS_M = 900;
+
+/** Tiles further than this from the rider get a 20 m ground; nearer ones the full 10 m. */
+const DETAIL_RADIUS_M = 1300;
 
 /** Load tiles whose centre is within this distance of the rider; drop them beyond the larger one. */
 const LOAD_RADIUS_M = 2000;
@@ -184,7 +205,7 @@ export class TileManager {
   private frame: Frame;
   private index: NetworkIndex;
   private asphalt = asphaltTexture();
-  private farBase: Float32Array | null = null;
+  private farBase = new Map<THREE.Mesh, Float32Array>();
   /** 1 where a road point lies in a tunnel (the camera stays in the tube there). */
   private inTunnel: Uint8Array;
   /** 1 where the ground is left as it is: inside a tunnel, but not its first and last 20 m, so the hillside is cut open to the portal. */
@@ -197,7 +218,7 @@ export class TileManager {
     private meta: NetworkWorldMeta,
     private net: RoadNetwork,
     private far: Grid,
-    private farMesh: THREE.Mesh | null,
+    private farMeshes: THREE.Mesh[],
     private detail: Detail,
   ) {
     this.frame = new Frame(meta.origin.lat, meta.origin.lon);
@@ -217,7 +238,7 @@ export class TileManager {
         if (f.b === e.a || f.b === e.b) this.tubeZone.fill(1, Math.max(f.start, f.start + f.count - 3), f.start + f.count);
       }
     }
-    if (farMesh) this.farBase = Float32Array.from((farMesh.geometry.attributes.position as THREE.BufferAttribute).array);
+    for (const m of farMeshes) this.farBase.set(m, Float32Array.from((m.geometry.attributes.position as THREE.BufferAttribute).array));
   }
 
   /** Ground height anywhere: the loaded tile if there is one, else the far layer, both with the road corridor cut in. */
@@ -250,7 +271,12 @@ export class TileManager {
   }
 
   /** Call every frame with the rider's position and the camera position. */
+  private riderX = 0;
+  private riderZ = 0;
+
   update(x: number, z: number, camera: THREE.Vector3) {
+    this.riderX = x;
+    this.riderZ = z;
     const [lat, lon] = this.frame.toLatLon(x, z);
     const { dlat, dlon } = this.meta.tiles;
     const i0 = Math.floor(lat / dlat);
@@ -265,7 +291,7 @@ export class TileManager {
         if (!t) {
           const [xa, za] = this.frame.toXZ((i + 1) * dlat, j * dlon);
           const [xb, zb] = this.frame.toXZ(i * dlat, (j + 1) * dlon);
-          t = { key, i, j, x0: xa, z0: za, x1: xb, z1: zb, grid: null, group: new THREE.Group(), posts: [], state: "loading" };
+          t = { key, i, j, x0: xa, z0: za, x1: xb, z1: zb, grid: null, group: new THREE.Group(), posts: [], state: "loading", ground: [], coarse: false, refining: false, veg: null, photoColor: null };
           this.tiles.set(key, t);
           wanted.push(t);
           console.info(`tile ${key}: queued at ${(performance.now() / 1000).toFixed(1)} s, ${Math.hypot(cx - x, cz - z).toFixed(0)} m away`);
@@ -276,13 +302,132 @@ export class TileManager {
     wanted.sort((a, b) => Math.hypot((a.x0 + a.x1) / 2 - x, (a.z0 + a.z1) / 2 - z) - Math.hypot((b.x0 + b.x1) / 2 - x, (b.z0 + b.z1) / 2 - z));
     this.queue.push(...wanted);
     this.pump();
+    let refining = false;
     for (const t of this.tiles.values()) {
-      if (Math.hypot((t.x0 + t.x1) / 2 - x, (t.z0 + t.z1) / 2 - z) > DROP_RADIUS_M && t.state !== "loading") this.unload(t);
+      const d = Math.hypot((t.x0 + t.x1) / 2 - x, (t.z0 + t.z1) / 2 - z);
+      if (d > DROP_RADIUS_M && t.state !== "loading") this.unload(t);
+      else if (t.state === "ready" && t.coarse && d < DETAIL_RADIUS_M - 100 && !refining && !this.refiningAny) {
+        refining = true;
+        this.refine(t);
+      }
+      if (t.veg) {
+        const cast = d < SHADOW_RADIUS_M;
+        if (t.veg.userData.cast !== cast) {
+          t.veg.userData.cast = cast;
+          t.veg.traverse((o) => {
+            if (o instanceof THREE.Mesh) o.castShadow = cast;
+          });
+        }
+      }
     }
     faceCamera(
       [...this.tiles.values()].flatMap((t) => t.posts),
       camera,
     );
+  }
+
+  private refiningAny = false;
+
+  /** Rebuilds a coarse tile's ground at full detail now that the rider is near. */
+  private refine(t: Tile) {
+    t.refining = true;
+    this.refiningAny = true;
+    this.buildGround(t, 2)
+      .then((meshes) => {
+        if (!meshes || !this.tiles.has(t.key)) return;
+        for (const m of t.ground) {
+          t.group.remove(m);
+          m.geometry.dispose();
+        }
+        t.ground = meshes;
+        t.coarse = false;
+        t.group.add(...meshes);
+        this.plant(t);
+      })
+      .catch((e) => console.warn(`tile ${t.key} refine: ${e}`))
+      .finally(() => {
+        t.refining = false;
+        this.refiningAny = false;
+      });
+  }
+
+  /**
+   * The ground meshes of a tile at a given sample step (2 = 10 m, 4 = 20 m):
+   * heights a few rows per frame, then four blocks so the half behind the
+   * camera is culled. Null when the tile was dropped meanwhile.
+   */
+  private async buildGround(t: Tile, step: number): Promise<THREE.Mesh[] | null> {
+    const grid = t.grid!;
+    const tex = t.tex!;
+    // The coarse grid near a road: never above the cut bank (or a cutting would
+    // wall the road in), free to lie below it (a fill clamp would terrace the
+    // downhill side at 10 m), and ducked under the corridor strip.
+    const tucked = (x: number, z: number) => {
+      const h = this.rawAt(x, z);
+      const n = this.index.nearest(x, z, CORRIDOR_REACH);
+      if (n.i < 0 || n.d > CORRIDOR_REACH || this.uncut[n.i]) return h;
+      const bed = n.y - 0.35;
+      const top = n.d <= SHOULDER ? bed : bed + (n.d - SHOULDER) * CUT_SLOPE;
+      const depth = 1.2 + 2.5 * Math.min(1.5, gridSlope(grid, x, z));
+      // The same fade as the corridor field, so the grid never steps where the strip ends.
+      const f = smoothstep(CORRIDOR_REACH - CORRIDOR_BLEND_M, CORRIDOR_REACH, n.d);
+      return lerp(Math.min(h, top), h, f) - depth * (1 - f);
+    };
+    // No ground over a tunnel tube: the coarse surface would otherwise cross the tube where the mountain comes down to the portal.
+    const overTunnel = (x: number, z: number) => {
+      const n = this.index.nearest(x, z, TUNNEL_HALF + 1);
+      return n.i >= 0 && n.d < TUNNEL_HALF + 1 && this.tubeZone[n.i] === 1;
+    };
+    // The mesh grid: every `step / 2` sample of the 10 m data.
+    const k = step / 2;
+    const cols = Math.floor((grid.cols - 1) / k) + 1;
+    const rows = Math.floor((grid.rows - 1) / k) + 1;
+    const sx = grid.spacing * k;
+    const sz = grid.spacingZ! * k;
+    const g: Grid = { cols, rows, x0: grid.x0, z0: grid.z0, spacing: sx, spacingZ: sz, data: grid.data };
+    // One ring of vertices beyond the data, hanging 6 m below the edge: a skirt
+    // that closes the seam to the neighbouring tile (their grids abut, they do
+    // not share a row) whether or not that tile is loaded yet.
+    const skirted = (x: number, z: number) => {
+      const cx = Math.min(Math.max(x, g.x0), g.x0 + (cols - 1) * sx);
+      const cz = Math.min(Math.max(z, g.z0), g.z0 + (rows - 1) * sz);
+      return cx === x && cz === z ? tucked(x, z) : tucked(cx, cz) - 6;
+    };
+    const ringCols = cols + 2;
+    const heights = new Float32Array((rows + 2) * ringCols);
+    let sliceStart = performance.now();
+    for (let iz = -1; iz <= rows; iz++) {
+      const z = g.z0 + iz * sz;
+      for (let ix = -1; ix <= cols; ix++) heights[(iz + 1) * ringCols + ix + 1] = skirted(g.x0 + ix * sx, z);
+      // A few milliseconds per frame, then the frame gets drawn.
+      if (performance.now() - sliceStart > BUILD_BUDGET_MS) {
+        await nextFrame();
+        if (!this.tiles.has(t.key)) return null;
+        sliceStart = performance.now();
+      }
+    }
+    const lookup = (x: number, z: number) => heights[(Math.round((z - g.z0) / sz) + 1) * ringCols + Math.round((x - g.x0) / sx) + 1];
+    const midR = rows >> 1;
+    const midC = cols >> 1;
+    const meshes: THREE.Mesh[] = [];
+    for (const rr of [[-1, midR] as [number, number], [midR, rows] as [number, number]]) {
+      for (const cc of [[-1, midC] as [number, number], [midC, cols] as [number, number]]) {
+        meshes.push(gridBlockMesh(g, lookup, rr, cc, tex, this.detail, 1, overTunnel, [-1, rows], [-1, cols]));
+      }
+    }
+    return meshes;
+  }
+
+  /** Trees, bushes and rocks for a near tile. */
+  private plant(t: Tile) {
+    if (t.veg || !t.grid) return;
+    const grid = t.grid;
+    const land: Land = { height: this.heightAt, water: (x, z) => this.rawAt(x, z) < SEA_LEVEL + 1.5, slope: (x, z) => gridSlope(grid, x, z) };
+    const region = { x0: t.x0, z0: t.z0, w: t.x1 - t.x0, h: t.z1 - t.z0 };
+    const area = region.w * region.h;
+    t.veg = vegetation(this.index, this.heightAt, land, region, new RouteSampler({ name: "", points: [], closed: false, world: null }), true, t.photoColor, area / 53e6);
+    t.veg.userData.cast = true;
+    t.group.add(t.veg);
   }
 
   /** How many tiles are still being built; the HUD shows it. */
@@ -338,21 +483,27 @@ export class TileManager {
 
   /** Lowers (or restores) the far mesh under a tile so it cannot poke through the detailed terrain. */
   private sinkFar(t: Tile, sink: boolean) {
-    if (!this.farMesh || !this.farBase) return;
     const g = this.far;
-    const pos = this.farMesh.geometry.attributes.position as THREE.BufferAttribute;
     const sz = g.spacingZ ?? g.spacing;
     const c0 = Math.max(0, Math.floor((t.x0 - g.x0) / g.spacing) - 1);
     const c1 = Math.min(g.cols - 1, Math.ceil((t.x1 - g.x0) / g.spacing) + 1);
     const r0 = Math.max(0, Math.floor((t.z0 - g.z0) / sz) - 1);
     const r1 = Math.min(g.rows - 1, Math.ceil((t.z1 - g.z0) / sz) + 1);
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        const i = r * g.cols + c;
-        pos.setY(i, this.farBase[i * 3 + 1] - (sink ? 80 : 0));
+    for (const m of this.farMeshes) {
+      const b = m.userData.block as { r0: number; r1: number; c0: number; c1: number };
+      if (b.r1 < r0 || b.r0 > r1 || b.c1 < c0 || b.c0 > c1) continue;
+      const base = this.farBase.get(m)!;
+      const pos = m.geometry.attributes.position as THREE.BufferAttribute;
+      const w = b.c1 - b.c0 + 1;
+      for (let r = Math.max(r0, b.r0); r <= Math.min(r1, b.r1); r++) {
+        for (let c = Math.max(c0, b.c0); c <= Math.min(c1, b.c1); c++) {
+          const i = (r - b.r0) * w + (c - b.c0);
+          pos.setY(i, base[i * 3 + 1] - (sink ? 80 : 0));
+        }
       }
+      pos.needsUpdate = true;
+      m.geometry.computeBoundingSphere();
     }
-    pos.needsUpdate = true;
   }
 
   private async load(t: Tile) {
@@ -378,57 +529,46 @@ export class TileManager {
     if (!this.tiles.has(t.key)) return; // dropped while loading
 
     const group = t.group;
-    const land: Land = { height: this.heightAt, water: (x, z) => this.rawAt(x, z) < SEA_LEVEL + 1.5, slope: (x, z) => gridSlope(grid, x, z) };
-    // The coarse grid near a road: never above the cut bank (or a cutting would
-    // wall the road in), free to lie below it (a fill clamp would terrace the
-    // downhill side at 10 m), and ducked under the corridor strip.
-    const tucked = (x: number, z: number) => {
-      const h = this.rawAt(x, z);
-      const n = this.index.nearest(x, z, CORRIDOR_REACH);
-      if (n.i < 0 || n.d > CORRIDOR_REACH || this.uncut[n.i]) return h;
-      const bed = n.y - 0.35;
-      const top = n.d <= SHOULDER ? bed : bed + (n.d - SHOULDER) * CUT_SLOPE;
-      const depth = 1.2 + 2.5 * Math.min(1.5, gridSlope(grid, x, z));
-      // The same fade as the corridor field, so the grid never steps where the strip ends.
-      const t = smoothstep(CORRIDOR_REACH - CORRIDOR_BLEND_M, CORRIDOR_REACH, n.d);
-      return lerp(Math.min(h, top), h, t) - depth * (1 - t);
-    };
-    const tex = imageTexture(photo.bitmap);
-    // No ground over a tunnel tube: the coarse surface would otherwise cross the tube where the mountain comes down to the portal.
-    const overTunnel = (x: number, z: number) => {
-      const n = this.index.nearest(x, z, TUNNEL_HALF + 1);
-      return n.i >= 0 && n.d < TUNNEL_HALF + 1 && this.tubeZone[n.i] === 1;
-    };
-    // One ring of vertices beyond the data, hanging 6 m below the edge: a skirt
-    // that closes the seam to the neighbouring tile (their grids abut, they do
-    // not share a row) whether or not that tile is loaded yet.
-    const skirted = (x: number, z: number) => {
-      const cx = Math.min(Math.max(x, grid.x0), grid.x0 + (cols - 1) * grid.spacing);
-      const cz = Math.min(Math.max(z, grid.z0), grid.z0 + (rows - 1) * grid.spacingZ!);
-      return cx === x && cz === z ? tucked(x, z) : tucked(cx, cz) - 6;
-    };
-    group.add(gridBlockMesh(grid, skirted, [-1, rows], [-1, cols], tex, this.detail, 1, overTunnel));
+    t.tex = imageTexture(photo.bitmap);
+    t.photoColor = photo.colorAt;
+    // Near tiles get the full 10 m ground now; far ones a 20 m one, refined when the rider comes close.
+    t.coarse = Math.hypot((t.x0 + t.x1) / 2 - this.riderX, (t.z0 + t.z1) / 2 - this.riderZ) > DETAIL_RADIUS_M;
+    const ground = await this.buildGround(t, t.coarse ? 4 : 2);
+    if (!ground) return;
+    t.ground = ground;
+    group.add(...ground);
+    await nextFrame();
+    if (!this.tiles.has(t.key)) return;
 
     // Roads in this tile: the stretches of each edge inside it, plus one point beyond for continuity.
     const inside = (x: number, z: number) => x >= t.x0 && x < t.x1 && z >= t.z0 && z < t.z1;
     const edges = this.index.edgesIn(t.x0, t.z0, t.x1, t.z1, 60);
+    // Road pieces are collected and merged by kind: one draw call per kind per tile instead of one per piece.
+    const pieces: THREE.Mesh[] = [];
+    let budget = performance.now();
     for (const ei of edges) {
       const pts = this.index.polyline(ei);
       const e = this.index.edge(ei);
       let run: typeof pts = [];
       let runStart = 0;
-      const flush = () => {
-        if (run.length >= 2) {
-          const cls = ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, e.kind)];
-          // Numbered tertiary roads (the Ma-10 itself, Sa Calobra) are marked like main roads.
-          const lines = e.kind === 2 && e.ref ? "centre" : cls.lines;
-          group.add(...roadMeshes(run, false, cls.width, true, this.asphalt, lines));
-          if (e.tunnel) {
-            group.add(tunnelMesh(run, this.detail.rock));
-          } else {
-            group.add(corridorMesh(run, this.index, this.heightAt, null, this.detail.grain, photo.colorAt, this.detail, ei, e.start + runStart));
-            group.add(parapets(run, this.heightAt, cls.width, this.detail.rock));
-          }
+      const build = (part: typeof pts, partStart: number) => {
+        const cls = ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, e.kind)];
+        // Numbered tertiary roads (the Ma-10 itself, Sa Calobra) are marked like main roads.
+        const lines = e.kind === 2 && e.ref ? "centre" : cls.lines;
+        pieces.push(...roadMeshes(part, false, cls.width, true, this.asphalt, lines));
+        if (e.tunnel) {
+          group.add(tunnelMesh(part, this.detail.rock));
+        } else {
+          pieces.push(corridorMesh(part, this.index, this.heightAt, null, this.detail.grain, photo.colorAt, this.detail, ei, e.start + partStart));
+          pieces.push(parapets(part, this.heightAt, cls.width, this.detail.rock));
+        }
+      };
+      const flush = async () => {
+        // Long runs go in pieces of 60 points (300 m), with a frame between, so no single piece stalls the picture.
+        for (let k = 0; k + 1 < run.length; k += 59) {
+          const part = run.slice(k, Math.min(run.length, k + 60));
+          if (part.length >= 2 && !(e.tunnel && k > 0)) build(part, runStart + k);
+          if (k + 60 < run.length) await nextFrame();
         }
         run = [];
       };
@@ -438,11 +578,21 @@ export class TileManager {
           run.push(pts[k]);
         } else if (run.length) {
           run.push(pts[k]);
-          flush();
+          await flush();
+          if (!this.tiles.has(t.key)) return;
         }
       }
-      flush();
+      await flush();
+      if (!this.tiles.has(t.key)) return;
+      if (performance.now() - budget > BUILD_BUDGET_MS) {
+        await nextFrame();
+        if (!this.tiles.has(t.key)) return;
+        budget = performance.now();
+      }
     }
+    group.add(...mergeByKind(pieces));
+    await nextFrame();
+    if (!this.tiles.has(t.key)) return;
 
     // Confirmation signs along the roads: on the right of the direction they serve.
     for (const ei of edges) {
@@ -465,14 +615,19 @@ export class TileManager {
         t.posts.push(post);
       }
     }
+    await nextFrame();
+    if (!this.tiles.has(t.key)) return;
 
     // Signs: one post per approach at every junction inside the tile, but not
     // at junctions of minor roads only, and not within 30 m of another post.
     const placed: [number, number][] = [];
-    this.net.nodes.forEach((node, ni) => {
-      if (!node.signs || !inside(node.x, node.z)) return;
-      if (!node.signs.some((s) => this.net.edges[s.edge].kind <= 2)) return;
-      if (placed.some(([px, pz]) => Math.hypot(px - node.x, pz - node.z) < 30)) return;
+    for (let ni = 0; ni < this.net.nodes.length; ni++) {
+      const node = this.net.nodes[ni];
+      if (!node.signs || !inside(node.x, node.z)) continue;
+      // Only where numbered roads meet: town streets would fill a tile with posts.
+      if (node.signs.filter((s) => this.net.edges[s.edge].ref).length < 2) continue;
+      if (!node.signs.some((s) => this.net.edges[s.edge].kind <= 2)) continue;
+      if (placed.some(([px, pz]) => Math.hypot(px - node.x, pz - node.z) < 30)) continue;
       placed.push([node.x, node.z]);
       const edgesHere = node.signs.map((s) => s.edge);
       const bearingOf = (edge: number) => this.bearingOut(edge, ni);
@@ -489,11 +644,12 @@ export class TileManager {
           t.posts.push(post);
         }
       }
-    });
+      // Lettering the boards is canvas work: a frame per junction.
+      await nextFrame();
+      if (!this.tiles.has(t.key)) return;
+    }
 
-    const region = { x0: t.x0, z0: t.z0, w: t.x1 - t.x0, h: t.z1 - t.z0 };
-    const area = region.w * region.h;
-    group.add(vegetation(this.index, this.heightAt, land, region, new RouteSampler({ name: "", points: [], closed: false, world: null }), true, photo.colorAt, area / 53e6));
+    if (!t.coarse) this.plant(t);
 
     this.scene.add(group);
     this.sinkFar(t, true);

@@ -341,6 +341,7 @@ export function corridorMesh(
   if (detail) withDetail(mat, detail);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
+  mesh.userData.kind = "corridor";
   return mesh;
 }
 
@@ -349,7 +350,8 @@ export function imageTexture(image: ImageBitmap): THREE.Texture {
   // ImageBitmaps upload as they are (flipY is ignored), so row 0 of the image is v = 0.
   tex.flipY = false;
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
+  // Anisotropic filtering is the single biggest per-pixel cost on an integrated GPU: 2 taps are enough for ground seen from a bike.
+  tex.anisotropy = 2;
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.needsUpdate = true;
@@ -375,7 +377,8 @@ export function patchTexture(image: ImageBitmap): THREE.Texture {
   tex.flipY = false;
   tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
+  // Anisotropic filtering is the single biggest per-pixel cost on an integrated GPU: 2 taps are enough for ground seen from a bike.
+  tex.anisotropy = 2;
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.needsUpdate = true;
@@ -428,7 +431,8 @@ export function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amou
   vec2 vertical = abs(n.x) > abs(n.z) ? vGroundPos.zy : vGroundPos.xy;
   float wy = clamp(abs(n.y) * 1.4, 0.0, 1.0);
   vec3 rock = mix(texture2D(rockMap, vertical / rockScale).rgb, texture2D(rockMap, vGroundPos.xz / rockScale).rgb, wy) * (0.5 / max(rockMean, vec3(0.05)));
-  vec3 scrub = mix(texture2D(scrubMap, vertical / scrubScale).rgb, texture2D(scrubMap, vGroundPos.xz / scrubScale).rgb, wy) * (0.5 / max(scrubMean, vec3(0.05)));
+  // Scrub only on the ground plane: steep faces show rock anyway, and it saves a texture fetch per pixel.
+  vec3 scrub = texture2D(scrubMap, vGroundPos.xz / scrubScale).rgb * (0.5 / max(scrubMean, vec3(0.05)));
   float steep = smoothstep(0.18, 0.5, 1.0 - n.y);
   vec3 det = mix(scrub, rock, steep);
   diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, detailAmount * mix(0.5, 0.8, steep));
@@ -454,6 +458,9 @@ export function gridBlockMesh(
   detailAmount = 1,
   /** Vertices to leave out: every triangle touching one is dropped (the ground over a tunnel tube). */
   skip?: (x: number, z: number) => boolean,
+  /** The row and column range the photo spans, when this block is only part of it. */
+  uvRows: [number, number] = rows,
+  uvCols: [number, number] = cols,
 ): THREE.Mesh {
   const [r0, r1] = rows;
   const [c0, c1] = cols;
@@ -470,7 +477,7 @@ export function gridBlockMesh(
       const z = g.z0 + iz * sz;
       pos.setXYZ(i, x, heightAt(x, z), z);
       // Image row 0 is the north edge, which is the first grid row.
-      uv.setXY(i, (ix - c0) / (c1 - c0), (iz - r0) / (r1 - r0));
+      uv.setXY(i, (ix - uvCols[0]) / (uvCols[1] - uvCols[0]), (iz - uvRows[0]) / (uvRows[1] - uvRows[0]));
       if (skipped && skip!(x, z)) skipped[i] = 1;
       i++;
     }
@@ -554,15 +561,58 @@ export const ROAD_CLASS: { width: number; lines: "centre" | "edge" | "none" }[] 
 ];
 
 export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false, asphalt = asphaltTexture(), lines: "centre" | "edge" | "none" | "test" = mountain ? "edge" : "test"): THREE.Mesh[] {
+  const tag = (m: THREE.Mesh, kind: string) => {
+    m.userData.kind = kind;
+    return m;
+  };
   const meshes = [
     // Shoulder: a wide sandy verge on the test course, a narrow gravel edge on a mountain road.
-    ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"),
-    ribbon(pts, closed, width, 0.05, mountain ? "#454341" : "#55585f", { map: asphalt }),
+    tag(ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"), "shoulder"),
+    tag(ribbon(pts, closed, width, 0.05, mountain ? "#454341" : "#55585f", { map: asphalt }), "asphalt"),
   ];
-  if (lines !== "none") meshes.push(ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }));
-  if (lines === "test") meshes.push(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }));
-  if (lines === "centre") meshes.push(ribbon(pts, closed, 0.12, 0.08, "#dcd9cf", { dashed: true }));
+  if (lines !== "none") meshes.push(tag(ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }), "edge"));
+  if (lines === "test") meshes.push(tag(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }), "centre"));
+  if (lines === "centre") meshes.push(tag(ribbon(pts, closed, 0.12, 0.08, "#dcd9cf", { dashed: true }), "centre"));
   return meshes;
+}
+
+/**
+ * Merges meshes that share a `userData.kind` into one mesh each (the first
+ * one's material), so a tile's dozens of road pieces cost a handful of draw
+ * calls. The originals' geometries are disposed.
+ */
+export function mergeByKind(meshes: THREE.Mesh[]): THREE.Mesh[] {
+  const groups = new Map<string, THREE.Mesh[]>();
+  for (const m of meshes) {
+    const kind = String(m.userData.kind ?? "");
+    if (!groups.has(kind)) groups.set(kind, []);
+    groups.get(kind)!.push(m);
+  }
+  const out: THREE.Mesh[] = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      out.push(list[0]);
+      continue;
+    }
+    const merged = mergeGeometries(
+      list.map((m) => m.geometry),
+      false,
+    );
+    for (const m of list) {
+      m.geometry.dispose();
+      if (m !== list[0]) (m.material as THREE.Material).dispose();
+    }
+    if (!merged) {
+      out.push(...list);
+      continue;
+    }
+    const mesh = new THREE.Mesh(merged, list[0].material);
+    mesh.castShadow = list[0].castShadow;
+    mesh.receiveShadow = list[0].receiveShadow;
+    mesh.userData.kind = list[0].userData.kind;
+    out.push(mesh);
+  }
+  return out;
 }
 
 /**
@@ -742,6 +792,7 @@ export function parapets(pts: Route["points"], heightAt: (x: number, z: number) 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
+  mesh.userData.kind = "parapet";
   return mesh;
 }
 
@@ -946,28 +997,29 @@ export function vegetation(
   const c2 = new THREE.ConeGeometry(1.8, 5, 7);
   c2.translate(0, 8.5, 0);
   const blob = (r: number, sy: number, x: number, y: number, z: number) => {
-    const b = new THREE.SphereGeometry(r, 7, 5);
+    const b = new THREE.SphereGeometry(r, 6, 4);
     b.scale(1, sy, 1);
     b.translate(x, y, z);
     return b;
   };
   const aleppo = mergeGeometries([blob(2.9, 0.55, 0, 6.4, 0), blob(2.2, 0.6, 1.6, 5.6, 0.9), blob(2.0, 0.6, -1.5, 5.9, -1.0), blob(1.7, 0.65, 0.3, 7.3, -0.4), blob(1.5, 0.6, -0.8, 4.9, 1.4)]);
 
-  // Round tree: trunk + three spheres.
-  const roundCrown = [new THREE.SphereGeometry(2.2, 9, 7), new THREE.SphereGeometry(1.7, 9, 7), new THREE.SphereGeometry(1.6, 9, 7)];
-  roundCrown[0].translate(0, 4.6, 0);
-  roundCrown[1].translate(1.4, 3.9, 0.7);
-  roundCrown[2].translate(-1.2, 4.1, -0.8);
+  // Round tree: trunk + three spheres, one geometry.
+  const crownParts = [new THREE.SphereGeometry(2.2, 7, 5), new THREE.SphereGeometry(1.7, 7, 5), new THREE.SphereGeometry(1.6, 7, 5)];
+  crownParts[0].translate(0, 4.6, 0);
+  crownParts[1].translate(1.4, 3.9, 0.7);
+  crownParts[2].translate(-1.2, 4.1, -0.8);
+  const roundCrown = [mergeGeometries(crownParts)];
   // Cypress: tall narrow ellipsoid.
   const cypress = new THREE.SphereGeometry(1, 7, 8);
   cypress.scale(0.9, 4.2, 0.9);
   cypress.translate(0, 4.2, 0);
   const trunk = new THREE.CylinderGeometry(0.22, 0.38, 2.6, 6);
   trunk.translate(0, 1.3, 0);
-  const bush = new THREE.SphereGeometry(1, 7, 5);
+  const bush = new THREE.SphereGeometry(1, 5, 4);
   bush.scale(1.4, 0.9, 1.4);
   bush.translate(0, 0.7, 0);
-  const rock = new THREE.IcosahedronGeometry(1, 1);
+  const rock = new THREE.IcosahedronGeometry(1, 0);
   rock.scale(1.3, 0.8, 1);
 
   const kinds = mediterranean

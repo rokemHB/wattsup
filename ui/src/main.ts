@@ -56,6 +56,7 @@ function show(next: Screen) {
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
   if (next === "rider") fillRiderScreen();
   world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? "chase" : "orbit");
+  world?.setIdle(next !== "ride");
 }
 
 function back() {

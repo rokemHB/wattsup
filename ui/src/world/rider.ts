@@ -1,6 +1,7 @@
 // A rider on a road bike, built from primitives. Forward is +X in local space,
 // the rear contact patch is the origin's ground point.
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 const WHEEL_R = 0.34;
 const TYRE = 0.024;
@@ -152,6 +153,12 @@ export class Rider {
       this.group.add(thigh, shin, shoe);
       this.legs.push({ thigh, shin, shoe, side });
     }
+    // Everything that does not move on its own becomes one mesh per material:
+    // the frame, body and wheels were a hundred draw calls, twice over with shadows.
+    const moving = new Set<THREE.Object3D>([...this.wheels, this.crank, ...this.pedals, ...this.legs.flatMap((l) => [l.thigh, l.shin, l.shoe])]);
+    mergeStatic(this.group, moving);
+    for (const w of this.wheels) mergeStatic(w, new Set());
+    mergeStatic(this.crank, new Set(this.pedals));
     this.group.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = true;
     });
@@ -175,6 +182,31 @@ export class Rider {
       shoe.position.copy(foot).add(new THREE.Vector3(0.04, -0.02, 0));
       shoe.rotation.z = Math.sin(a) * 0.25;
     }
+  }
+}
+
+/** Replaces `parent`'s direct child meshes (except `keep` and non-meshes) by one merged mesh per material. */
+function mergeStatic(parent: THREE.Object3D, keep: Set<THREE.Object3D>) {
+  const byMat = new Map<THREE.Material, THREE.Mesh[]>();
+  for (const o of parent.children) {
+    if (!(o instanceof THREE.Mesh) || keep.has(o)) continue;
+    const mat = o.material as THREE.Material;
+    if (!byMat.has(mat)) byMat.set(mat, []);
+    byMat.get(mat)!.push(o);
+  }
+  for (const [mat, meshes] of byMat) {
+    if (meshes.length < 2) continue;
+    const geos = meshes.map((m) => {
+      m.updateMatrix();
+      return m.geometry.clone().applyMatrix4(m.matrix);
+    });
+    const merged = mergeGeometries(geos, false);
+    if (!merged) continue;
+    for (const m of meshes) {
+      parent.remove(m);
+      m.geometry.dispose();
+    }
+    parent.add(new THREE.Mesh(merged, mat));
   }
 }
 

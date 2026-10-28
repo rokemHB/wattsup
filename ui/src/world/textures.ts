@@ -11,7 +11,7 @@ function canvasTexture(size: number, paint: (ctx: CanvasRenderingContext2D) => v
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(repeat, repeat);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
+  tex.anisotropy = 4;
   return tex;
 }
 

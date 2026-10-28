@@ -76,7 +76,6 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
   const group = new THREE.Group();
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
   post.position.set(0, 1.5, 0);
-  post.castShadow = true;
   group.add(post);
   const boards: THREE.Mesh[] = [];
   signs.slice(0, 3).forEach((sign, i) => {
@@ -85,7 +84,6 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
     const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, side: THREE.DoubleSide });
     const board = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, BOARD_H), mat);
     board.position.set(0, 2.8 - i * (BOARD_H + 0.06), 0);
-    board.castShadow = true;
     group.add(board);
     boards.push(board);
   });
@@ -98,7 +96,6 @@ export function confirmationPost(to: [string, number][], x: number, z: number, y
   const group = new THREE.Group();
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
   post.position.set(0, 1.5, 0);
-  post.castShadow = true;
   group.add(post);
   const c = document.createElement("canvas");
   c.width = 1024;
@@ -127,7 +124,6 @@ export function confirmationPost(to: [string, number][], x: number, z: number, y
   const board = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 }));
   board.position.set(0, 3.0 - h / 2, 0);
   board.rotation.y = Math.atan2(facingDx, facingDz);
-  board.castShadow = true;
   group.add(board);
   const back = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, h), new THREE.MeshStandardMaterial({ color: "#7a7d80", roughness: 0.8 }));
   back.position.copy(board.position);
