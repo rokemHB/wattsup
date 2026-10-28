@@ -209,4 +209,5 @@ export interface StartupInfo {
   camera: string | null;
   screen: string | null;
   island_at: string | null;
+  dev_js: string | null;
 }

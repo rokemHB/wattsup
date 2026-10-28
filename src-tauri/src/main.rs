@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use wattsup_core::gearing::ShiftDirection;
-use wattsup_core::network::NetworkInfo;
+use wattsup_core::network::{NetworkInfo, PlannedLeg};
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo, BUILTIN_ROUTES};
 use wattsup_core::session::{ControlMode, Workout};
@@ -41,6 +41,8 @@ struct StartupInfo {
     screen: Option<String>,
     /// "lat,lon[,back]": start the island ride at that spot (for looking at a place).
     island_at: Option<String>,
+    /// JavaScript the UI runs once it is up (WATTSUP_DEV_JS): for driving the screens from a script when testing.
+    dev_js: Option<String>,
 }
 
 /// `--sim-only`, `--no-sim`, `--raw`, `--auto-sim`, or the same as
@@ -67,6 +69,7 @@ fn startup_from_env() -> StartupInfo {
         camera: value("--camera", "WATTSUP_CAMERA"),
         screen: value("--screen", "WATTSUP_SCREEN"),
         island_at: value("--island-at", "WATTSUP_ISLAND_AT"),
+        dev_js: std::env::var("WATTSUP_DEV_JS").ok().filter(|s| !s.is_empty()),
     }
 }
 
@@ -120,6 +123,16 @@ fn network_points(state: State<'_, AppState>, world: String) -> CmdResult<tauri:
 #[tauri::command]
 async fn start_on_network(state: State<'_, AppState>, world: String, x: f64, z: f64, forward: bool) -> CmdResult<()> {
     state.engine.start_on_network(&world, x, z, forward).await
+}
+
+#[tauri::command]
+async fn start_planned_ride(
+    state: State<'_, AppState>,
+    world: String,
+    name: String,
+    legs: Vec<PlannedLeg>,
+) -> CmdResult<()> {
+    state.engine.start_planned_ride(&world, &name, &legs).await
 }
 
 #[tauri::command]
@@ -268,6 +281,7 @@ fn main() {
             network_info,
             network_points,
             start_on_network,
+            start_planned_ride,
             choose_turn,
             tiles::fetch_cached,
             tiles::cache_fetch,

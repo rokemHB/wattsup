@@ -55,22 +55,42 @@ export class NetworkIndex {
     let best = Infinity;
     let bi = -1;
     const xyz = this.net.xyz;
-    for (let i = -r; i <= r; i++) {
-      for (let k = -r; k <= r; k++) {
-        const list = this.cells.get((cx + i + 500000) * 1048576 + (cz + k + 500000));
-        if (!list) continue;
-        for (const idx of list) {
-          const dx = xyz[idx * 3] - x;
-          const dz = xyz[idx * 3 + 2] - z;
-          const d = dx * dx + dz * dz;
-          if (d < best) {
-            best = d;
-            bi = idx;
-          }
+    const visit = (i: number, k: number) => {
+      const list = this.cells.get((cx + i + 500000) * 1048576 + (cz + k + 500000));
+      if (!list) return;
+      for (const idx of list) {
+        const dx = xyz[idx * 3] - x;
+        const dz = xyz[idx * 3 + 2] - z;
+        const d = dx * dx + dz * dz;
+        if (d < best) {
+          best = d;
+          bi = idx;
         }
       }
+    };
+    // Rings outward from the cell under the point: once the best found is closer than the
+    // next ring can be, the rest of the radius need not be looked at.
+    for (let ring = 0; ring <= r; ring++) {
+      if (ring === 0) visit(0, 0);
+      else {
+        for (let i = -ring; i <= ring; i++) {
+          visit(i, -ring);
+          visit(i, ring);
+        }
+        for (let k = -ring + 1; k < ring; k++) {
+          visit(-ring, k);
+          visit(ring, k);
+        }
+      }
+      const reach = ring * this.cell;
+      if (best <= reach * reach) break;
     }
     return bi < 0 ? { d: Infinity, y: 0, i: -1, edge: -1 } : { d: Math.sqrt(best), y: xyz[bi * 3 + 1], i: bi, edge: this.edgeOf[bi] };
+  }
+
+  /** The edge a global point index belongs to. */
+  edgeOfPoint(i: number): number {
+    return this.edgeOf[i];
   }
 
   /** Edges with at least one point inside the box (expanded by `margin`). */

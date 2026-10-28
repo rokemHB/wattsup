@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Mutex as AsyncMutex};
 use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
-use wattsup_core::network::{Junction, Navigator, Network, NetworkInfo};
+use wattsup_core::network::{Junction, Navigator, Network, NetworkInfo, PlannedLeg};
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo};
 use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot, Workout};
@@ -227,6 +227,20 @@ impl Engine {
         let net = Network::builtin(world).ok_or_else(|| format!("no road network for {world}"))?;
         let (edge, index) = net.nearest(x, z).ok_or("empty network")?;
         let nav = Navigator::start(world, net, edge, index, forward);
+        let route = nav.route(net);
+        *self.inner.navigator.lock().unwrap() = Some(nav);
+        self.inner.session.lock().unwrap().set_route(Some(route));
+        self.inner.route_version.fetch_add(1, Ordering::Relaxed);
+        self.inner.navigate();
+        self.inner.send_now().await;
+        Ok(())
+    }
+
+    /// Starts a ride along a route planned on the map: `legs` join end to start and the ride
+    /// finishes at the last leg's end.
+    pub async fn start_planned_ride(&self, world: &str, name: &str, legs: &[PlannedLeg]) -> Result<(), String> {
+        let net = Network::builtin(world).ok_or_else(|| format!("no road network for {world}"))?;
+        let nav = Navigator::planned(world, net, name, legs)?;
         let route = nav.route(net);
         *self.inner.navigator.lock().unwrap() = Some(nav);
         self.inner.session.lock().unwrap().set_route(Some(route));
@@ -678,6 +692,26 @@ mod tests {
         assert!(!engine.choose_turn(usize::MAX).await, "nonsense edges are refused");
         engine.set_route("flat").await.unwrap();
         assert!(engine.snapshot().junction.is_none());
+        // A planned route: the first 40 points of that Ma-10 edge, and nothing beyond.
+        let legs = [PlannedLeg {
+            edge: ma10,
+            forward: true,
+            from: 0,
+            to: 40,
+        }];
+        engine
+            .start_planned_ride("mallorca", "a short one", &legs)
+            .await
+            .unwrap();
+        let route = engine.route().unwrap();
+        assert_eq!(route.name, "a short one");
+        assert!(route.length_m() < 400.0, "{}", route.length_m());
+        ride(600).await;
+        assert!(
+            engine.snapshot().session.finished,
+            "the planned ride ends at its destination"
+        );
+        assert!(engine.start_planned_ride("mallorca", "x", &[]).await.is_err());
     }
 
     #[tokio::test(start_paused = true)]

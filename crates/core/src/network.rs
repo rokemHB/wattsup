@@ -336,6 +336,50 @@ struct Leg {
     forward: bool,
     /// Index of the first point ridden on this edge (only the first leg starts mid-edge).
     from_index: usize,
+    /// Index of the last point ridden on this edge (only a planned route's last leg ends mid-edge).
+    to_index: usize,
+}
+
+impl Leg {
+    fn full(net: &Network, edge: usize, forward: bool) -> Self {
+        let n = net.edges[edge].count;
+        Self {
+            edge,
+            forward,
+            from_index: if forward { 0 } else { n - 1 },
+            to_index: if forward { n - 1 } else { 0 },
+        }
+    }
+
+    /// The points of this leg in riding order.
+    fn points<'a>(&self, net: &'a Network) -> Box<dyn Iterator<Item = &'a [f32; 3]> + 'a> {
+        let e = &net.edges[self.edge];
+        let pts = &net.points[e.start..e.start + e.count];
+        if self.forward {
+            Box::new(pts[self.from_index..=self.to_index].iter())
+        } else {
+            Box::new(pts[self.to_index..=self.from_index].iter().rev())
+        }
+    }
+
+    /// Whether the leg runs all the way to the edge's end node (where a junction may be).
+    fn ends_at_node(&self, net: &Network) -> bool {
+        self.to_index
+            == if self.forward {
+                net.edges[self.edge].count - 1
+            } else {
+                0
+            }
+    }
+}
+
+/// One edge of a route planned on the map, with the local point indices it is ridden between (inclusive).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub struct PlannedLeg {
+    pub edge: usize,
+    pub forward: bool,
+    pub from: usize,
+    pub to: usize,
 }
 
 /// Turns legs through the network into the route the session rides, and
@@ -346,6 +390,9 @@ pub struct Navigator {
     legs: Vec<Leg>,
     /// Route spacing in metres.
     spacing: f64,
+    /// A route planned on the map: it ends where it ends instead of growing ahead of the rider.
+    planned: bool,
+    name: Option<String>,
 }
 
 /// Keep at least this much road planned ahead of the rider.
@@ -354,17 +401,69 @@ pub const PLAN_AHEAD_M: f64 = 6000.0;
 impl Navigator {
     /// Starts on `edge` at point `index`, riding toward `b` if `forward`.
     pub fn start(world: &str, net: &Network, edge: usize, index: usize, forward: bool) -> Self {
+        let n = net.edges[edge].count;
         let mut nav = Self {
             world: world.to_string(),
             legs: vec![Leg {
                 edge,
                 forward,
                 from_index: index,
+                to_index: if forward { n - 1 } else { 0 },
             }],
             spacing: 5.0,
+            planned: false,
+            name: None,
         };
         nav.extend(net, PLAN_AHEAD_M * 2.0);
         nav
+    }
+
+    /// A route planned on the map: `legs` must index the network and join end to start.
+    /// The ride finishes at the last leg's end instead of growing ahead of the rider.
+    pub fn planned(world: &str, net: &Network, name: &str, legs: &[PlannedLeg]) -> Result<Self, String> {
+        if legs.is_empty() {
+            return Err("an empty route".into());
+        }
+        let mut out = Vec::with_capacity(legs.len());
+        for (k, l) in legs.iter().enumerate() {
+            let e = net.edges.get(l.edge).ok_or_else(|| format!("no edge {}", l.edge))?;
+            if l.from >= e.count || l.to >= e.count || (l.forward && l.from > l.to) || (!l.forward && l.to > l.from) {
+                return Err(format!(
+                    "leg {k} runs {}..{} on an edge of {} points",
+                    l.from, l.to, e.count
+                ));
+            }
+            let leg = Leg {
+                edge: l.edge,
+                forward: l.forward,
+                from_index: l.from,
+                to_index: l.to,
+            };
+            if let Some(prev) = out.last() {
+                let prev: &Leg = prev;
+                let end = *prev.points(net).last().unwrap();
+                let start = *leg.points(net).next().unwrap();
+                let gap = ((end[0] - start[0]) as f64).hypot((end[2] - start[2]) as f64);
+                if gap > 1.0 {
+                    return Err(format!("leg {k} starts {gap:.0} m from where leg {} ends", k - 1));
+                }
+            }
+            out.push(leg);
+        }
+        if out.iter().map(|l| l.points(net).count()).sum::<usize>() < 2 {
+            return Err("a route of a single point".into());
+        }
+        Ok(Self {
+            world: world.to_string(),
+            legs: out,
+            spacing: 5.0,
+            planned: true,
+            name: Some(name.to_string()),
+        })
+    }
+
+    pub fn is_planned(&self) -> bool {
+        self.planned
     }
 
     pub fn world(&self) -> &str {
@@ -385,16 +484,15 @@ impl Navigator {
         let mut added = 0.0;
         while added < ahead_m {
             let last = *self.legs.last().unwrap();
+            if self.planned || !last.ends_at_node(net) {
+                break; // the planned destination
+            }
             let node = self.leg_end_node(net, &last);
             let Some(next) = net.default_continuation(node, last.edge) else {
                 break; // dead end
             };
             let forward = net.edges[next].a == node;
-            self.legs.push(Leg {
-                edge: next,
-                forward,
-                from_index: 0,
-            });
+            self.legs.push(Leg::full(net, next, forward));
             added += net.edges[next].length_m;
             if self.legs.len() > 400 {
                 break;
@@ -406,14 +504,7 @@ impl Navigator {
     fn polyline(&self, net: &Network) -> Vec<[f32; 3]> {
         let mut out: Vec<[f32; 3]> = Vec::new();
         for (li, leg) in self.legs.iter().enumerate() {
-            let e = &net.edges[leg.edge];
-            let pts = &net.points[e.start..e.start + e.count];
-            let iter: Box<dyn Iterator<Item = &[f32; 3]>> = if leg.forward {
-                Box::new(pts[leg.from_index..].iter())
-            } else {
-                Box::new(pts[..=leg.from_index].iter().rev())
-            };
-            for (k, p) in iter.enumerate() {
+            for (k, p) in leg.points(net).enumerate() {
                 if li > 0 && k == 0 {
                     continue; // the junction node is already the previous leg's last point
                 }
@@ -426,11 +517,12 @@ impl Navigator {
     /// The route for the session: the planned legs resampled evenly.
     pub fn route(&self, net: &Network) -> Route {
         let poly = self.polyline(net);
-        let name = self
-            .legs
-            .first()
-            .and_then(|l| net.edges[l.edge].road_ref.clone())
-            .unwrap_or_else(|| net.name.clone());
+        let name = self.name.clone().unwrap_or_else(|| {
+            self.legs
+                .first()
+                .and_then(|l| net.edges[l.edge].road_ref.clone())
+                .unwrap_or_else(|| net.name.clone())
+        });
         Route::from_polyline(&name, &poly, self.spacing, Some(self.world.clone()))
     }
 
@@ -439,13 +531,7 @@ impl Navigator {
         let mut ends = Vec::with_capacity(self.legs.len());
         let mut d = 0.0;
         for leg in &self.legs {
-            let e = &net.edges[leg.edge];
-            let pts = &net.points[e.start..e.start + e.count];
-            let slice: Vec<[f32; 3]> = if leg.forward {
-                pts[leg.from_index..].to_vec()
-            } else {
-                pts[..=leg.from_index].iter().rev().copied().collect()
-            };
+            let slice: Vec<[f32; 3]> = leg.points(net).copied().collect();
             for w in slice.windows(2) {
                 d += ((w[1][0] - w[0][0]) as f64).hypot((w[1][2] - w[0][2]) as f64);
             }
@@ -456,6 +542,9 @@ impl Navigator {
 
     /// Makes sure the plan reaches well beyond `distance_m`. Returns true when the route changed.
     pub fn keep_ahead(&mut self, net: &Network, distance_m: f64) -> bool {
+        if self.planned {
+            return false;
+        }
         let planned = self.leg_ends(net).last().copied().unwrap_or(0.0);
         if planned - distance_m < PLAN_AHEAD_M {
             let before = self.legs.len();
@@ -475,6 +564,9 @@ impl Navigator {
             }
             if at - distance_m > lookahead_m {
                 return None;
+            }
+            if !leg.ends_at_node(net) {
+                continue; // a planned route's destination
             }
             let node = self.leg_end_node(net, leg);
             if net.adjacency[node].len() < 3 {
@@ -521,22 +613,22 @@ impl Navigator {
     /// Takes `edge` at the next junction ahead of `distance_m`. Returns false if that is not an option there.
     pub fn choose(&mut self, net: &Network, distance_m: f64, edge: usize) -> bool {
         let ends = self.leg_ends(net);
-        let Some(li) = (0..self.legs.len())
-            .find(|&i| ends[i] >= distance_m - 5.0 && net.adjacency[self.leg_end_node(net, &self.legs[i])].len() >= 3)
-        else {
+        let Some(li) = (0..self.legs.len()).find(|&i| {
+            ends[i] >= distance_m - 5.0
+                && self.legs[i].ends_at_node(net)
+                && net.adjacency[self.leg_end_node(net, &self.legs[i])].len() >= 3
+        }) else {
             return false;
         };
         let node = self.leg_end_node(net, &self.legs[li]);
         if !net.adjacency[node].contains(&edge) || edge == self.legs[li].edge {
             return false;
         }
+        // Leaving a planned route at a junction turns the rest of it into a free ride.
+        self.planned = false;
         self.legs.truncate(li + 1);
         let forward = net.edges[edge].a == node;
-        self.legs.push(Leg {
-            edge,
-            forward,
-            from_index: 0,
-        });
+        self.legs.push(Leg::full(net, edge, forward));
         self.extend(net, PLAN_AHEAD_M * 2.0);
         true
     }
@@ -733,6 +825,81 @@ mod tests {
         assert!((first.x - 70.0).abs() < 0.1, "{}", first.x);
         assert!(route.points[1].x < first.x, "walks toward node 0");
         assert!((nav.leg_ends(&net)[0] - 70.0).abs() < 0.1, "{}", nav.leg_ends(&net)[0]);
+    }
+
+    #[test]
+    fn a_planned_route_ends_at_its_destination() {
+        let net = t_network();
+        // From the middle of edge 0 through the junction and 50 m up the branch (edge 2 runs from node 1 north).
+        let legs = [
+            PlannedLeg {
+                edge: 0,
+                forward: true,
+                from: 5,
+                to: 10,
+            },
+            PlannedLeg {
+                edge: 2,
+                forward: true,
+                from: 0,
+                to: 5,
+            },
+        ];
+        let mut nav = Navigator::planned("t", &net, "to the north", &legs).unwrap();
+        assert!(nav.is_planned());
+        let route = nav.route(&net);
+        assert_eq!(route.name, "to the north");
+        assert!(!route.closed);
+        assert!((route.length_m() - 100.0).abs() < 6.0, "{}", route.length_m());
+        let last = route.points.last().unwrap();
+        assert!((last.x - 100.0).abs() < 1.0 && (last.z + 50.0).abs() < 1.0, "{last:?}");
+        // It does not grow, and the junction shows the planned turn as chosen.
+        assert!(!nav.keep_ahead(&net, 90.0));
+        let j = nav.junction(&net, 10.0, 500.0).expect("junction ahead");
+        assert!(j.options.iter().find(|o| o.edge == 2).unwrap().chosen);
+        // No junction at the destination (it is mid-edge).
+        assert!(nav.junction(&net, 60.0, 500.0).is_none());
+        // Turning off the plan makes it a free ride again.
+        assert!(nav.choose(&net, 10.0, 1));
+        assert!(!nav.is_planned());
+        assert!(nav.route(&net).length_m() > 100.0);
+        // Bad plans are refused.
+        assert!(Navigator::planned("t", &net, "x", &[]).is_err());
+        assert!(Navigator::planned(
+            "t",
+            &net,
+            "x",
+            &[PlannedLeg {
+                edge: 9,
+                forward: true,
+                from: 0,
+                to: 1
+            }]
+        )
+        .is_err());
+        assert!(
+            Navigator::planned(
+                "t",
+                &net,
+                "x",
+                &[
+                    PlannedLeg {
+                        edge: 0,
+                        forward: true,
+                        from: 0,
+                        to: 3
+                    },
+                    PlannedLeg {
+                        edge: 1,
+                        forward: true,
+                        from: 0,
+                        to: 3
+                    }
+                ]
+            )
+            .is_err(),
+            "legs must join"
+        );
     }
 
     #[test]

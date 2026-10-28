@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { PlannedLeg } from "./routing";
 import type {
   ControlMode,
   ControllerButton,
@@ -29,6 +30,8 @@ export const api = {
   networkInfo: (world: string) => invoke<NetworkInfo | null>("network_info", { world }),
   networkPoints: async (world: string) => new Float32Array(await invoke<ArrayBuffer>("network_points", { world })),
   startOnNetwork: (world: string, x: number, z: number, forward: boolean) => invoke<void>("start_on_network", { world, x, z, forward }),
+  /** A ride along legs planned on the map (see `routing.ts`); the ride finishes at the last leg's end. */
+  startPlannedRide: (world: string, name: string, legs: PlannedLeg[]) => invoke<void>("start_planned_ride", { world, name, legs }),
   chooseTurn: (edge: number) => invoke<boolean>("choose_turn", { edge }),
   /** Map data bytes through the app's disk cache. */
   fetchCached: (url: string) => invoke<ArrayBuffer>("fetch_cached", { url }),
