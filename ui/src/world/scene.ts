@@ -650,7 +650,7 @@ export function tunnelMesh(pts: Route["points"], stone: THREE.Texture): THREE.Gr
     const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
     return { distance_m: a.distance_m - m, x: a.x + ((a.x - b.x) / l) * m, y: a.y + ((a.y - b.y) / l) * m, z: a.z + ((a.z - b.z) / l) * m };
   };
-  const run = [ext(pts[0], pts[1], 6), ...pts, ext(pts[n - 1], pts[n - 2], 6)];
+  const run = [ext(pts[0], pts[1], 4), ...pts, ext(pts[n - 1], pts[n - 2], 4)];
   // Cross-section, a closed loop from under the road's middle round the walls
   // and roof and back: the floor keeps the sea and the sunk far layer from
   // showing beside the road.
@@ -725,15 +725,18 @@ export function tunnelMesh(pts: Route["points"], stone: THREE.Texture): THREE.Gr
     const nz = (q.x - p.x) / l;
     const dx = (q.x - p.x) / l;
     const dz = (q.z - p.z) / l;
-    // Two piers and a lintel around the opening, 1.2 m thick, rooted 1.5 m into the ground.
+    // Two piers and a lintel around the opening, rooted 1.5 m into the ground. They run
+    // deep (the tube's run past the portal plus some) so the tube is boxed in stone where
+    // the hillside is cut open around the portal, instead of showing its bare outside.
     const pier = 4.5;
     const top = wallH + archH;
     const lintel = 3.0;
+    const depth = 6.5;
     const mat = new THREE.MeshStandardMaterial({ color: "#8d8577", map: stone, roughness: 1 });
     const yaw = Math.atan2(nx, nz) + Math.PI / 2;
     const place = (w: number, h: number, across: number, y: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 1.2), mat);
-      m.position.set(p.x + dx * 0.6 + nx * across, y, p.z + dz * 0.6 + nz * across);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, depth), mat);
+      m.position.set(p.x + dx * (depth / 2 - 0.7) + nx * across, y, p.z + dz * (depth / 2 - 0.7) + nz * across);
       m.rotation.y = yaw;
       m.castShadow = true;
       m.receiveShadow = true;
