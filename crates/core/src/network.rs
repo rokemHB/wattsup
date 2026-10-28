@@ -319,6 +319,18 @@ pub struct TurnOption {
     pub chosen: bool,
 }
 
+/// The next junction a planned route takes, however far ahead: for a navigation display.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Maneuver {
+    /// Route distance at which the junction lies.
+    pub at_m: f64,
+    pub turn: Turn,
+    #[serde(rename = "ref")]
+    pub road_ref: Option<String>,
+    /// Sign destinations of the road taken.
+    pub to: Vec<String>,
+}
+
 /// The next junction ahead of the rider.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Junction {
@@ -556,58 +568,136 @@ impl Navigator {
 
     /// The next junction (a node with a choice) ahead of `distance_m`, within `lookahead_m`.
     pub fn junction(&self, net: &Network, distance_m: f64, lookahead_m: f64) -> Option<Junction> {
-        let ends = self.leg_ends(net);
-        for (li, leg) in self.legs.iter().enumerate() {
-            let at = ends[li];
+        for (li, at) in self.leg_ends(net).into_iter().enumerate() {
             if at < distance_m - 5.0 {
                 continue;
             }
             if at - distance_m > lookahead_m {
                 return None;
             }
-            if !leg.ends_at_node(net) {
-                continue; // a planned route's destination
+            if let Some(j) = self.junction_after(net, li, at) {
+                return Some(j);
             }
-            let node = self.leg_end_node(net, leg);
-            if net.adjacency[node].len() < 3 {
+        }
+        None
+    }
+
+    /// The next junction the planned route goes through, at any distance; `None` on a free
+    /// ride or when only the destination lies ahead.
+    pub fn next_maneuver(&self, net: &Network, distance_m: f64) -> Option<Maneuver> {
+        if !self.planned {
+            return None;
+        }
+        for (li, at) in self.leg_ends(net).into_iter().enumerate() {
+            if at < distance_m - 5.0 {
                 continue;
             }
-            let arriving = net.arrival_heading(leg.edge, node);
-            let planned_next = self.legs.get(li + 1).map(|l| l.edge);
-            let signs = net.nodes[node].signs.as_deref().unwrap_or(&[]);
-            let mut options: Vec<TurnOption> = net.adjacency[node]
-                .iter()
-                .copied()
-                .filter(|&e| e != leg.edge)
-                .map(|e| {
-                    let deg = angle_diff(net.heading_out(e, node), arriving).to_degrees();
-                    let sign = signs.iter().find(|s| s.edge == e);
-                    TurnOption {
-                        edge: e,
-                        turn: Turn::from_degrees(deg),
-                        angle_deg: (deg * 10.0).round() / 10.0,
-                        road_ref: sign
-                            .and_then(|s| s.road_ref.clone())
-                            .or_else(|| net.edges[e].road_ref.clone()),
-                        to: sign.map(|s| s.to.clone()).unwrap_or_default(),
-                        chosen: planned_next == Some(e),
-                    }
-                })
-                .collect();
-            options.sort_by(|a, b| a.angle_deg.partial_cmp(&b.angle_deg).unwrap());
-            // Dual carriageways and slip roads split into pieces that all read the same;
-            // there is nothing to decide there, so look further ahead.
-            let first = &options[0];
-            if options.iter().all(|o| o.road_ref == first.road_ref && o.to == first.to) {
+            let Some(j) = self.junction_after(net, li, at) else {
                 continue;
-            }
-            return Some(Junction {
-                node,
-                at_m: at,
-                options,
+            };
+            let chosen = j.options.iter().find(|o| o.chosen)?;
+            return Some(Maneuver {
+                at_m: j.at_m,
+                turn: chosen.turn,
+                road_ref: chosen.road_ref.clone(),
+                to: chosen.to.clone(),
             });
         }
         None
+    }
+
+    /// The junction at the end of leg `li` (at route distance `at`), if there is anything to choose there.
+    fn junction_after(&self, net: &Network, li: usize, at: f64) -> Option<Junction> {
+        let leg = &self.legs[li];
+        if !leg.ends_at_node(net) {
+            return None; // a planned route's destination, or the point of a U-turn
+        }
+        let node = self.leg_end_node(net, leg);
+        if net.adjacency[node].len() < 3 {
+            return None;
+        }
+        let arriving = net.arrival_heading(leg.edge, node);
+        let planned_next = self.legs.get(li + 1).map(|l| l.edge);
+        let signs = net.nodes[node].signs.as_deref().unwrap_or(&[]);
+        let mut options: Vec<TurnOption> = net.adjacency[node]
+            .iter()
+            .copied()
+            .filter(|&e| e != leg.edge)
+            .map(|e| {
+                let deg = angle_diff(net.heading_out(e, node), arriving).to_degrees();
+                let sign = signs.iter().find(|s| s.edge == e);
+                TurnOption {
+                    edge: e,
+                    turn: Turn::from_degrees(deg),
+                    angle_deg: (deg * 10.0).round() / 10.0,
+                    road_ref: sign
+                        .and_then(|s| s.road_ref.clone())
+                        .or_else(|| net.edges[e].road_ref.clone()),
+                    to: sign.map(|s| s.to.clone()).unwrap_or_default(),
+                    chosen: planned_next == Some(e),
+                }
+            })
+            .collect();
+        options.sort_by(|a, b| a.angle_deg.partial_cmp(&b.angle_deg).unwrap());
+        // Dual carriageways and slip roads split into pieces that all read the same;
+        // there is nothing to decide there, so look further ahead.
+        let first = &options[0];
+        if options.iter().all(|o| o.road_ref == first.road_ref && o.to == first.to) {
+            return None;
+        }
+        Some(Junction {
+            node,
+            at_m: at,
+            options,
+        })
+    }
+
+    /// Leaving a planned route turns the rest of it into a free ride, named after the road again.
+    fn leave_plan(&mut self) {
+        self.planned = false;
+        self.name = None;
+    }
+
+    /// Turns the rider around where they are: the road behind becomes the road ahead.
+    /// On a planned route this ends the plan (the way back is a free ride).
+    pub fn turn_around(&mut self, net: &Network, distance_m: f64) {
+        let ends = self.leg_ends(net);
+        let li = (0..self.legs.len())
+            .find(|&i| ends[i] >= distance_m)
+            .unwrap_or(self.legs.len() - 1);
+        let leg = self.legs[li];
+        let leg_start = if li == 0 { 0.0 } else { ends[li - 1] };
+        // The point of this leg nearest the rider (points are a few metres apart).
+        let pts: Vec<[f32; 3]> = leg.points(net).copied().collect();
+        let mut d = 0.0;
+        let mut k = 0;
+        let mut best = f64::MAX;
+        for i in 0..pts.len() {
+            if i > 0 {
+                d += ((pts[i][0] - pts[i - 1][0]) as f64).hypot((pts[i][2] - pts[i - 1][2]) as f64);
+            }
+            let gap = (leg_start + d - distance_m).abs();
+            if gap < best {
+                best = gap;
+                k = i;
+            }
+        }
+        let index = if leg.forward {
+            leg.from_index + k
+        } else {
+            leg.from_index - k
+        };
+        let n = net.edges[leg.edge].count;
+        self.legs.truncate(li + 1);
+        self.legs[li].to_index = index;
+        self.legs.push(Leg {
+            edge: leg.edge,
+            forward: !leg.forward,
+            from_index: index,
+            to_index: if leg.forward { 0 } else { n - 1 },
+        });
+        self.leave_plan();
+        self.extend(net, PLAN_AHEAD_M * 2.0);
     }
 
     /// Takes `edge` at the next junction ahead of `distance_m`. Returns false if that is not an option there.
@@ -624,8 +714,13 @@ impl Navigator {
         if !net.adjacency[node].contains(&edge) || edge == self.legs[li].edge {
             return false;
         }
+        if self.planned && self.legs.get(li + 1).map(|l| l.edge) == Some(edge) {
+            return true; // the planned way: nothing changes
+        }
         // Leaving a planned route at a junction turns the rest of it into a free ride.
-        self.planned = false;
+        if self.planned {
+            self.leave_plan();
+        }
         self.legs.truncate(li + 1);
         let forward = net.edges[edge].a == node;
         self.legs.push(Leg::full(net, edge, forward));
@@ -859,10 +954,24 @@ mod tests {
         assert!(j.options.iter().find(|o| o.edge == 2).unwrap().chosen);
         // No junction at the destination (it is mid-edge).
         assert!(nav.junction(&net, 60.0, 500.0).is_none());
-        // Turning off the plan makes it a free ride again.
+        // The navigation display knows the next planned turn from anywhere on the route.
+        let m = nav.next_maneuver(&net, 10.0).expect("a maneuver");
+        assert_eq!(
+            (m.turn, m.at_m as i64, m.road_ref.as_deref()),
+            (Turn::Left, 50, Some("Ma-2"))
+        );
+        assert_eq!(m.to, vec!["Sóller".to_string()]);
+        assert!(nav.next_maneuver(&net, 60.0).is_none(), "only the destination ahead");
+        // Taking the planned way at the junction changes nothing.
+        assert!(nav.choose(&net, 10.0, 2));
+        assert!(nav.is_planned());
+        // Turning off the plan makes it a free ride again, named after the road.
         assert!(nav.choose(&net, 10.0, 1));
         assert!(!nav.is_planned());
-        assert!(nav.route(&net).length_m() > 100.0);
+        assert!(nav.next_maneuver(&net, 10.0).is_none());
+        let route = nav.route(&net);
+        assert!(route.length_m() > 100.0);
+        assert_eq!(route.name, "Ma-10");
         // Bad plans are refused.
         assert!(Navigator::planned("t", &net, "x", &[]).is_err());
         assert!(Navigator::planned(
@@ -899,6 +1008,59 @@ mod tests {
             )
             .is_err(),
             "legs must join"
+        );
+    }
+
+    #[test]
+    fn turning_around_rides_the_same_road_back() {
+        let net = t_network();
+        // Free ride east along the Ma-10 from node 0; 35 m along, turn around.
+        let mut nav = Navigator::start("t", &net, 0, 0, true);
+        nav.turn_around(&net, 35.0);
+        assert!(!nav.is_planned());
+        let route = nav.route(&net);
+        // The route runs to the nearest road point (30 m) and back to node 0: 60 m, then a dead end.
+        assert!((route.length_m() - 60.0).abs() < 6.0, "{}", route.length_m());
+        let p = |d: f64| {
+            let i = ((d / 5.0).round() as usize).min(route.points.len() - 1);
+            (route.points[i].x, route.points[i].z)
+        };
+        assert!((p(30.0).0 - 30.0).abs() < 1.0, "{:?}", p(30.0));
+        assert!((p(55.0).0 - 5.0).abs() < 1.0, "the way back: {:?}", p(55.0));
+        // No junction behind: the way back to node 0 has no choice.
+        assert!(nav.junction(&net, 35.0, 500.0).is_none());
+
+        // On a planned route a U-turn ends the plan; past the junction, the road back has the
+        // junction ahead again, this time arriving from the branch.
+        let mut net = t_network();
+        net.nodes[1].signs.as_mut().unwrap().push(Sign {
+            edge: 1,
+            road_ref: Some("Ma-10".into()),
+            to: vec!["Lluc".into()],
+        });
+        let legs = [
+            PlannedLeg {
+                edge: 0,
+                forward: true,
+                from: 0,
+                to: 10,
+            },
+            PlannedLeg {
+                edge: 2,
+                forward: true,
+                from: 0,
+                to: 8,
+            },
+        ];
+        let mut nav = Navigator::planned("t", &net, "north", &legs).unwrap();
+        nav.turn_around(&net, 140.0);
+        assert!(!nav.is_planned());
+        let j = nav.junction(&net, 141.0, 500.0).expect("the junction, from the branch");
+        assert_eq!(j.node, 1);
+        assert!((j.at_m - 180.0).abs() < 1.0, "{}", j.at_m);
+        assert!(
+            nav.route(&net).length_m() > 250.0,
+            "a free ride continues past the junction"
         );
     }
 
