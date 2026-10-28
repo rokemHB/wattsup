@@ -4,6 +4,7 @@
 // opens where you click. Everything that is drawn per frame is prebuilt: the
 // roads are canvas paths, the route is a path rebuilt only when it changes,
 // and a redraw happens at most once per animation frame.
+import { api } from "./api";
 import { $, el } from "./dom";
 import { elevationGain, type PlannedPath, Router } from "./routing";
 import type { Place } from "./types";
@@ -81,6 +82,9 @@ export class MapScreen {
   private routePath: Path2D | null = null;
   private segmentPaths = new Map<string, Path2D>();
   private statsDirty = false;
+  /** The one waypoint so far is the destination: the start comes next. */
+  private destinationFirst = false;
+  private timeTimer = 0;
   /** The latest cursor position of a waypoint drag, applied once per frame however fast the mouse reports. */
   private pendingDrag: { index: number; cx: number; cy: number } | null = null;
   private nameEdited = false;
@@ -374,7 +378,20 @@ export class MapScreen {
       if (waypoint !== 0) act("Make it the start", false, () => this.waypoints.unshift(...this.waypoints.splice(waypoint, 1)));
       if (waypoint !== n - 1) act("Make it the destination", false, () => this.waypoints.push(...this.waypoints.splice(waypoint, 1)));
     } else if (n === 0) {
-      act("Start here", true, () => this.waypoints.push({ ...spot, name: this.nameOf(spot) }));
+      act("Start here", true, () => {
+        this.destinationFirst = false;
+        this.waypoints.push({ ...spot, name: this.nameOf(spot) });
+      });
+      act("Destination here", false, () => {
+        this.destinationFirst = true;
+        this.waypoints.push({ ...spot, name: this.nameOf(spot) });
+      });
+    } else if (n === 1 && this.destinationFirst) {
+      act("Start here", true, () => {
+        this.destinationFirst = false;
+        this.waypoints.unshift({ ...spot, name: this.nameOf(spot) });
+      });
+      act("Destination here instead", false, () => this.setWaypoint(0, spot));
     } else if (n === 1) {
       act("Destination here", true, () => this.waypoints.push({ ...spot, name: this.nameOf(spot) }));
       act("Start here instead", false, () => this.setWaypoint(0, spot));
@@ -416,6 +433,7 @@ export class MapScreen {
 
   private waypointLabel(k: number): string {
     const n = this.waypoints.length;
+    if (n === 1 && this.destinationFirst) return "Destination";
     if (k === 0) return "Start";
     if (k === n - 1) return "Destination";
     return `Waypoint ${k}`;
@@ -428,10 +446,12 @@ export class MapScreen {
   private renderPlan() {
     const list = $("map-waypoints");
     const w = this.waypoints;
+    if (w.length === 0) this.destinationFirst = false;
     list.replaceChildren(
       ...w.map((wp, k) => {
         const n = w.length;
-        const mark = el("span", { className: `mark ${k === 0 ? "start" : k === n - 1 ? "end" : "via"}` }, k === 0 ? "A" : k === n - 1 ? "B" : String(k));
+        const end = k === n - 1 && (k > 0 || this.destinationFirst);
+        const mark = el("span", { className: `mark ${end ? "end" : k === 0 ? "start" : "via"}` }, end ? "B" : k === 0 ? "A" : String(k));
         const remove = el("button", { className: "small", textContent: "×", title: "Remove" });
         remove.onclick = () => {
           w.splice(k, 1);
@@ -447,7 +467,7 @@ export class MapScreen {
     $<HTMLButtonElement>("map-ride").disabled = !this.path;
     $<HTMLButtonElement>("map-save").disabled = !this.path;
     $<HTMLButtonElement>("map-reverse").disabled = w.length < 2;
-    if (w.length === 1) this.hint("Now click where the ride should end.");
+    if (w.length === 1) this.hint(this.destinationFirst ? "Now click where the ride starts." : "Now click where the ride should end.");
     else if (w.length >= 2) this.hint("Drag the route to bend it through somewhere else; click a road to add it.");
     this.renderStats();
   }
@@ -468,6 +488,25 @@ export class MapScreen {
     $("map-stat-up").textContent = String(Math.round(ascent));
     $("map-stat-down").textContent = String(Math.round(descent));
     this.drawProfile(profile);
+    this.estimateTime(this.path);
+  }
+
+  /** Asks the engine how long the plan takes at the rider's FTP, once the route has settled (a drag re-routes every frame). */
+  private estimateTime(path: PlannedPath) {
+    clearTimeout(this.timeTimer);
+    $("map-stat-time").textContent = "…";
+    this.timeTimer = window.setTimeout(async () => {
+      try {
+        const s = await api.planTime(this.world!.id, path.legs);
+        if (this.path !== path) return;
+        const h = Math.floor(s / 3600);
+        const m = Math.round((s % 3600) / 60);
+        $("map-stat-time").textContent = h ? `${h}:${String(m).padStart(2, "0")} h` : `${m} min`;
+      } catch (e) {
+        console.warn(`plan time: ${e}`);
+        $("map-stat-time").textContent = "–";
+      }
+    }, 300);
   }
 
   private drawProfile(canvas: HTMLCanvasElement) {

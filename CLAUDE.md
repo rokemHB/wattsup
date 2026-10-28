@@ -95,7 +95,10 @@ saved plans in localStorage `wattsup.plans`); `ui/src/routing.ts` is the
 Dijkstra router over the junction graph with mid-edge starts, ends and
 waypoints (tests in `routing.test.ts`). A planned ride goes to the engine as
 `PlannedLeg`s (`start_planned_ride`); `Navigator::planned` validates that they
-join and the ride finishes at the last leg's end. Performance rules there:
+join and the ride finishes at the last leg's end. The panel's time comes from
+`plan_time` (`Engine::plan_time_s`, the HUD's FTP model), asked 300 ms after
+the route last changed. "Destination here" on an empty plan sets
+`destinationFirst`: the one waypoint is B until the start is placed. Performance rules there:
 everything per frame is prebuilt (roads and route pieces as `Path2D`, every
 network point's map pixel in `pointPx`), a waypoint drag re-routes at most
 once per animation frame, `NetworkIndex.nearest` searches in rings and stops

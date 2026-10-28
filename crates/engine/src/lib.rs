@@ -279,6 +279,19 @@ impl Engine {
         Ok(())
     }
 
+    /// How long a route planned on the map would take at the rider's FTP (the same model as
+    /// the HUD's time left before a minute of riding): for the planner's summary.
+    pub fn plan_time_s(&self, world: &str, legs: &[PlannedLeg]) -> Result<f64, String> {
+        let net = Network::builtin(world).ok_or_else(|| format!("no road network for {world}"))?;
+        let route = Navigator::planned(world, net, "plan", legs)?.route(net);
+        let session = self.inner.session.lock().unwrap();
+        let speeds = SpeedTable::new(
+            &session.config().rider,
+            ETA_FTP_SHARE * *self.inner.ftp_w.lock().unwrap(),
+        );
+        Ok(route_time_s(&route, 0.0, &speeds).1)
+    }
+
     /// Starts a ride along a route planned on the map: `legs` join end to start and the ride
     /// finishes at the last leg's end.
     pub async fn start_planned_ride(&self, world: &str, name: &str, legs: &[PlannedLeg]) -> Result<(), String> {
@@ -611,15 +624,7 @@ impl Inner {
                 _ => ETA_FTP_SHARE * *self.ftp_w.lock().unwrap(),
             };
             let speeds = SpeedTable::new(&session.config().rider, power);
-            // Climbing and time left: the steps from the rider's point to the end.
-            let from = ((distance / 5.0).floor().max(0.0) as usize).min(route.points.len().saturating_sub(1));
-            let (mut climb, mut eta) = (0.0, 0.0);
-            for w in route.points[from..].windows(2) {
-                let dy = w[1].y - w[0].y;
-                let run = w[1].distance_m - w[0].distance_m;
-                climb += dy.max(0.0);
-                eta += run / speeds.at(dy / run * 100.0);
-            }
+            let (climb, eta) = route_time_s(route, distance, &speeds);
             (Some((length - distance).max(0.0)), Some(climb), Some(eta))
         } else {
             (None, None, None)
@@ -681,6 +686,19 @@ impl SpeedTable {
         };
         self.mps[(g.clamp(Self::MIN_GRADE, Self::MAX_GRADE) - Self::MIN_GRADE) as usize]
     }
+}
+
+/// Climbing and riding time left from `from_m` to the end of `route` at the table's speeds.
+fn route_time_s(route: &Route, from_m: f64, speeds: &SpeedTable) -> (f64, f64) {
+    let from = ((from_m / 5.0).floor().max(0.0) as usize).min(route.points.len().saturating_sub(1));
+    let (mut climb, mut time) = (0.0, 0.0);
+    for w in route.points[from..].windows(2) {
+        let dy = w[1].y - w[0].y;
+        let run = w[1].distance_m - w[0].distance_m;
+        climb += dy.max(0.0);
+        time += run / speeds.at(dy / run * 100.0);
+    }
+    (climb, time)
 }
 
 async fn event_loop(inner: Arc<Inner>, mut rx: EventReceiver) {
@@ -892,6 +910,9 @@ mod tests {
         let route = engine.route().unwrap();
         assert_eq!(route.name, "a short one");
         assert!(route.length_m() < 400.0, "{}", route.length_m());
+        let plan_s = engine.plan_time_s("mallorca", &legs).unwrap();
+        assert!(plan_s > 10.0 && plan_s < 600.0, "{plan_s}");
+        assert!(engine.plan_time_s("mallorca", &[]).is_err());
         ride(2).await;
         let nav = engine.snapshot().navigation.expect("navigation on a planned ride");
         assert!(nav.planned);

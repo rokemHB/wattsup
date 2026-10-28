@@ -194,10 +194,10 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 .waypoints li button { padding: 0 6px; line-height: 1.4; }
 #map-plan { display: flex; flex-direction: column; gap: 10px; }
 #map-route-name { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid #2d3550; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
-.route-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.route-stats div { display: flex; flex-direction: column; background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
-.route-stats b { font-size: 22px; font-variant-numeric: tabular-nums; }
-.route-stats span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
+.route-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.route-stats div { display: flex; flex-direction: column; background: var(--panel-2); border-radius: 8px; padding: 8px 8px; min-width: 0; }
+.route-stats b { font-size: 22px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.route-stats span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; }
 .map-profile { width: 100%; height: 84px; display: block; background: rgba(0, 0, 0, 0.25); border-radius: 8px; }
 .map-actions { flex-wrap: wrap; }
 .map-actions .primary { flex: 1; }

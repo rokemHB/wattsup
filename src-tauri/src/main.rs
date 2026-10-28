@@ -153,6 +153,11 @@ async fn replan_ride(state: State<'_, AppState>, world: String, name: String, le
 }
 
 #[tauri::command]
+fn plan_time(state: State<'_, AppState>, world: String, legs: Vec<PlannedLeg>) -> CmdResult<f64> {
+    state.engine.plan_time_s(&world, &legs)
+}
+
+#[tauri::command]
 fn set_ftp(state: State<'_, AppState>, watts: f64) {
     state.engine.set_ftp(watts);
 }
@@ -394,6 +399,7 @@ fn main() {
             start_on_network,
             start_planned_ride,
             replan_ride,
+            plan_time,
             set_ftp,
             choose_turn,
             turn_around,

@@ -43,6 +43,8 @@ export const api = {
   startPlannedRide: (world: string, name: string, legs: PlannedLeg[]) => invoke<void>("start_planned_ride", { world, name, legs }),
   replanRide: (world: string, name: string, legs: PlannedLeg[]) => invoke<void>("replan_ride", { world, name, legs }),
   setFtp: (watts: number) => invoke<void>("set_ftp", { watts }),
+  /** Seconds a planned route would take at the rider's FTP. */
+  planTime: (world: string, legs: PlannedLeg[]) => invoke<number>("plan_time", { world, legs }),
   chooseTurn: (edge: number) => invoke<boolean>("choose_turn", { edge }),
   /** Turns the rider around on the road network; false when not on one. */
   turnAround: () => invoke<boolean>("turn_around"),
