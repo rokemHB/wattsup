@@ -548,6 +548,10 @@ function onSnapshot(snap: EngineSnapshot) {
     hud?.update(snap);
     minimap?.update(snap);
     renderJunction(snap.junction, snap.session.distance_m);
+    if (snap.session.stats.moving_s === 0 && snap.session.virtual_speed_kmh === 0 && !snap.session.workout) {
+      // A standing bike waits for the first pedal stroke (it does not roll off downhill by itself).
+      hud?.notice("Pedal to start", 1);
+    }
     const pending = world?.tiles?.pending ?? 0;
     $("hud-tiles").textContent = pending ? `· loading ${pending} tiles` : "";
     if ((snap.session.finished || snap.session.workout?.done) && !finishShown) {

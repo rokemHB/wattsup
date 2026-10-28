@@ -250,6 +250,12 @@ pub struct RideReport {
 
 /// Seconds of power averaged for normalized power.
 const NP_WINDOW_S: usize = 30;
+/// Below this the bike counts as standing, and stays put until the rider pedals.
+const STANDSTILL_MPS: f64 = 0.5;
+/// Cadence that counts as pedalling.
+const PEDALLING_RPM: f64 = 20.0;
+/// Power that counts as pedalling when the trainer reports no cadence.
+const PEDALLING_W: f64 = 20.0;
 
 /// Running sums behind [`RideStats`].
 #[derive(Clone, Debug, Default)]
@@ -756,12 +762,21 @@ impl RideSession {
         workout.steps.len() - 1
     }
 
+    /// The rider is turning the pedals: fresh cadence, or power from a trainer that
+    /// reports none. A hand on the flywheel (a few watts, no cadence) does not count.
+    fn pedalling(&self, now: f64) -> bool {
+        let timeout = self.config.data_timeout_s;
+        !self.trainer_offline
+            && (self.cadence.fresh(now, timeout).is_some_and(|c| c >= PEDALLING_RPM)
+                || self.power.fresh(now, timeout).is_some_and(|p| p >= PEDALLING_W))
+    }
+
     /// Advances time by `dt` seconds. Returns a command when the trainer needs a new one.
     pub fn tick(&mut self, dt: f64) -> Option<TrainerCommand> {
         self.clock_s += dt;
         let timeout = self.config.data_timeout_s;
         let now = self.clock_s;
-        let pedalling = !self.trainer_offline && self.cadence.fresh(now, timeout).is_some_and(|c| c >= 20.0);
+        let pedalling = self.pedalling(now);
         self.workout_step(dt, pedalling);
         if self.trainer_offline {
             // Held: the clock does not count and the rider brakes to a stop.
@@ -775,7 +790,9 @@ impl RideSession {
         } else {
             self.power.fresh(now, timeout).unwrap_or(0.0)
         };
-        if !self.trainer_offline {
+        if self.trainer_offline {
+            // Held above.
+        } else if self.virtual_speed_mps >= STANDSTILL_MPS || pedalling {
             self.virtual_speed_mps = step_speed(
                 &self.config.rider,
                 self.virtual_speed_mps,
@@ -784,6 +801,10 @@ impl RideSession {
                 dt,
             );
             self.distance_m += self.virtual_speed_mps * dt;
+        } else {
+            // A foot on the ground: a standing bike waits for the first pedal stroke
+            // instead of rolling off down the hill by itself.
+            self.virtual_speed_mps = 0.0;
         }
         if let Some(route) = &self.config.route {
             // Not urgent: the deadband and interval decide when the trainer hears about it.
@@ -1398,5 +1419,51 @@ mod tests {
     fn commands_map_to_ftms() {
         let cmd = TrainerCommand::TargetPower { watts: 250 };
         assert_eq!(cmd.to_ftms().encode(), vec![0x05, 0xfa, 0x00]);
+    }
+
+    #[test]
+    fn a_standing_bike_waits_for_the_first_pedal_stroke() {
+        let mut s = RideSession::default();
+        s.set_road_grade(-8.0);
+        for _ in 0..40 {
+            s.tick(0.25);
+        }
+        assert_eq!(s.snapshot().virtual_speed_kmh, 0.0, "no trainer: no rolling off");
+        // A hand on the flywheel: a few watts, no cadence.
+        for _ in 0..40 {
+            s.on_trainer_sample(TrainerSample {
+                power_w: Some(7.0),
+                cadence_rpm: None,
+                speed_kmh: Some(30.0),
+            });
+            s.tick(0.25);
+        }
+        assert_eq!(s.snapshot().virtual_speed_kmh, 0.0, "7 W is not pedalling");
+        assert_eq!(s.snapshot().distance_m, 0.0);
+        // Pedalling moves it, and once rolling it coasts when the pedals stop.
+        for _ in 0..20 {
+            riding(&mut s, 150.0, 80.0);
+            s.tick(0.25);
+        }
+        let rolling = s.snapshot().virtual_speed_kmh;
+        assert!(rolling > 10.0, "{rolling}");
+        for _ in 0..40 {
+            s.tick(0.25);
+        }
+        assert!(
+            s.snapshot().virtual_speed_kmh > rolling,
+            "coasting down an 8 % hill gets faster"
+        );
+        // Power alone counts too, for a trainer that reports no cadence.
+        let mut p = RideSession::default();
+        for _ in 0..20 {
+            p.on_trainer_sample(TrainerSample {
+                power_w: Some(150.0),
+                cadence_rpm: None,
+                speed_kmh: None,
+            });
+            p.tick(0.25);
+        }
+        assert!(p.snapshot().virtual_speed_kmh > 5.0);
     }
 }

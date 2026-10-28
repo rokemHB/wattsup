@@ -197,6 +197,8 @@ Right after connecting, with `--raw`, the log shows what the trainer told us:
       second and look plausible (the CORE 2 reports cadence itself; a KICKR
       without cadence shows `- rpm`, see 3.4).
 - [ ] Stop pedalling: within 3 s the values turn to `-` (readings expire).
+- [ ] Turn the flywheel by hand (a few watts, no cadence): the virtual speed
+      stays 0. A standing bike moves only once you pedal.
 
 ### 3.2 Virtual gears change the sent grade
 

@@ -140,6 +140,9 @@ screen is `ui/src/rides.ts`.
 - The WCS caps one request at ~0.1°; chunks are 0.05° (pipeline) and
   0.02°×0.025° (ride-time tiles).
 - `Navigator` leg indices are local to the edge; `nearest()` returns local too.
+- A standing bike waits for the first pedal stroke (`pedalling()` in `session.rs`:
+  cadence ≥ 20 rpm, or ≥ 20 W when the trainer sends no cadence). Without it the
+  bike rolled off every downhill start by itself, trainer or not.
 - Terrain grid is 10 m: anything finer near the road comes from the corridor
   strip (`corridorMesh`) and, in tunnels, from the tube.
 
