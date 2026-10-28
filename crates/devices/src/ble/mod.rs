@@ -131,7 +131,13 @@ impl DeviceProvider for BleProvider {
 
     async fn scan(&self, duration: Duration) -> Result<Vec<DiscoveredDevice>> {
         let adapter = self.adapter().await?;
-        adapter.start_scan(ScanFilter::default()).await.map_err(ble_err)?;
+        if let Err(e) = adapter.start_scan(ScanFilter::default()).await {
+            // The previous scan is kept running (see below): BlueZ answers a second
+            // StartDiscovery with "Operation already in progress", which is fine.
+            if !e.to_string().to_lowercase().contains("already in progress") {
+                return Err(ble_err(e));
+            }
+        }
         tokio::time::sleep(duration).await;
         // Keep the scan running on purpose: some stacks forget peripherals after stop_scan.
         let mut found = Vec::new();
