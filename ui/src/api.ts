@@ -37,6 +37,8 @@ export const api = {
   startOnNetwork: (world: string, x: number, z: number, forward: boolean) => invoke<void>("start_on_network", { world, x, z, forward }),
   /** A ride along legs planned on the map (see `routing.ts`); the ride finishes at the last leg's end. */
   startPlannedRide: (world: string, name: string, legs: PlannedLeg[]) => invoke<void>("start_planned_ride", { world, name, legs }),
+  replanRide: (world: string, name: string, legs: PlannedLeg[]) => invoke<void>("replan_ride", { world, name, legs }),
+  setFtp: (watts: number) => invoke<void>("set_ftp", { watts }),
   chooseTurn: (edge: number) => invoke<boolean>("choose_turn", { edge }),
   /** Turns the rider around on the road network; false when not on one. */
   turnAround: () => invoke<boolean>("turn_around"),

@@ -24,12 +24,6 @@ export function maneuverIcon(kind: ManeuverKind): string {
   );
 }
 
-/** Seconds to the destination at the ride's moving average speed; null until there is a minute of riding to go by. */
-export function timeLeft(remainingM: number, avgSpeedKmh: number, movingS: number): number | null {
-  if (movingS < 60 || avgSpeedKmh < 3) return null;
-  return remainingM / (avgSpeedKmh / 3.6);
-}
-
 /** "850 m" below a kilometre (rounded to 10 m), "12.4 km" above. */
 export function shortDistance(meters: number): string {
   const m = Math.max(0, meters);

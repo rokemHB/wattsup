@@ -7,12 +7,12 @@ import { duration, isTypingTarget, num, shiftForKey } from "./format";
 import { drawWorkout, Hud } from "./hud";
 import { loadPlans, MapScreen, type RoadSpot, type SavedPlan } from "./map";
 import { Minimap, type NetworkView } from "./minimap";
-import { maneuverIcon } from "./nav";
+import { maneuverIcon, shortDistance } from "./nav";
 import { RidesScreen } from "./rides";
 import { TrainerScreen } from "./trainer";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
-import type { PlannedPath } from "./routing";
-import type { EngineSnapshot, Junction, Route, RouteInfo, Workout } from "./types";
+import { Router, type PlannedPath } from "./routing";
+import type { EngineSnapshot, Junction, Navigation, Route, RouteInfo, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
@@ -279,6 +279,41 @@ async function endWorkout() {
 
 /** The planned ride about to start: the HUD shows its whole profile, not a window. */
 let plannedRide = false;
+/** The plan being ridden, to route back to its destination after a wrong turn. */
+let plannedPath: PlannedPath | null = null;
+let plannedName = "";
+let router: Router | null = null;
+/** The leg end a re-plan was last tried from: a second failure there ends the plan. */
+let rerouteKey = "";
+let rerouting = false;
+
+/**
+ * The rider left the plan: route from the end of their current leg back to the
+ * destination and hand it to the engine. False when there is no way (or the
+ * same spot failed before), which ends the plan.
+ */
+function reroute(nav: Navigation): boolean {
+  const dest = plannedPath?.legs[plannedPath.legs.length - 1];
+  const from = nav.leg_end;
+  if (!dest || !from || !network) return false;
+  const key = `${from.edge}:${from.index}`;
+  if (key === rerouteKey) return false;
+  rerouteKey = key;
+  router ??= new Router(network);
+  const to = { edge: dest.edge, i: network.edges[dest.edge].start + dest.to };
+  const path = router.route({ edge: from.edge, i: from.index }, to);
+  if (!path) return false;
+  rerouting = true;
+  api
+    .replanRide(NETWORK_WORLD, plannedName, path.legs)
+    .then(() => {
+      plannedPath = path;
+      hud?.notice(`Re-routed · ${shortDistance(path.length_m)} to ${plannedName}`);
+    })
+    .catch((e) => console.warn(`re-route failed: ${e}`))
+    .finally(() => (rerouting = false));
+  return true;
+}
 
 const mapScreen = new MapScreen({
   freeRide: (at, forward) => startNetworkRide(at, forward).catch(showError),
@@ -368,6 +403,9 @@ async function startPlannedRide(path: PlannedPath, name: string, start: RoadSpot
   await storeRide();
   await endWorkout();
   plannedRide = true;
+  plannedPath = path;
+  plannedName = name;
+  rerouteKey = "";
   await api.startPlannedRide(NETWORK_WORLD, name, path.legs);
   await beginNetworkRide(start);
 }
@@ -537,11 +575,14 @@ function onSnapshot(snap: EngineSnapshot) {
       })
       .catch(showError);
   }
-  if (plannedRide && snap.navigation && !snap.navigation.planned) {
-    // The rider took another turn or turned around: the plan is over, the road goes on.
-    plannedRide = false;
-    hud?.setWindowed(true);
-    hud?.notice("Off the planned route · free ride from here");
+  if (plannedRide && snap.navigation && !snap.navigation.planned && !rerouting) {
+    // The rider took another turn or turned around: back to the destination by a new way,
+    // or, when there is none, the plan is over and the road goes on.
+    if (!reroute(snap.navigation)) {
+      plannedRide = false;
+      hud?.setWindowed(true);
+      hud?.notice("Off the planned route · free ride from here");
+    }
   }
   if (screen === "trainer") trainerScreen.update(snap);
   if (screen === "ride" || screen === "pause") {
@@ -636,6 +677,7 @@ function wire() {
   $<HTMLInputElement>("workout-ftp").onchange = () => {
     ftp = Math.min(600, Math.max(50, Number($<HTMLInputElement>("workout-ftp").value) || 200));
     saveFtp(ftp);
+    api.setFtp(ftp).catch(console.error);
     fillWorkoutEditor();
   };
   $("pause-restart").onclick = () => startRide(selectedRoute).catch(showError);
@@ -721,6 +763,7 @@ async function start() {
   selectedRoute = startup.route;
   fillRouteList();
   await api.onSnapshot(onSnapshot);
+  api.setFtp(ftp).catch(console.error);
   onSnapshot(await api.snapshot());
   const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");
   if (wanted === "workout") openWorkout(fromPreset(PRESETS[0], ftp), -1);

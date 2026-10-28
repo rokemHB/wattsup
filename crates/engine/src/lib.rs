@@ -15,6 +15,7 @@ use tokio::sync::{watch, Mutex as AsyncMutex};
 use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::network::{Junction, Maneuver, Navigator, Network, NetworkInfo, PlannedLeg};
+use wattsup_core::physics::{steady_speed_for_power, RiderParams};
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo};
 use wattsup_core::session::{ControlMode, RideReport, RideSession, SessionConfig, SessionSnapshot, Workout};
@@ -96,7 +97,24 @@ pub struct Navigation {
     pub remaining_climb_m: Option<f64>,
     /// The next junction the plan takes, at any distance.
     pub next: Option<Maneuver>,
+    /// Time to the planned destination from the road profile ahead: at the rider's
+    /// average power so far, or at 70 % of FTP before a minute of riding.
+    pub eta_s: Option<f64>,
+    /// Where the rider's current leg ends; a re-plan (back onto a route) starts there.
+    pub leg_end: Option<RoadPoint>,
 }
+
+/// A point of a road network: the edge and the global point index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoadPoint {
+    pub edge: usize,
+    pub index: usize,
+}
+
+/// Share of FTP a rider is assumed to hold over a whole ride, for the time estimate.
+const ETA_FTP_SHARE: f64 = 0.7;
+/// Seconds of riding before the rider's own average power replaces the FTP guess.
+const ETA_OWN_POWER_AFTER_S: f64 = 60.0;
 
 /// How far ahead the rider is told about a junction.
 const JUNCTION_LOOKAHEAD_M: f64 = 500.0;
@@ -127,6 +145,8 @@ struct Inner {
     junction: Mutex<Option<Junction>>,
     navigation: Mutex<Option<Navigation>>,
     route_version: AtomicU64,
+    /// The rider's FTP in watts, for the time estimate of a planned ride.
+    ftp_w: Mutex<f64>,
 }
 
 const LOG_LINES: usize = 60;
@@ -193,6 +213,7 @@ impl Engine {
             junction: Mutex::new(None),
             navigation: Mutex::new(None),
             route_version: AtomicU64::new(0),
+            ftp_w: Mutex::new(200.0),
         });
         tokio::spawn(event_loop(inner.clone(), rx));
         tokio::spawn(tick_loop(inner.clone(), tick));
@@ -293,6 +314,33 @@ impl Engine {
             self.inner.send_now().await;
         }
         changed
+    }
+
+    /// Re-plans the road ahead of the rider (from the end of the current leg, `Navigation::leg_end`)
+    /// so the ride follows a plan again. The ride itself goes on: distance and stats stay.
+    pub async fn replan_ride(&self, world: &str, name: &str, legs: &[PlannedLeg]) -> Result<(), String> {
+        {
+            let mut nav = self.inner.navigator.lock().unwrap();
+            let nav = nav.as_mut().ok_or("not on a road network")?;
+            if nav.world() != world {
+                return Err(format!("riding {}, not {world}", nav.world()));
+            }
+            let net = Network::builtin(world).ok_or_else(|| format!("no road network for {world}"))?;
+            let distance = self.inner.session.lock().unwrap().snapshot().distance_m;
+            nav.replan(net, distance, name, legs)?;
+            let route = nav.route(net);
+            self.inner.session.lock().unwrap().replace_route(route);
+        }
+        self.inner.route_version.fetch_add(1, Ordering::Relaxed);
+        self.inner.navigate();
+        self.inner.send_now().await;
+        Ok(())
+    }
+
+    /// The rider's FTP, which the time estimate of a planned ride starts from.
+    pub fn set_ftp(&self, watts: f64) {
+        *self.inner.ftp_w.lock().unwrap() = watts.clamp(50.0, 600.0);
+        self.inner.navigate();
     }
 
     /// Turns the rider around on a road network: the road behind becomes the road ahead.
@@ -551,25 +599,38 @@ impl Inner {
         }
         *self.junction.lock().unwrap() = nav.junction(net, distance, JUNCTION_LOOKAHEAD_M);
         let planned = nav.is_planned();
-        let (remaining_m, remaining_climb_m) = if planned {
+        let (remaining_m, remaining_climb_m, eta_s) = if planned {
             let session = self.session.lock().unwrap();
+            let snap = session.snapshot();
             let route = session.route().expect("a navigator has a route");
             let length = route.length_m();
-            // Climbing left: the positive steps from the rider's point to the end.
+            // The rider's own pace once there is one, the FTP guess before.
+            let power = match snap.stats.avg_power_w {
+                Some(p) if snap.stats.moving_s >= ETA_OWN_POWER_AFTER_S => p,
+                _ => ETA_FTP_SHARE * *self.ftp_w.lock().unwrap(),
+            };
+            let speeds = SpeedTable::new(&session.config().rider, power);
+            // Climbing and time left: the steps from the rider's point to the end.
             let from = ((distance / 5.0).floor().max(0.0) as usize).min(route.points.len().saturating_sub(1));
-            let climb: f64 = route.points[from..]
-                .windows(2)
-                .map(|w| (w[1].y - w[0].y).max(0.0))
-                .sum();
-            (Some((length - distance).max(0.0)), Some(climb))
+            let (mut climb, mut eta) = (0.0, 0.0);
+            for w in route.points[from..].windows(2) {
+                let dy = w[1].y - w[0].y;
+                let run = w[1].distance_m - w[0].distance_m;
+                climb += dy.max(0.0);
+                eta += run / speeds.at(dy / run * 100.0);
+            }
+            (Some((length - distance).max(0.0)), Some(climb), Some(eta))
         } else {
-            (None, None)
+            (None, None, None)
         };
+        let (edge, index) = nav.current_leg_end(net, distance);
         *self.navigation.lock().unwrap() = Some(Navigation {
             planned,
             remaining_m,
             remaining_climb_m,
             next: nav.next_maneuver(net, distance),
+            eta_s,
+            leg_end: Some(RoadPoint { edge, index }),
         });
     }
 
@@ -591,6 +652,33 @@ impl Inner {
             s.navigation = navigation;
             s.route_version = route_version;
         });
+    }
+}
+
+/// Steady speed at one power for every whole-percent grade, so a route's time
+/// estimate costs one lookup per point instead of a root search.
+struct SpeedTable {
+    mps: Vec<f64>,
+}
+
+impl SpeedTable {
+    const MIN_GRADE: i64 = -25;
+    const MAX_GRADE: i64 = 25;
+
+    fn new(rider: &RiderParams, power_w: f64) -> Self {
+        let mps = (Self::MIN_GRADE..=Self::MAX_GRADE)
+            .map(|g| steady_speed_for_power(rider, power_w, g as f64).max(0.5))
+            .collect();
+        Self { mps }
+    }
+
+    fn at(&self, grade_pct: f64) -> f64 {
+        let g = if grade_pct.is_finite() {
+            grade_pct.round() as i64
+        } else {
+            0
+        };
+        self.mps[(g.clamp(Self::MIN_GRADE, Self::MAX_GRADE) - Self::MIN_GRADE) as usize]
     }
 }
 
@@ -808,6 +896,16 @@ mod tests {
         assert!(nav.planned);
         assert!(nav.remaining_m.unwrap() > 100.0 && nav.remaining_m.unwrap() <= route.length_m());
         assert!(nav.remaining_climb_m.is_some());
+        // The time estimate follows the FTP guess before a minute of riding, then the rider's pace.
+        let eta = nav.eta_s.expect("a time estimate");
+        assert!(eta > 10.0 && eta < 600.0, "{eta}");
+        assert_eq!(
+            nav.leg_end,
+            Some(RoadPoint {
+                edge: ma10,
+                index: net.edges[ma10].start + 40
+            })
+        );
         ride(600).await;
         assert!(
             engine.snapshot().session.finished,

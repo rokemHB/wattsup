@@ -46,6 +46,7 @@ export class TrainerScreen {
     ftp.onchange = () => {
       this.ftp = Math.min(600, Math.max(50, Number(ftp.value) || this.ftp));
       saveFtp(this.ftp);
+      api.setFtp(this.ftp).catch(console.error);
       this.renderSetup();
     };
     $("trainer-minus").onclick = () => this.bias(-5);

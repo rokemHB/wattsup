@@ -121,9 +121,16 @@ rides the same edge back (a free ride from there); `choose` with an edge other
 than the planned one, and `turn_around`, call `leave_plan` (planned=false, the
 route name falls back to the road ref). `EngineSnapshot.navigation` carries
 `planned`, `remaining_m`, `remaining_climb_m` and the next planned `Maneuver`
-(any distance; `junction` stays the 500 m prompt). The HUD panel is in
-`hud.ts` (`updateNavigation`), the arrows in `ui/src/nav.ts`; `main.ts` turns
-`plannedRide` off and shows the notice when `navigation.planned` flips.
+(any distance; `junction` stays the 500 m prompt), `eta_s` (the remaining
+profile at the rider's average power, or `ETA_FTP_SHARE` × FTP from
+`set_ftp` before a minute; a `SpeedTable` per whole-percent grade) and
+`leg_end` (where the rider's current leg, or the turn they chose ahead, ends:
+`Navigator::committed`). The HUD panel is in `hud.ts` (`updateNavigation`),
+the arrows in `ui/src/nav.ts`. When `navigation.planned` flips, `main.ts`
+routes from `leg_end` to the plan's destination with the TS `Router` and
+hands the legs to `replan_ride` (`Navigator::replan` keeps the ride going:
+distance and stats stay); only when that fails does `plannedRide` end with
+the notice.
 
 The session accumulates `RideStats` and one-second `RideSample`s (`account()`
 in `session.rs`, reset with the ride); `Engine::ride_report()` hands them out

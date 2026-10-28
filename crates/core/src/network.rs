@@ -405,6 +405,9 @@ pub struct Navigator {
     /// A route planned on the map: it ends where it ends instead of growing ahead of the rider.
     planned: bool,
     name: Option<String>,
+    /// The last leg the rider chose on purpose (a turn taken, a turn-around): a re-plan
+    /// starts after it, not before, so their choice stands.
+    committed: usize,
 }
 
 /// Keep at least this much road planned ahead of the rider.
@@ -425,6 +428,7 @@ impl Navigator {
             spacing: 5.0,
             planned: false,
             name: None,
+            committed: 0,
         };
         nav.extend(net, PLAN_AHEAD_M * 2.0);
         nav
@@ -433,6 +437,58 @@ impl Navigator {
     /// A route planned on the map: `legs` must index the network and join end to start.
     /// The ride finishes at the last leg's end instead of growing ahead of the rider.
     pub fn planned(world: &str, net: &Network, name: &str, legs: &[PlannedLeg]) -> Result<Self, String> {
+        let out = Self::legs_from(net, legs, None)?;
+        if out.iter().map(|l| l.points(net).count()).sum::<usize>() < 2 {
+            return Err("a route of a single point".into());
+        }
+        Ok(Self {
+            world: world.to_string(),
+            legs: out,
+            spacing: 5.0,
+            planned: true,
+            name: Some(name.to_string()),
+            committed: 0,
+        })
+    }
+
+    /// Re-plans the road ahead while riding: the legs from the end of the rider's current leg on.
+    /// The ride then follows a plan again (after a wrong turn, back onto the planned route).
+    pub fn replan(&mut self, net: &Network, distance_m: f64, name: &str, legs: &[PlannedLeg]) -> Result<(), String> {
+        let li = self.committed_leg(net, distance_m);
+        let out = Self::legs_from(net, legs, Some(&self.legs[li]))?;
+        self.legs.truncate(li + 1);
+        self.legs.extend(out);
+        self.planned = true;
+        self.name = Some(name.to_string());
+        self.committed = li;
+        Ok(())
+    }
+
+    /// The leg a re-plan continues from: the rider's current leg, or the one they chose ahead.
+    fn committed_leg(&self, net: &Network, distance_m: f64) -> usize {
+        self.current_leg(net, distance_m)
+            .max(self.committed)
+            .min(self.legs.len() - 1)
+    }
+
+    /// The leg the rider is on at `distance_m` (the last one once past the end).
+    fn current_leg(&self, net: &Network, distance_m: f64) -> usize {
+        let ends = self.leg_ends(net);
+        (0..self.legs.len())
+            .find(|&i| ends[i] >= distance_m)
+            .unwrap_or(self.legs.len() - 1)
+    }
+
+    /// Where the rider's current leg (or the turn they chose ahead) ends: the edge and the
+    /// global point index, where a new plan can start.
+    pub fn current_leg_end(&self, net: &Network, distance_m: f64) -> (usize, usize) {
+        let leg = &self.legs[self.committed_leg(net, distance_m)];
+        (leg.edge, net.edges[leg.edge].start + leg.to_index)
+    }
+
+    /// Checks planned legs: they index the network, run the way they say and join end to start
+    /// (and, if given, start where `after` ends).
+    fn legs_from(net: &Network, legs: &[PlannedLeg], after: Option<&Leg>) -> Result<Vec<Leg>, String> {
         if legs.is_empty() {
             return Err("an empty route".into());
         }
@@ -451,27 +507,18 @@ impl Navigator {
                 from_index: l.from,
                 to_index: l.to,
             };
-            if let Some(prev) = out.last() {
+            if let Some(prev) = out.last().or(after) {
                 let prev: &Leg = prev;
                 let end = *prev.points(net).last().unwrap();
                 let start = *leg.points(net).next().unwrap();
                 let gap = ((end[0] - start[0]) as f64).hypot((end[2] - start[2]) as f64);
                 if gap > 1.0 {
-                    return Err(format!("leg {k} starts {gap:.0} m from where leg {} ends", k - 1));
+                    return Err(format!("leg {k} starts {gap:.0} m from where the leg before ends"));
                 }
             }
             out.push(leg);
         }
-        if out.iter().map(|l| l.points(net).count()).sum::<usize>() < 2 {
-            return Err("a route of a single point".into());
-        }
-        Ok(Self {
-            world: world.to_string(),
-            legs: out,
-            spacing: 5.0,
-            planned: true,
-            name: Some(name.to_string()),
-        })
+        Ok(out)
     }
 
     pub fn is_planned(&self) -> bool {
@@ -696,6 +743,7 @@ impl Navigator {
             from_index: index,
             to_index: if leg.forward { 0 } else { n - 1 },
         });
+        self.committed = li + 1;
         self.leave_plan();
         self.extend(net, PLAN_AHEAD_M * 2.0);
     }
@@ -724,6 +772,7 @@ impl Navigator {
         self.legs.truncate(li + 1);
         let forward = net.edges[edge].a == node;
         self.legs.push(Leg::full(net, edge, forward));
+        self.committed = li + 1;
         self.extend(net, PLAN_AHEAD_M * 2.0);
         true
     }
@@ -972,6 +1021,40 @@ mod tests {
         let route = nav.route(&net);
         assert!(route.length_m() > 100.0);
         assert_eq!(route.name, "Ma-10");
+        // Re-planning: the turn the rider chose stands, so the new plan starts where that
+        // road (edge 1, to node 3) ends; from there it is back along it and up the branch.
+        let (edge, index) = nav.current_leg_end(&net, 10.0);
+        assert_eq!(edge, 1);
+        assert_eq!(index, net.edges[1].start + net.edges[1].count - 1);
+        let back = [
+            PlannedLeg {
+                edge: 1,
+                forward: false,
+                from: 10,
+                to: 0,
+            },
+            PlannedLeg {
+                edge: 2,
+                forward: true,
+                from: 0,
+                to: 5,
+            },
+        ];
+        nav.replan(&net, 10.0, "to the north again", &back).unwrap();
+        assert!(nav.is_planned());
+        let route = nav.route(&net);
+        assert_eq!(route.name, "to the north again");
+        assert!((route.length_m() - 300.0).abs() < 6.0, "{}", route.length_m());
+        // Past the chosen road the current leg counts again.
+        assert_eq!(nav.current_leg_end(&net, 260.0).0, 2);
+        // A plan that does not start where the current leg ends is refused.
+        let far = [PlannedLeg {
+            edge: 2,
+            forward: true,
+            from: 3,
+            to: 5,
+        }];
+        assert!(nav.replan(&net, 10.0, "x", &far).is_err());
         // Bad plans are refused.
         assert!(Navigator::planned("t", &net, "x", &[]).is_err());
         assert!(Navigator::planned(

@@ -9,9 +9,9 @@ Open items, roughly in the order they are worth doing.
 - [ ] Trees and bushes as real models instead of primitives; place them from the aerial photo as now.
 - [ ] Parapet floats where the road bridges itself at the Nus de sa Corbata.
 - [ ] Rider model: face, better jersey, a proper helmet.
-- [ ] Rider model: the saddle clips into the rider's backside (seen on the island, chase camera); move the pelvis up or the saddle down and check the chase and side cameras.
-- [ ] HUD: the junction prompt sits in the middle of the view and hides the road; move it to the top right, under the tiles, and make it smaller (smaller arrows and text, two options side by side still readable from the bike). The navigation panel can stay left but should not overlap the road ahead either.
-- [ ] Bike through curves: it slides sideways at times instead of following the road; the pose from the route sampler and the rider's smoothed distance should turn the bike along the tangent (yaw from the route heading, lean into the curve), check hairpins at 8620 on Sa Calobra and the Sóller junction.
+- [x] Rider model: the saddle clipped into the rider's backside; the saddle is lower, the pelvis sits on it.
+- [x] HUD: the junction prompt sits top right under the tiles, smaller, the road ahead clear.
+- [x] Bike through curves: yaw from the route tangent at the bike's own position, lean from the curvature (v²/gr); no more lagging heading.
 - [ ] Settings: remember the chosen route and camera, a "forget device" action.
 - [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
 - [x] Ride records: totals and one-second samples stored per ride, the Rides screen with weekly totals and graphs.
@@ -19,7 +19,7 @@ Open items, roughly in the order they are worth doing.
 - [ ] Trainer mode: a Hyprland window rule (or a separate small window) so "Small window" floats by itself; optional free-ERG without a workout (set watts, no clock).
 - [ ] Strava, like Zwift does it: keep x,z in the ride samples (lat/lon from the world origin at export time), write a TCX with power/HR/cadence (Garmin extension), an "Export TCX" button on the Rides screen; then the Strava API: Robin registers an API app (client id + secret, single-athlete mode is enough), OAuth once via the browser with a localhost redirect, refresh token in the app data folder, upload as VirtualRide with the trainer flag and "WattsUp" as creator, poll the upload status. Check whether real-road coordinates match real segments; fall back to no positions if they do.
 - [x] Turn around while riding (U); manual turns on a planned route end the plan; navigation panel with the next turn, distance and climbing left, time left and arrival.
-- [ ] Navigation: re-route back onto the plan after a wrong turn instead of ending it; the time left from the rider's FTP before a minute of riding.
+- [x] Navigation: a wrong turn re-routes from the end of the chosen road back to the destination; the time left comes from the road profile ahead at the rider's average power (70 % of FTP before a minute).
 - [ ] Multiplayer, later. The plan: a relay server crate (tokio + WebSockets, message types in core so client and server share them, JSON first), clients send their own state a few times a second (world, edge, distance, speed, power, cadence, HR, name, jersey) and get the others in their world back; physics stays on each client; the engine gets a multiplayer module and puts the others into the snapshot; the UI draws them instanced with names and slides them along the road between updates; drafting in core once neighbours are known. Hosting on a rented VPS behind Caddy (Robin does not want ports open at home; the NAS stays closed). Nothing in the current design blocks it: keep the physics in core deterministic and rider state expressible as edge + distance.
 - [x] The Tramuntana as a road network: Ma-10 and the known climbs, tunnels, map with a start picker, turns, signs, terrain download.
 - [x] Route planner on the map (komoot-like): start, destination, waypoints, auto-routing, drag the line to reroute, saved routes in the menu.

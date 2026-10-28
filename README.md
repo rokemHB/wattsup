@@ -35,8 +35,11 @@ road and pick turns as you go. Terrain and imagery stream in around you (and
 are cached on disk), direction signs stand at every junction, and a prompt
 500 m before each junction lets you choose the turn with the arrow keys, and U
 turns you around wherever you are. A route planned on the map adds a navigation
-panel (next turn, distance and climbing left, time left and arrival); take
-another turn or turn around and the plan ends: the road goes on as a free ride.
+panel (next turn, distance and climbing left, time left and arrival, the time
+from the road profile ahead at your average power, or at 70 % of your FTP
+before a minute of riding); take another turn or turn around and the plan is
+re-routed from the end of the road you chose back to the destination, or, when
+there is no way, the plan ends and the road goes on as a free ride.
 Every ride is kept on disk (totals plus one-second samples, under the app's
 data folder) and the Rides screen shows them week by week with power, heart
 rate and elevation graphs.

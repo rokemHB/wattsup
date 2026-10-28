@@ -1,6 +1,6 @@
 // The ride overlay: live numbers and the elevation profile with the rider's position.
 import { duration, num } from "./format";
-import { clockAfter, maneuverIcon, shortDistance, shortDuration, timeLeft } from "./nav";
+import { clockAfter, maneuverIcon, shortDistance, shortDuration } from "./nav";
 import type { EngineSnapshot, Workout } from "./types";
 import type { RouteSampler } from "./world/route";
 
@@ -73,7 +73,7 @@ export class Hud {
     $("hud-nav-dist").textContent = `in ${shortDistance(next ? next.at_m - s.distance_m : remaining)}`;
     $("hud-nav-remaining").textContent = shortDistance(remaining);
     $("hud-nav-climb").textContent = `${Math.round(nav.remaining_climb_m ?? 0)} m`;
-    const left = timeLeft(remaining, s.stats.avg_speed_kmh, s.stats.moving_s);
+    const left = nav.eta_s;
     $("hud-nav-eta").textContent = left === null ? "–" : shortDuration(left);
     $("hud-nav-arrival").textContent = left === null ? "–" : clockAfter(left);
     const length = this.sampler.length || 1;

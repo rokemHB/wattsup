@@ -141,6 +141,16 @@ async fn start_planned_ride(
 }
 
 #[tauri::command]
+async fn replan_ride(state: State<'_, AppState>, world: String, name: String, legs: Vec<PlannedLeg>) -> CmdResult<()> {
+    state.engine.replan_ride(&world, &name, &legs).await
+}
+
+#[tauri::command]
+fn set_ftp(state: State<'_, AppState>, watts: f64) {
+    state.engine.set_ftp(watts);
+}
+
+#[tauri::command]
 async fn choose_turn(state: State<'_, AppState>, edge: usize) -> CmdResult<bool> {
     Ok(state.engine.choose_turn(edge).await)
 }
@@ -336,6 +346,8 @@ fn main() {
             network_points,
             start_on_network,
             start_planned_ride,
+            replan_ride,
+            set_ftp,
             choose_turn,
             turn_around,
             save_ride,

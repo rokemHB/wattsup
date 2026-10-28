@@ -147,6 +147,10 @@ export interface Navigation {
   remaining_m: number | null;
   remaining_climb_m: number | null;
   next: Maneuver | null;
+  /** Time to the destination from the profile ahead, at the rider's average power (70 % of FTP before a minute). */
+  eta_s: number | null;
+  /** Where the current leg ends: a re-plan starts there. */
+  leg_end: { edge: number; index: number } | null;
 }
 
 export interface EngineSnapshot {

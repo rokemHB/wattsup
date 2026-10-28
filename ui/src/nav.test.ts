@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { clockAfter, maneuverIcon, shortDistance, shortDuration, timeLeft } from "./nav";
+import { clockAfter, maneuverIcon, shortDistance, shortDuration } from "./nav";
 
 describe("navigation arithmetic", () => {
-  it("estimates the time left from the moving average, once there is one", () => {
-    expect(timeLeft(10000, 20, 30)).toBeNull();
-    expect(timeLeft(10000, 2, 600)).toBeNull();
-    expect(timeLeft(10000, 20, 600)).toBeCloseTo(1800, 0);
-  });
-
   it("formats distances and durations for a glance", () => {
     expect(shortDistance(843)).toBe("840 m");
     expect(shortDistance(12345)).toBe("12.3 km");
