@@ -9,6 +9,8 @@ import type {
   DeviceKind,
   EngineSnapshot,
   NetworkInfo,
+  RideRecord,
+  RideSummary,
   Route,
   RouteInfo,
   ScanResult,
@@ -33,6 +35,13 @@ export const api = {
   /** A ride along legs planned on the map (see `routing.ts`); the ride finishes at the last leg's end. */
   startPlannedRide: (world: string, name: string, legs: PlannedLeg[]) => invoke<void>("start_planned_ride", { world, name, legs }),
   chooseTurn: (edge: number) => invoke<boolean>("choose_turn", { edge }),
+  /** Turns the rider around on the road network; false when not on one. */
+  turnAround: () => invoke<boolean>("turn_around"),
+  /** Stores the ride so far on disk and answers its summary. */
+  saveRide: () => invoke<RideSummary>("save_ride"),
+  rides: () => invoke<RideSummary[]>("rides"),
+  ride: (id: string) => invoke<RideRecord>("ride", { id }),
+  deleteRide: (id: string) => invoke<void>("delete_ride", { id }),
   /** Map data bytes through the app's disk cache. */
   fetchCached: (url: string) => invoke<ArrayBuffer>("fetch_cached", { url }),
   /** Downloads a map data URL into the disk cache without sending it to the UI; answers its size in bytes. */

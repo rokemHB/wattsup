@@ -11,7 +11,10 @@ Open items, roughly in the order they are worth doing.
 - [ ] Rider model: face, better jersey, a proper helmet.
 - [ ] Settings: remember the chosen route and camera, a "forget device" action.
 - [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
-- [ ] Ride recording to FIT or TCX for Strava.
+- [x] Ride records: totals and one-second samples stored per ride, the Rides screen with weekly totals and graphs.
+- [ ] Export a stored ride to FIT or TCX for Strava (the samples are already on disk).
+- [x] Turn around while riding (U); manual turns on a planned route end the plan; navigation panel with the next turn, distance and climbing left, time left and arrival.
+- [ ] Navigation: re-route back onto the plan after a wrong turn instead of ending it; the time left from the rider's FTP before a minute of riding.
 - [ ] Multiplayer over a WebSocket server (engine snapshots in, other riders out).
 - [x] The Tramuntana as a road network: Ma-10 and the known climbs, tunnels, map with a start picker, turns, signs, terrain download.
 - [x] Route planner on the map (komoot-like): start, destination, waypoints, auto-routing, drag the line to reroute, saved routes in the menu.

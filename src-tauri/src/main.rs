@@ -16,11 +16,14 @@ use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo, BUILTIN_ROUTES};
 use wattsup_core::session::{ControlMode, Workout};
 use wattsup_devices::{DeviceId, DeviceKind};
+use wattsup_engine::rides::{RideRecord, RideStore, RideSummary};
 use wattsup_engine::{Engine, EngineConfig, EngineSnapshot, ScanResult};
 
 struct AppState {
     engine: Engine,
     startup: StartupInfo,
+    /// Rides on disk: `<app data dir>/rides`.
+    rides: RideStore,
 }
 
 /// How the app was started, shown on the debug screen.
@@ -138,6 +141,38 @@ async fn start_planned_ride(
 #[tauri::command]
 async fn choose_turn(state: State<'_, AppState>, edge: usize) -> CmdResult<bool> {
     Ok(state.engine.choose_turn(edge).await)
+}
+
+#[tauri::command]
+async fn turn_around(state: State<'_, AppState>) -> CmdResult<bool> {
+    Ok(state.engine.turn_around().await)
+}
+
+/// Stores the ride so far (its totals and one-second samples) and answers its summary.
+#[tauri::command]
+fn save_ride(state: State<'_, AppState>) -> CmdResult<RideSummary> {
+    let report = state.engine.ride_report();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let started_at_ms = now_ms.saturating_sub((report.elapsed_s * 1000.0) as u64);
+    state.rides.save(report, started_at_ms)
+}
+
+#[tauri::command]
+fn rides(state: State<'_, AppState>) -> Vec<RideSummary> {
+    state.rides.list()
+}
+
+#[tauri::command]
+fn ride(state: State<'_, AppState>, id: String) -> CmdResult<RideRecord> {
+    state.rides.load(&id)
+}
+
+#[tauri::command]
+fn delete_ride(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.rides.delete(&id)
 }
 
 #[tauri::command]
@@ -262,9 +297,15 @@ fn main() {
                     }
                 });
             }
+            let rides = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("wattsup"))
+                .join("rides");
             app.manage(AppState {
                 engine,
                 startup: startup.clone(),
+                rides: RideStore::new(rides),
             });
             app.manage(tiles::Tiles::new(app.handle()));
             Ok(())
@@ -283,6 +324,11 @@ fn main() {
             start_on_network,
             start_planned_ride,
             choose_turn,
+            turn_around,
+            save_ride,
+            rides,
+            ride,
+            delete_ride,
             tiles::fetch_cached,
             tiles::cache_fetch,
             scan,

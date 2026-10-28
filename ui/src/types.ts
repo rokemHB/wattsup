@@ -45,6 +45,52 @@ export interface SessionSnapshot {
   last_command: TrainerCommand | null;
   last_command_age_s: number | null;
   measured_drive_ratio: number | null;
+  stats: RideStats;
+}
+
+/** Totals of the ride so far (crates/core/src/session.rs `RideStats`). */
+export interface RideStats {
+  moving_s: number;
+  distance_m: number;
+  ascent_m: number;
+  descent_m: number;
+  avg_power_w: number | null;
+  max_power_w: number;
+  normalized_power_w: number | null;
+  avg_heart_rate_bpm: number | null;
+  max_heart_rate_bpm: number;
+  avg_cadence_rpm: number | null;
+  avg_speed_kmh: number;
+  energy_kj: number;
+}
+
+/** One second of a ride. */
+export interface RideSample {
+  t_s: number;
+  distance_m: number;
+  elevation_m: number;
+  grade_pct: number;
+  speed_kmh: number;
+  power_w: number | null;
+  cadence_rpm: number | null;
+  heart_rate_bpm: number | null;
+}
+
+/** A stored ride as the list shows it (crates/engine/src/rides.rs). */
+export interface RideSummary {
+  id: string;
+  started_at_ms: number;
+  route: string;
+  world: string | null;
+  workout: string | null;
+  finished: boolean;
+  elapsed_s: number;
+  stats: RideStats;
+}
+
+export interface RideRecord {
+  summary: RideSummary;
+  samples: RideSample[];
 }
 
 export type ConnectionState =
@@ -86,6 +132,23 @@ export interface Junction {
   options: TurnOption[];
 }
 
+/** The next junction a planned route takes, however far ahead. */
+export interface Maneuver {
+  at_m: number;
+  turn: Turn;
+  ref: string | null;
+  to: string[];
+}
+
+/** Where a network ride is going. */
+export interface Navigation {
+  /** The ride follows a route planned on the map; false once the rider has left it. */
+  planned: boolean;
+  remaining_m: number | null;
+  remaining_climb_m: number | null;
+  next: Maneuver | null;
+}
+
 export interface EngineSnapshot {
   session: SessionSnapshot;
   devices: DeviceStatus[];
@@ -93,6 +156,7 @@ export interface EngineSnapshot {
   log: LogLine[];
   route_version: number;
   junction: Junction | null;
+  navigation: Navigation | null;
 }
 
 export interface Sign {

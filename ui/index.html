@@ -29,6 +29,7 @@
         </div>
         <nav class="menu-nav">
           <button id="menu-ride" class="primary">Ride</button>
+          <button id="menu-rides">Rides</button>
           <button id="menu-rider">Rider</button>
           <button id="menu-settings">Settings</button>
           <button id="menu-quit">Quit</button>
@@ -40,6 +41,21 @@
         <h2 class="spaced">Workouts</h2>
         <div id="workout-list" class="route-list"></div>
         <button id="menu-new-workout" class="small">New workout</button>
+      </div>
+    </section>
+
+    <!-- Rides: what was ridden, with graphs -->
+    <section id="screen-rides" class="screen panel wide" hidden>
+      <header class="panel-head"><h2>Rides</h2><span class="row"><button class="back" data-back>Back</button></span></header>
+      <div class="panel-body rides-body">
+        <div class="rides-main">
+          <div class="rides-left">
+            <div id="rides-totals" class="totals"></div>
+            <canvas id="rides-weeks" class="rides-weeks"></canvas>
+            <div id="rides-list" class="rides-list"></div>
+          </div>
+          <div id="rides-detail" class="rides-detail"></div>
+        </div>
       </div>
     </section>
 
@@ -177,8 +193,25 @@
         <div class="tile gear"><label>Gear</label><b id="hud-gear">–</b><small id="hud-gear-ratio"></small></div>
         <div class="tile rider-badge"><span class="avatar" id="hud-avatar">🚴</span><b id="hud-name">Rider</b></div>
       </div>
-      <div class="hud-route">
-        <b id="hud-route-name"></b><span class="lap"> · lap <span id="hud-lap">1</span></span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+      <div class="hud-route-row">
+        <div class="hud-route">
+          <b id="hud-route-name"></b><span class="lap"> · lap <span id="hud-lap">1</span></span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+        </div>
+        <button id="hud-uturn" class="uturn" title="Turn around (U)" hidden><span class="arrow"></span>Turn around</button>
+        <span id="hud-notice" class="hud-notice" hidden></span>
+      </div>
+      <div id="hud-nav" class="hud-nav" hidden>
+        <div class="nav-turn">
+          <span id="hud-nav-icon" class="nav-icon"></span>
+          <div class="nav-text"><b id="hud-nav-dist">in 1.2 km</b><span id="hud-nav-road">Ma-10 · Sóller</span></div>
+        </div>
+        <div class="nav-values">
+          <div><label>To go</label><b id="hud-nav-remaining">12.4 km</b></div>
+          <div><label>Climb left</label><b id="hud-nav-climb">420 m</b></div>
+          <div><label>Time left</label><b id="hud-nav-eta">38 min</b></div>
+          <div><label>Arrival</label><b id="hud-nav-arrival">14:32</b></div>
+        </div>
+        <div class="nav-progress"><div id="hud-nav-bar"></div></div>
       </div>
       <div id="hud-offline" class="hud-offline" hidden>
         <b>Trainer connection lost</b><span>Reconnecting… the ride is held: no distance, no clock, until the trainer is back.</span>
@@ -196,7 +229,7 @@
         <div class="hud-profile"><canvas id="profile"></canvas></div>
       </div>
       <div class="hud-hints">
-        <span>Esc menu · ↑ ↓ shift · C camera · F11 fullscreen · <span id="fps"></span> <span id="hud-tiles" class="hint"></span><br /><span id="attribution" class="attribution"></span></span>
+        <span>Esc menu · ↑ ↓ shift · ← → turn · U turn around · C camera · F11 fullscreen · <span id="fps"></span> <span id="hud-tiles" class="hint"></span><br /><span id="attribution" class="attribution"></span></span>
         <label class="hud-control">
           <input type="checkbox" id="auto-shift" /> Auto shift (A) at
           <input type="number" id="target-cadence" min="50" max="130" step="1" value="88" /> rpm

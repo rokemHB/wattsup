@@ -102,6 +102,25 @@ once per animation frame, `NetworkIndex.nearest` searches in rings and stops
 early. Measured: a route of 10k points costs ~1 ms to compute, ~1.5 ms to
 draw.
 
+## Navigation and ride records
+
+`Navigator::turn_around` cuts the legs at the rider's nearest road point and
+rides the same edge back (a free ride from there); `choose` with an edge other
+than the planned one, and `turn_around`, call `leave_plan` (planned=false, the
+route name falls back to the road ref). `EngineSnapshot.navigation` carries
+`planned`, `remaining_m`, `remaining_climb_m` and the next planned `Maneuver`
+(any distance; `junction` stays the 500 m prompt). The HUD panel is in
+`hud.ts` (`updateNavigation`), the arrows in `ui/src/nav.ts`; `main.ts` turns
+`plannedRide` off and shows the notice when `navigation.planned` flips.
+
+The session accumulates `RideStats` and one-second `RideSample`s (`account()`
+in `session.rs`, reset with the ride); `Engine::ride_report()` hands them out
+and `wattsup_engine::rides::RideStore` files them as `<app data dir>/rides/
+ride-<unix ms>.json` plus `index.json` (rebuilt from the files if lost). The UI
+stores a ride through `api.saveRide()` when it ends or is replaced
+(`storeRide()` in `main.ts`: 500 m and a minute of moving at least); the Rides
+screen is `ui/src/rides.ts`.
+
 ## Gotchas
 
 - `node_modules` must never be symlinked into a git worktree of this repo.

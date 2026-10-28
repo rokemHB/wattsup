@@ -7,16 +7,18 @@ import { duration, isTypingTarget, num, shiftForKey } from "./format";
 import { drawWorkout, Hud } from "./hud";
 import { loadPlans, MapScreen, type RoadSpot, type SavedPlan } from "./map";
 import { Minimap, type NetworkView } from "./minimap";
+import { maneuverIcon } from "./nav";
+import { RidesScreen } from "./rides";
 import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfile } from "./profile";
 import type { PlannedPath } from "./routing";
-import type { EngineSnapshot, Junction, Route, RouteInfo, Turn, Workout } from "./types";
+import type { EngineSnapshot, Junction, Route, RouteInfo, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 
-type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "ride" | "pause" | "finish";
+type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "ride" | "pause" | "finish";
 
 let screen: Screen = "start";
 let cameFrom: Screen = "menu";
@@ -43,16 +45,19 @@ let networkIndex: NetworkIndex | null = null;
 let networkWorld: NetworkWorldData | null = null;
 let routeVersion = -1;
 let lastJunctionKey = "";
-const stats = { samples: 0, power: 0, hr: 0, hrSamples: 0 };
+/** A ride is under way (shown at least once) and not yet stored. */
+let rideOpen = false;
+const ridesScreen = new RidesScreen();
 
 // --- screens -----------------------------------------------------------------
 
 function show(next: Screen) {
-  if (next === "settings" || next === "rider" || next === "workout" || next === "map") cameFrom = screen === "pause" ? "pause" : "menu";
+  if (next === "settings" || next === "rider" || next === "workout" || next === "map" || next === "rides") cameFrom = screen === "pause" ? "pause" : "menu";
   if (next === "rider") draft = { ...profile };
   screen = next;
-  for (const s of ["start", "menu", "rider", "settings", "workout", "map", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
+  for (const s of ["start", "menu", "rider", "settings", "workout", "map", "rides", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
   if (next === "map") mapScreen.scheduleDraw();
+  if (next === "rides") ridesScreen.open().catch(showError);
   if (next === "pause") $("pause-end-workout").hidden = !activeWorkout;
   if (next === "menu") fillWorkoutList();
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
@@ -302,8 +307,18 @@ async function downloadTerrain() {
   text.textContent = cancelled ? "Download stopped. Click again to continue; what is already here stays." : failed ? `Done, but ${failed} files could not be fetched. Click again to retry them.` : "All terrain is on disk. Rides in this region work offline now.";
 }
 
+/** Keeps the ride on disk if it was one: 500 m and a minute of moving at least. Called before a ride is over or replaced. */
+async function storeRide() {
+  if (!rideOpen) return;
+  rideOpen = false;
+  const s = latest?.session.stats;
+  if (!s || s.distance_m < 500 || s.moving_s < 60) return;
+  await api.saveRide();
+}
+
 /** A free ride from a road point, toward the edge's end if `forward`. */
 async function startNetworkRide(at: RoadSpot, forward: boolean) {
+  await storeRide();
   await endWorkout();
   plannedRide = false;
   await api.startOnNetwork(NETWORK_WORLD, at.x, at.z, forward);
@@ -312,6 +327,7 @@ async function startNetworkRide(at: RoadSpot, forward: boolean) {
 
 /** A ride along a route planned on the map. */
 async function startPlannedRide(path: PlannedPath, name: string, start: RoadSpot) {
+  await storeRide();
   await endWorkout();
   plannedRide = true;
   await api.startPlannedRide(NETWORK_WORLD, name, path.legs);
@@ -337,12 +353,10 @@ async function beginNetworkRide(at: { x: number; z: number }) {
     $("loading").hidden = true;
   }
   await api.resetRide();
-  stats.samples = stats.power = stats.hr = stats.hrSamples = 0;
   finishShown = false;
+  rideOpen = true;
   show("ride");
 }
-
-const TURN_ARROWS: Record<Turn, string> = { sharp_left: "↰", left: "←", straight: "↑", right: "→", sharp_right: "↱", u_turn: "↶" };
 
 function renderJunction(j: Junction | null, distance: number) {
   const box = $("hud-junction");
@@ -358,7 +372,9 @@ function renderJunction(j: Junction | null, distance: number) {
   $("hud-junction-options").replaceChildren(
     ...j.options.map((o) => {
       const b = el("button", { className: o.chosen ? "on" : "" });
-      b.append(el("span", { className: "arrow" }, TURN_ARROWS[o.turn]), el("span", { className: "road" }, o.ref ?? (o.to.length ? o.turn.replace("_", " ") : "side road")), el("span", { className: "to" }, o.to.join(" · ")));
+      const arrow = el("span", { className: "arrow" });
+      arrow.innerHTML = maneuverIcon(o.turn);
+      b.append(arrow, el("span", { className: "road" }, o.ref ?? (o.to.length ? o.turn.replace("_", " ") : "side road")), el("span", { className: "to" }, o.to.join(" · ")));
       b.onclick = () => api.chooseTurn(o.edge).catch(showError);
       return b;
     }),
@@ -449,6 +465,7 @@ async function buildWorld() {
 }
 
 async function startRide(id: string) {
+  await storeRide();
   await endWorkout();
   plannedRide = false;
   if (id !== selectedRoute || !world) {
@@ -459,8 +476,8 @@ async function startRide(id: string) {
   }
   // Building the world takes seconds and the trainer keeps going: the ride starts now.
   await api.resetRide();
-  stats.samples = stats.power = stats.hr = stats.hrSamples = 0;
   finishShown = false;
+  rideOpen = true;
   show("ride");
 }
 
@@ -482,20 +499,18 @@ function onSnapshot(snap: EngineSnapshot) {
       })
       .catch(showError);
   }
+  if (plannedRide && snap.navigation && !snap.navigation.planned) {
+    // The rider took another turn or turned around: the plan is over, the road goes on.
+    plannedRide = false;
+    hud?.setWindowed(true);
+    hud?.notice("Off the planned route · free ride from here");
+  }
   if (screen === "ride" || screen === "pause") {
     hud?.update(snap);
     minimap?.update(snap);
     renderJunction(snap.junction, snap.session.distance_m);
     const pending = world?.tiles?.pending ?? 0;
     $("hud-tiles").textContent = pending ? `· loading ${pending} tiles` : "";
-    if (snap.session.power_w !== null) {
-      stats.samples++;
-      stats.power += snap.session.power_w;
-    }
-    if (snap.session.heart_rate_bpm !== null) {
-      stats.hrSamples++;
-      stats.hr += snap.session.heart_rate_bpm;
-    }
     if ((snap.session.finished || snap.session.workout?.done) && !finishShown) {
       finishShown = true;
       showFinish(snap);
@@ -505,17 +520,21 @@ function onSnapshot(snap: EngineSnapshot) {
 
 function showFinish(snap: EngineSnapshot) {
   const s = snap.session;
-  const avgPower = stats.samples ? stats.power / stats.samples : null;
-  const avgHr = stats.hrSamples ? stats.hr / stats.hrSamples : null;
+  const st = s.stats;
   $("finish-title").textContent = activeWorkout ? `${profile.avatar} ${activeWorkout.name}: complete!` : `${profile.avatar} ${route?.name ?? "Ride"}: done!`;
-  endWorkout().catch(showError);
+  // The ride is over: keep it before the workout is stopped or anything else changes.
+  storeRide()
+    .then(() => endWorkout())
+    .catch(showError);
   const item = (label: string, value: string) => [el("span", {}, label), el("b", {}, value)];
   $("finish-stats").replaceChildren(
     ...item("Time", duration(s.elapsed_s)),
-    ...item("Distance", `${(s.distance_m / 1000).toFixed(2)} km`),
-    ...item("Average power", avgPower === null ? "–" : `${num(avgPower)} W`),
-    ...item("Average heart rate", avgHr === null ? "–" : `${num(avgHr)} bpm`),
-    ...item("Average speed", s.elapsed_s > 0 ? `${((s.distance_m / s.elapsed_s) * 3.6).toFixed(1)} km/h` : "–"),
+    ...item("Distance", `${(st.distance_m / 1000).toFixed(2)} km`),
+    ...item("Average power", st.avg_power_w === null ? "–" : `${num(st.avg_power_w)} W${st.normalized_power_w === null ? "" : ` · NP ${num(st.normalized_power_w)}`}`),
+    ...item("Average heart rate", st.avg_heart_rate_bpm === null ? "–" : `${num(st.avg_heart_rate_bpm)} bpm`),
+    ...item("Average speed", `${st.avg_speed_kmh.toFixed(1)} km/h`),
+    ...item("Climbing", `${Math.round(st.ascent_m)} m`),
+    ...item("Energy", `${Math.round(st.energy_kj)} kJ`),
   );
   show("finish");
 }
@@ -526,9 +545,14 @@ function wire() {
   wireDebug();
   $("start-go").onclick = () => show("menu");
   $("menu-ride").onclick = () => startRide(selectedRoute || routes[0]?.id).catch(showError);
+  $("menu-rides").onclick = () => show("rides");
   $("menu-rider").onclick = () => show("rider");
   $("menu-settings").onclick = () => show("settings");
-  $("menu-quit").onclick = () => api.quit().catch(showError);
+  $("menu-quit").onclick = () =>
+    storeRide()
+      .catch(showError)
+      .finally(() => api.quit().catch(showError));
+  $("hud-uturn").onclick = () => api.turnAround().catch(showError);
   // Back buttons: delegated at the document, so they work whatever else happens to the panels.
   document.addEventListener("click", (e) => {
     if ((e.target as Element | null)?.closest?.("[data-back]")) {
@@ -573,7 +597,9 @@ function wire() {
   $("pause-restart").onclick = () => startRide(selectedRoute).catch(showError);
   $("pause-settings").onclick = () => show("settings");
   $("pause-menu").onclick = () => {
-    endWorkout().catch(showError);
+    storeRide()
+      .then(() => endWorkout())
+      .catch(showError);
     show("menu");
   };
   $("finish-again").onclick = () => startRide(selectedRoute).catch(showError);
@@ -613,6 +639,10 @@ function wire() {
       turnKey(e.key === "ArrowLeft" ? -1 : 1);
       return;
     }
+    if (screen === "ride" && (e.key === "u" || e.key === "U")) {
+      api.turnAround().catch(showError);
+      return;
+    }
     const dir = shiftForKey(e.key);
     if (dir) {
       e.preventDefault();
@@ -646,7 +676,7 @@ async function start() {
   onSnapshot(await api.snapshot());
   const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");
   if (wanted === "workout") openWorkout(fromPreset(PRESETS[0], ftp), -1);
-  else show((["start", "menu", "rider", "settings", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
+  else show((["start", "menu", "rider", "settings", "rides", "ride"] as Screen[]).includes(wanted as Screen) ? (wanted as Screen) : "start");
   await buildWorld();
   if (startup.camera && world) world.setCamera(startup.camera);
   scan().catch(showError);

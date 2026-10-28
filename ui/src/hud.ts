@@ -1,5 +1,6 @@
 // The ride overlay: live numbers and the elevation profile with the rider's position.
 import { duration, num } from "./format";
+import { clockAfter, maneuverIcon, shortDistance, shortDuration, timeLeft } from "./nav";
 import type { EngineSnapshot, Workout } from "./types";
 import type { RouteSampler } from "./world/route";
 
@@ -29,6 +30,56 @@ export class Hud {
     this.lastKey = "";
   }
 
+  /** Windowed: the profile shows the road ahead instead of the whole route (free rides). */
+  setWindowed(on: boolean) {
+    this.windowed = on;
+    if (!on) this.profile = this.sampler.profile(400);
+    this.lastKey = "";
+  }
+
+  private noticeUntil = 0;
+
+  /** A line under the route name for a few seconds ("Off the planned route"). */
+  notice(text: string, seconds = 8) {
+    $("hud-notice").textContent = text;
+    this.noticeUntil = performance.now() + seconds * 1000;
+  }
+
+  private navKey = "";
+
+  /** The navigation panel of a planned ride: next turn, what is left, when we get there. */
+  private updateNavigation(snap: EngineSnapshot) {
+    const nav = snap.navigation;
+    const s = snap.session;
+    $("hud-uturn").hidden = !nav;
+    $("hud-notice").hidden = performance.now() > this.noticeUntil;
+    const box = $("hud-nav");
+    if (!nav?.planned) {
+      box.hidden = true;
+      this.navKey = "";
+      return;
+    }
+    box.hidden = false;
+    const next = nav.next;
+    const kind = next ? next.turn : "arrive";
+    const road = next ? [next.ref, ...next.to].filter(Boolean).join(" · ") || "side road" : `Destination · ${this.sampler.route.name}`;
+    const key = `${kind}:${road}`;
+    if (key !== this.navKey) {
+      this.navKey = key;
+      $("hud-nav-icon").innerHTML = maneuverIcon(kind);
+      $("hud-nav-road").textContent = road;
+    }
+    const remaining = nav.remaining_m ?? 0;
+    $("hud-nav-dist").textContent = `in ${shortDistance(next ? next.at_m - s.distance_m : remaining)}`;
+    $("hud-nav-remaining").textContent = shortDistance(remaining);
+    $("hud-nav-climb").textContent = `${Math.round(nav.remaining_climb_m ?? 0)} m`;
+    const left = timeLeft(remaining, s.stats.avg_speed_kmh, s.stats.moving_s);
+    $("hud-nav-eta").textContent = left === null ? "–" : shortDuration(left);
+    $("hud-nav-arrival").textContent = left === null ? "–" : clockAfter(left);
+    const length = this.sampler.length || 1;
+    $("hud-nav-bar").style.width = `${Math.min(100, Math.max(0, (100 * (length - remaining)) / length))}%`;
+  }
+
   private workout: Workout | null = null;
   private workoutKey = "";
 
@@ -41,6 +92,7 @@ export class Hud {
   update(snap: EngineSnapshot) {
     const s = snap.session;
     this.updateWorkout(snap);
+    this.updateNavigation(snap);
     $("hud-offline").hidden = !s.trainer_offline;
     $("hud-power").textContent = num(s.power_w);
     $("hud-cadence").textContent = num(s.cadence_rpm);

@@ -14,15 +14,17 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Mutex as AsyncMutex};
 use tokio::time::Instant;
 use wattsup_core::gearing::ShiftDirection;
-use wattsup_core::network::{Junction, Navigator, Network, NetworkInfo, PlannedLeg};
+use wattsup_core::network::{Junction, Maneuver, Navigator, Network, NetworkInfo, PlannedLeg};
 use wattsup_core::protocol::zwift::Button;
 use wattsup_core::route::{Route, RouteInfo};
-use wattsup_core::session::{ControlMode, RideSession, SessionConfig, SessionSnapshot, Workout};
+use wattsup_core::session::{ControlMode, RideReport, RideSession, SessionConfig, SessionSnapshot, Workout};
 use wattsup_devices::sim::{SimConfig, SimProvider};
 use wattsup_devices::{
     event_channel, ConnectionState, Controller, DeviceError, DeviceEvent, DeviceId, DeviceKind, DeviceProvider,
     DiscoveredDevice, EventReceiver, EventSender, HeartRateMonitor, Trainer,
 };
+
+pub mod rides;
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -79,6 +81,21 @@ pub struct EngineSnapshot {
     pub route_version: u64,
     /// The next junction with a choice, when riding a road network.
     pub junction: Option<Junction>,
+    /// Where the ride is going, when riding a road network.
+    pub navigation: Option<Navigation>,
+}
+
+/// Navigation values for the HUD of a network ride.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Navigation {
+    /// The ride follows a route planned on the map (false once the rider has left it).
+    pub planned: bool,
+    /// Road left to the planned destination.
+    pub remaining_m: Option<f64>,
+    /// Climbing left to the planned destination.
+    pub remaining_climb_m: Option<f64>,
+    /// The next junction the plan takes, at any distance.
+    pub next: Option<Maneuver>,
 }
 
 /// How far ahead the rider is told about a junction.
@@ -108,6 +125,7 @@ struct Inner {
     snapshots: watch::Sender<EngineSnapshot>,
     navigator: Mutex<Option<Navigator>>,
     junction: Mutex<Option<Junction>>,
+    navigation: Mutex<Option<Navigation>>,
     route_version: AtomicU64,
 }
 
@@ -161,6 +179,7 @@ impl Engine {
             log: vec![],
             route_version: 0,
             junction: None,
+            navigation: None,
         };
         let inner = Arc::new(Inner {
             providers,
@@ -172,6 +191,7 @@ impl Engine {
             snapshots: watch::channel(first).0,
             navigator: Mutex::new(None),
             junction: Mutex::new(None),
+            navigation: Mutex::new(None),
             route_version: AtomicU64::new(0),
         });
         tokio::spawn(event_loop(inner.clone(), rx));
@@ -204,6 +224,7 @@ impl Engine {
         let route = Route::builtin(id).ok_or_else(|| format!("unknown route {id}"))?;
         *self.inner.navigator.lock().unwrap() = None;
         *self.inner.junction.lock().unwrap() = None;
+        *self.inner.navigation.lock().unwrap() = None;
         self.inner.session.lock().unwrap().set_route(Some(route));
         self.inner.route_version.fetch_add(1, Ordering::Relaxed);
         self.inner.send_now().await;
@@ -272,6 +293,31 @@ impl Engine {
             self.inner.send_now().await;
         }
         changed
+    }
+
+    /// Turns the rider around on a road network: the road behind becomes the road ahead.
+    /// On a planned route this ends the plan. Returns false when not on a network.
+    pub async fn turn_around(&self) -> bool {
+        {
+            let mut nav = self.inner.navigator.lock().unwrap();
+            let Some(nav) = nav.as_mut() else { return false };
+            let Some(net) = Network::builtin(nav.world()) else {
+                return false;
+            };
+            let distance = self.inner.session.lock().unwrap().snapshot().distance_m;
+            nav.turn_around(net, distance);
+            let route = nav.route(net);
+            self.inner.session.lock().unwrap().replace_route(route);
+        }
+        self.inner.route_version.fetch_add(1, Ordering::Relaxed);
+        self.inner.navigate();
+        self.inner.send_now().await;
+        true
+    }
+
+    /// The ride so far, for storing it (see [`rides::RideStore`]).
+    pub fn ride_report(&self) -> RideReport {
+        self.inner.session.lock().unwrap().report()
     }
 
     pub async fn start_workout(&self, workout: Workout) {
@@ -491,6 +537,27 @@ impl Inner {
             self.route_version.fetch_add(1, Ordering::Relaxed);
         }
         *self.junction.lock().unwrap() = nav.junction(net, distance, JUNCTION_LOOKAHEAD_M);
+        let planned = nav.is_planned();
+        let (remaining_m, remaining_climb_m) = if planned {
+            let session = self.session.lock().unwrap();
+            let route = session.route().expect("a navigator has a route");
+            let length = route.length_m();
+            // Climbing left: the positive steps from the rider's point to the end.
+            let from = ((distance / 5.0).floor().max(0.0) as usize).min(route.points.len().saturating_sub(1));
+            let climb: f64 = route.points[from..]
+                .windows(2)
+                .map(|w| (w[1].y - w[0].y).max(0.0))
+                .sum();
+            (Some((length - distance).max(0.0)), Some(climb))
+        } else {
+            (None, None)
+        };
+        *self.navigation.lock().unwrap() = Some(Navigation {
+            planned,
+            remaining_m,
+            remaining_climb_m,
+            next: nav.next_maneuver(net, distance),
+        });
     }
 
     fn publish(&self) {
@@ -501,12 +568,14 @@ impl Inner {
         };
         let log = self.log.lock().unwrap().1.iter().cloned().collect();
         let junction = self.junction.lock().unwrap().clone();
+        let navigation = self.navigation.lock().unwrap().clone();
         let route_version = self.route_version.load(Ordering::Relaxed);
         self.snapshots.send_modify(|s| {
             s.session = session;
             s.devices = devices;
             s.log = log;
             s.junction = junction;
+            s.navigation = navigation;
             s.route_version = route_version;
         });
     }
@@ -687,6 +756,21 @@ mod tests {
         let s = engine.snapshot();
         assert!(s.session.distance_m > 200.0, "{}", s.session.distance_m);
         assert!(!s.session.finished);
+        assert_eq!(s.navigation.as_ref().map(|n| n.planned), Some(false));
+        // Turn around: the route now doubles back, and the rider rides the same road the other way.
+        let here = s.session.distance_m;
+        let before = engine.route().unwrap();
+        assert!(engine.turn_around().await);
+        let after = engine.route().unwrap();
+        assert!(after.length_m() > here + 1000.0);
+        let back = after.points[((here + 100.0) / 5.0) as usize];
+        let there = before.points[((here - 100.0) / 5.0) as usize];
+        assert!(
+            (back.x - there.x).abs() < 6.0 && (back.z - there.z).abs() < 6.0,
+            "{back:?} vs {there:?}"
+        );
+        ride(30).await;
+        assert!(engine.snapshot().session.distance_m > here + 50.0);
         assert!(engine.network_info("mallorca").is_some());
         assert!(engine.network_points("mallorca").unwrap().len() > 100_000);
         assert!(!engine.choose_turn(usize::MAX).await, "nonsense edges are refused");
@@ -706,12 +790,26 @@ mod tests {
         let route = engine.route().unwrap();
         assert_eq!(route.name, "a short one");
         assert!(route.length_m() < 400.0, "{}", route.length_m());
+        ride(2).await;
+        let nav = engine.snapshot().navigation.expect("navigation on a planned ride");
+        assert!(nav.planned);
+        assert!(nav.remaining_m.unwrap() > 100.0 && nav.remaining_m.unwrap() <= route.length_m());
+        assert!(nav.remaining_climb_m.is_some());
         ride(600).await;
         assert!(
             engine.snapshot().session.finished,
             "the planned ride ends at its destination"
         );
+        let report = engine.ride_report();
+        assert_eq!(report.route, "a short one");
+        assert!(
+            report.finished && report.samples.len() > 100,
+            "{}",
+            report.samples.len()
+        );
         assert!(engine.start_planned_ride("mallorca", "x", &[]).await.is_err());
+        engine.set_route("flat").await.unwrap();
+        assert!(!engine.turn_around().await, "not on a network after set_route");
     }
 
     #[tokio::test(start_paused = true)]
