@@ -9,6 +9,8 @@ Open items, roughly in the order they are worth doing.
 - [ ] Trees and bushes as real models instead of primitives; place them from the aerial photo as now.
 - [ ] Parapet floats where the road bridges itself at the Nus de sa Corbata.
 - [ ] Rider model: face, better jersey, a proper helmet.
+- [ ] Rider model: the saddle clips into the rider's backside (seen on the island, chase camera); move the pelvis up or the saddle down and check the chase and side cameras.
+- [ ] Bike through curves: it slides sideways at times instead of following the road; the pose from the route sampler and the rider's smoothed distance should turn the bike along the tangent (yaw from the route heading, lean into the curve), check hairpins at 8620 on Sa Calobra and the Sóller junction.
 - [ ] Settings: remember the chosen route and camera, a "forget device" action.
 - [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
 - [x] Ride records: totals and one-second samples stored per ride, the Rides screen with weekly totals and graphs.
