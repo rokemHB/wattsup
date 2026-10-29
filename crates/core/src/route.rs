@@ -320,11 +320,20 @@ mod tests {
         let r = Route::builtin("malaga-colmenar").unwrap();
         assert_eq!(r.world.as_deref(), Some("malaga-colmenar"));
         assert!((r.length_m() - 43160.0).abs() < 300.0, "{}", r.length_m());
-        let flat = r.points.iter().filter(|p| p.distance_m < 4900.0).map(|p| p.y).collect::<Vec<_>>();
+        let flat = r
+            .points
+            .iter()
+            .filter(|p| p.distance_m < 4900.0)
+            .map(|p| p.y)
+            .collect::<Vec<_>>();
         assert!(flat.iter().all(|y| (y - flat[0]).abs() < 0.5), "the warm-up is flat");
         let top = r.points.iter().max_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
         assert!(top.y > 900.0 && top.y < 1000.0, "summit at {} m", top.y);
-        assert!(top.distance_m > 24000.0 && top.distance_m < 26500.0, "summit at {} m along", top.distance_m);
+        assert!(
+            top.distance_m > 24000.0 && top.distance_m < 26500.0,
+            "summit at {} m along",
+            top.distance_m
+        );
         let end = r.points.last().unwrap().y;
         assert!(end > 380.0 && end < 450.0, "Riogordo at {end} m");
     }
