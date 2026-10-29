@@ -308,6 +308,14 @@ export function corridorMesh(
       }
       return r;
     });
+    // On the inside of a bend the offsets converge: past the bend's radius they
+    // would cross and the strip fold over itself (pale flat triangles at hairpins).
+    const turn = Math.atan2((p.x - a.x) * (b.z - p.z) - (p.z - a.z) * (b.x - p.x), (p.x - a.x) * (b.x - p.x) + (p.z - a.z) * (b.z - p.z));
+    if (Math.abs(turn) > 0.05) {
+      const radius = l / 2 / Math.abs(turn);
+      const inner = turn > 0 ? 1 : 0; // right turn (x east, z south): the right side is inside
+      reach[inner] = Math.min(reach[inner], Math.max(SHOULDER, radius * 0.9));
+    }
     return { nx, nz, reach };
   });
   // The reach may only change gradually along the road, or the strip tears into long thin triangles.
@@ -798,6 +806,10 @@ export function parapets(pts: Route["points"], heightAt: (x: number, z: number) 
       const inner1 = [q.x + g.nx * offset, q.y + 0.08, q.z + g.nz * offset];
       const outer0 = [p.x + f.nx * (offset + wallW), p.y + 0.08, p.z + f.nz * (offset + wallW)];
       const outer1 = [q.x + g.nx * (offset + wallW), q.y + 0.08, q.z + g.nz * (offset + wallW)];
+      // Inside a tight bend the offset points converge or cross: that piece of wall
+      // would fold flat across the hairpin, so it is left out.
+      const along = (outer1[0] - outer0[0]) * (q.x - p.x) + (outer1[2] - outer0[2]) * (q.z - p.z);
+      if (along < 0.3 * ((q.x - p.x) ** 2 + (q.z - p.z) ** 2)) continue;
       const up = (v: number[]) => [v[0], v[1] + wallH, v[2]];
       const u0 = p.distance_m / 2;
       const u1 = q.distance_m / 2;

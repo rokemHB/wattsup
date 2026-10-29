@@ -155,6 +155,29 @@ def way_length_m(way):
     return sum(math.hypot((b["lon"] - a["lon"]) * EARTH_LON_M * math.cos(lat), (b["lat"] - a["lat"]) * EARTH_LAT_M) for a, b in zip(g, g[1:]))
 
 
+SEA_COLOUR = np.array([70, 74, 85])
+
+
+def harmonise_sea(px):
+    """Pulls the photographed sea toward one colour, so the survey's edge does not show as a lighter band.
+
+    The imagery's open sea is a flat grey; where the tiles end, the painted sea
+    beyond is a darker blue, and the step between them draws the footprint of the
+    survey over the water. Grey-blue pixels of sea brightness are blended to the
+    painted colour, keeping a little of their wave texture; shallow turquoise
+    water near the beaches is more saturated and stays as it is.
+    """
+    p = px.astype(np.float32)
+    r, g, b = p[..., 0], p[..., 1], p[..., 2]
+    sat = p.max(axis=2) - p.min(axis=2)
+    value = p.mean(axis=2)
+    w = np.clip(1 - (sat - 9) / 9, 0, 1) * np.clip(1 - (np.abs(value - 95) - 15) / 10, 0, 1) * (b >= r - 2)
+    grey = np.median(p[w > 0.9], axis=0) if (w > 0.9).any() else SEA_COLOUR
+    out = SEA_COLOUR + 0.3 * (p - grey)
+    p = p + w[..., None] * (out - p)
+    return np.clip(p, 0, 255).astype(np.uint8)
+
+
 def select_roads(ways, refs):
     """The ways carrying one of `refs`, plus the ref-less roundabouts and short links that connect them.
 
@@ -547,7 +570,7 @@ def main():
         sea = ~missing & (px[..., 2] > px[..., 0] + 8) & (px[..., 2] > 40) & (px[..., 2] < 120)
         if sea.any():
             px[missing] = np.median(px[sea], axis=0).astype(np.int16)
-        img = Image.fromarray(px.astype(np.uint8))
+        img = Image.fromarray(harmonise_sea(px.astype(np.uint8)))
         img.save(world_dir / "map.jpg", quality=84, optimize=True)
         print("far ortho and map written")
 
