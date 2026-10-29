@@ -104,7 +104,14 @@ everything per frame is prebuilt (roads and route pieces as `Path2D`, every
 network point's map pixel in `pointPx`), a waypoint drag re-routes at most
 once per animation frame, `NetworkIndex.nearest` searches in rings and stops
 early. Measured: a route of 10k points costs ~1 ms to compute, ~1.5 ms to
-draw.
+draw. Preferences (`RoutePreferences`: "Prefer main roads", avoided edges
+from the click menu) become per-edge cost weights (`edgeWeights`,
+`Router.setWeights`); lengths reported stay real. They are stored in the
+saved plan (`mainRoads`, `avoid` as mid-edge points) and handed to `main.ts`
+with the ride so a re-route after a wrong turn keeps them. "Import GPX…"
+(`ui/src/gpx.ts`): `parseGpx` reads trkpt/rtept/wpt, `matchTrack` turns the
+track into waypoints (first and last road points, then the track point the
+route strays from most until all is within 60 m, then prunes needless ones).
 
 ## Trainer mode
 

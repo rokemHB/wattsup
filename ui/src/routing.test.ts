@@ -1,51 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { elevationGain, Router } from "./routing";
-import type { RoadNetwork } from "./world/network";
-
-/**
- * A square of four roads with a diagonal shortcut and a spur:
- *   0 ---- 1
- *   |  \   |
- *   |   \  |
- *   3 ---- 2 ---- 4
- * Edges: 0: 0→1 (100 m), 1: 1→2 (100 m), 2: 2→3 (100 m), 3: 3→0 (100 m), 4: 0→2 (diagonal, ~141 m), 5: 2→4 (spur, 100 m).
- */
-function square(): RoadNetwork {
-  const nodes = [
-    { x: 0, z: 0 },
-    { x: 100, z: 0 },
-    { x: 100, z: 100 },
-    { x: 0, z: 100 },
-    { x: 200, z: 100 },
-  ];
-  const links: [number, number][] = [
-    [0, 1],
-    [1, 2],
-    [2, 3],
-    [3, 0],
-    [0, 2],
-    [2, 4],
-  ];
-  const xyz: number[] = [];
-  const edges = links.map(([a, b], k) => {
-    const start = xyz.length / 3;
-    const n = 11;
-    for (let i = 0; i < n; i++) {
-      const t = i / (n - 1);
-      xyz.push(nodes[a].x + (nodes[b].x - nodes[a].x) * t, k === 5 ? 10 * t : 0, nodes[a].z + (nodes[b].z - nodes[a].z) * t);
-    }
-    return { a, b, ref: `R${k}`, name: null, kind: 1, start, count: n, length_m: Math.hypot(nodes[b].x - nodes[a].x, nodes[b].z - nodes[a].z) };
-  });
-  return {
-    name: "square",
-    origin: { lat: 0, lon: 0 },
-    nodes: nodes.map((n) => ({ ...n, y: 0, signs: null })),
-    edges,
-    places: [],
-    points: xyz.length / 3,
-    xyz: new Float32Array(xyz),
-  };
-}
+import { edgeWeights, elevationGain, Router } from "./routing";
+import { square } from "./routing.fixture";
 
 describe("routing", () => {
   const net = square();
@@ -95,6 +50,38 @@ describe("routing", () => {
     expect(p.points[p.stops[1]]).toBe(e5 + 4);
     expect(elevationGain(net, p.points).ascent).toBeCloseTo(10, 3);
     expect(elevationGain(net, p.points).descent).toBe(0);
+  });
+
+  it("avoids a road when another way exists and reports the real length", () => {
+    const r = new Router(net);
+    // Node 0 to node 2: the diagonal (edge 4, 141 m) is shortest; avoiding it goes round two sides (200 m).
+    const from = { edge: 0, i: net.edges[0].start };
+    const to = { edge: 1, i: net.edges[1].start + 10 };
+    expect(r.route(from, to)!.legs[0].edge).toBe(4);
+    r.setWeights(edgeWeights(net, { mainRoads: false, avoid: [4] }));
+    const p = r.route(from, to)!;
+    expect(p.legs.map((l) => l.edge)).toEqual([0, 1]);
+    expect(p.length_m).toBeCloseTo(200, 3);
+    // The spur is the only way to node 4: avoided or not, it is ridden, and its length stays 100 m.
+    r.setWeights(edgeWeights(net, { mainRoads: false, avoid: [5] }));
+    const spur = r.route({ edge: 5, i: net.edges[5].start }, { edge: 5, i: net.edges[5].start + 10 })!;
+    expect(spur.length_m).toBeCloseTo(100, 3);
+    r.setWeights(null);
+    expect(r.route(from, to)!.legs[0].edge).toBe(4);
+  });
+
+  it("prefers main roads when asked", () => {
+    const wide = square();
+    // The diagonal is an unclassified lane, the sides are primary: preferring main roads goes round.
+    wide.edges[4].kind = 3;
+    wide.edges[0].kind = 0;
+    wide.edges[1].kind = 0;
+    const r = new Router(wide);
+    const from = { edge: 0, i: wide.edges[0].start };
+    const to = { edge: 1, i: wide.edges[1].start + 10 };
+    expect(edgeWeights(wide, { mainRoads: false, avoid: [] })).toBeNull();
+    r.setWeights(edgeWeights(wide, { mainRoads: true, avoid: [] }));
+    expect(r.route(from, to)!.legs.map((l) => l.edge)).toEqual([0, 1]);
   });
 
   it("refuses empty routes and the same point twice", () => {

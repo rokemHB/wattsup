@@ -25,7 +25,7 @@ Open items, roughly in the order they are worth doing.
 - [x] The Tramuntana as a road network: Ma-10 and the known climbs, tunnels, map with a start picker, turns, signs, terrain download.
 - [x] Route planner on the map (komoot-like): start, destination, waypoints, auto-routing, drag the line to reroute, saved routes in the menu.
 - [x] Planner: a destination before the start, the ride time at the rider's FTP in the summary.
-- [ ] Planner: routing preferences (avoid a road, prefer main roads), GPX import.
+- [x] Planner: routing preferences ("Prefer main roads", "Avoid this road" from the click menu, both saved with the plan and kept for re-routes), GPX import (the track becomes the few waypoints that make the route follow it).
 - [ ] Island, known rough edges: a flat pale strip section shows at some hairpins (Ma-2100 near Orient, 0.6 km from 39.7390,2.7190); the map picture still has a lighter band where the imagery zoom changes over the sea. (Done: the tube no longer pokes past the headwall, the portal is a stone collar around it; the drone and side cameras ride in the tube through tunnels instead of sitting in the rock, and the ground stays over a tunnel wherever it is 8 m above the road.)
 - [ ] Island: the far layer (150 m) is coarse where tiles have not loaded; a 30 m middle layer for the Tramuntana would hide that.
 - [ ] More roads can be added to the whitelist in `~/wattsup-data/refs.txt` (see README, "The island").

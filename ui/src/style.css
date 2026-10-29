@@ -201,6 +201,9 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid #2d35
 .map-profile { width: 100%; height: 84px; display: block; background: rgba(0, 0, 0, 0.25); border-radius: 8px; }
 .map-actions { flex-wrap: wrap; }
 .map-actions .primary { flex: 1; }
+.map-tools { justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
+.chips { flex-wrap: wrap; gap: 6px; font-size: 12px; }
+button.chip { padding: 3px 8px; font-size: 12px; border-radius: 999px; border-color: var(--bad); }
 .saved-routes { display: flex; flex-direction: column; gap: 4px; }
 .saved-route { display: flex; gap: 6px; align-items: stretch; }
 .saved-route .name { flex: 1; text-align: left; display: flex; justify-content: space-between; gap: 8px; min-width: 0; }

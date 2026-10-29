@@ -133,6 +133,12 @@
           <aside class="map-side">
             <h3>Route</h3>
             <p class="hint" id="map-empty">Click a road and choose <b>Start here</b> (or <b>Destination here</b> first), then click the other end. The route finds its own way; drag it to bend it.</p>
+            <div class="row map-tools">
+              <label class="check"><input type="checkbox" id="map-main-roads" /> Prefer main roads</label>
+              <button id="map-import" class="small" title="Plan a route that follows a GPX track">Import GPX…</button>
+              <input id="map-gpx" type="file" accept=".gpx,application/gpx+xml" hidden />
+            </div>
+            <div id="map-avoid" class="row chips" hidden></div>
             <ol id="map-waypoints" class="waypoints"></ol>
             <div id="map-plan" hidden>
               <input id="map-route-name" type="text" maxlength="48" placeholder="Route name" />

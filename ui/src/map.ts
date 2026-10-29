@@ -6,7 +6,8 @@
 // and a redraw happens at most once per animation frame.
 import { api } from "./api";
 import { $, el } from "./dom";
-import { elevationGain, type PlannedPath, Router } from "./routing";
+import { matchTrack, parseGpx } from "./gpx";
+import { edgeWeights, elevationGain, type PlannedPath, type RoutePreferences, Router } from "./routing";
 import type { Place } from "./types";
 import { NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame } from "./world/streaming";
@@ -29,11 +30,15 @@ export interface SavedPlan {
   world: string;
   waypoints: { x: number; z: number }[];
   length_m: number;
+  mainRoads?: boolean;
+  /** A point on each avoided road, snapped back to its edge when the plan is loaded. */
+  avoid?: { x: number; z: number }[];
 }
 
 export interface MapCallbacks {
   freeRide(at: RoadSpot, forward: boolean): void;
-  plannedRide(path: PlannedPath, name: string, start: RoadSpot): void;
+  /** `weights` are the plan's routing preferences, for re-routing after a wrong turn. */
+  plannedRide(path: PlannedPath, name: string, start: RoadSpot, weights: Float64Array | null): void;
 }
 
 /** Distance (canvas pixels) within which the route line or a waypoint counts as hit. */
@@ -88,6 +93,9 @@ export class MapScreen {
   /** The latest cursor position of a waypoint drag, applied once per frame however fast the mouse reports. */
   private pendingDrag: { index: number; cx: number; cy: number } | null = null;
   private nameEdited = false;
+  private prefs: RoutePreferences = { mainRoads: false, avoid: [] };
+  /** Avoided edges as map paths, for drawing. */
+  private avoidPaths = new Map<number, Path2D>();
   private plans: SavedPlan[] = loadPlans();
   /** Called when the saved plans change, so the main menu can list them. */
   onPlansChanged: (() => void) | null = null;
@@ -113,9 +121,12 @@ export class MapScreen {
         this.pointPx[i * 2 + 1] = py;
       }
       this.roads = this.buildRoads();
+      this.prefs = { mainRoads: false, avoid: [] };
+      this.avoidPaths.clear();
     }
     this.view.scale = 0;
     this.clear();
+    this.renderPrefs();
     this.renderSaved();
     this.hint("Click a road to plan a route or to ride from there. Scroll to zoom, drag to pan.");
     requestAnimationFrame(() => this.draw());
@@ -137,9 +148,53 @@ export class MapScreen {
     this.waypoints = plan.waypoints.map((w) => this.snap(w.x, w.z, 2000)).filter((s): s is RoadSpot => !!s).map((s) => ({ ...s, name: this.nameOf(s) }));
     this.nameEdited = true;
     $<HTMLInputElement>("map-route-name").value = plan.name;
+    const avoid = (plan.avoid ?? []).map((a) => this.snap(a.x, a.z, 300)?.edge ?? -1).filter((e) => e >= 0);
+    this.setPrefs({ mainRoads: plan.mainRoads ?? false, avoid: [...new Set(avoid)] });
     this.reroute();
     this.renderPlan();
     this.fitRoute();
+  }
+
+  /** A GPX file's track becomes waypoints that make the route follow it. */
+  importTrack(text: string, fileName: string) {
+    let track;
+    try {
+      track = parseGpx(text);
+    } catch (e) {
+      this.hint(`${fileName}: ${e instanceof Error ? e.message : e}.`);
+      return;
+    }
+    const xz = track.points.map(([lat, lon]) => this.frame.toXZ(lat, lon));
+    const spots = matchTrack(this.index!, this.router!, xz);
+    if (!spots) {
+      this.hint(`${fileName}: the track does not run along the roads here.`);
+      return;
+    }
+    this.waypoints = spots.map((s) => ({ ...s, name: this.nameOf(s) }));
+    this.destinationFirst = false;
+    const name = track.name ?? fileName.replace(/\.gpx$/i, "");
+    this.nameEdited = true;
+    $<HTMLInputElement>("map-route-name").value = name;
+    this.reroute();
+    this.renderPlan();
+    this.fitRoute();
+    this.hint(`Imported "${name}": ${spots.length} waypoints keep the route on the track. Drag or remove them as you like.`);
+  }
+
+  /** The plan's routing preferences as edge weights, or null when they change nothing. */
+  private weights(): Float64Array | null {
+    return this.net ? edgeWeights(this.net, this.prefs) : null;
+  }
+
+  private setPrefs(prefs: RoutePreferences) {
+    this.prefs = prefs;
+    this.router?.setWeights(this.weights());
+    this.renderPrefs();
+  }
+
+  private toggleAvoid(edge: number) {
+    const avoid = this.prefs.avoid.includes(edge) ? this.prefs.avoid.filter((e) => e !== edge) : [...this.prefs.avoid, edge];
+    this.setPrefs({ ...this.prefs, avoid });
   }
 
   /** Escape: closes the click menu. Returns true when something was closed. */
@@ -401,6 +456,7 @@ export class MapScreen {
       act("New start", false, () => this.setWaypoint(0, spot));
     }
     if (waypoint < 0) {
+      act(this.prefs.avoid.includes(spot.edge) ? "Use this road again" : "Avoid this road", false, () => this.toggleAvoid(spot.edge));
       const ride = (forward: boolean) => {
         const b = el("button", { className: "free", textContent: `Free ride ${this.directionLabel(spot.edge, forward)}` });
         b.onclick = () => {
@@ -441,6 +497,27 @@ export class MapScreen {
 
   private hint(text: string) {
     $("map-hint").textContent = text;
+  }
+
+  /** The preferences row: the main-roads switch and a chip per avoided road. */
+  private renderPrefs() {
+    $<HTMLInputElement>("map-main-roads").checked = this.prefs.mainRoads;
+    const box = $("map-avoid");
+    const net = this.net;
+    box.hidden = !this.prefs.avoid.length || !net;
+    if (!net) return;
+    box.replaceChildren(
+      el("span", { className: "hint" }, "Avoiding"),
+      ...this.prefs.avoid.map((ei) => {
+        const e = net.edges[ei];
+        const chip = el("button", { className: "chip", title: "Use this road again" }, `${e.ref ?? e.name ?? "road"} · ${(e.length_m / 1000).toFixed(1)} km ×`);
+        chip.onclick = () => {
+          this.toggleAvoid(ei);
+          this.commit();
+        };
+        return chip;
+      }),
+    );
   }
 
   private renderPlan() {
@@ -594,7 +671,16 @@ export class MapScreen {
   private save() {
     if (!this.path || !this.world) return;
     const name = $<HTMLInputElement>("map-route-name").value.trim() || this.autoName();
+    const net = this.net!;
     const plan: SavedPlan = { name, world: this.world.id, waypoints: this.waypoints.map((w) => ({ x: w.x, z: w.z })), length_m: this.path.length_m };
+    if (this.prefs.mainRoads) plan.mainRoads = true;
+    if (this.prefs.avoid.length) {
+      plan.avoid = this.prefs.avoid.map((ei) => {
+        const e = net.edges[ei];
+        const mid = e.start + (e.count >> 1);
+        return { x: net.xyz[mid * 3], z: net.xyz[mid * 3 + 2] };
+      });
+    }
     this.plans = [...this.plans.filter((p) => !(p.world === plan.world && p.name === name)), plan];
     storePlans(this.plans);
     this.renderSaved();
@@ -648,6 +734,21 @@ export class MapScreen {
     // Only the places along the rideable roads get a label; the rest of the island is just the picture.
     const places = net.places.filter((pl) => this.index!.nearest(pl.x, pl.z, 2500).d < 2500);
     return { byKind, bounds, places };
+  }
+
+  private avoidPath(ei: number): Path2D {
+    let path = this.avoidPaths.get(ei);
+    if (!path) {
+      path = new Path2D();
+      const e = this.net!.edges[ei];
+      const pp = this.pointPx;
+      for (let i = e.start; i < e.start + e.count; i++) {
+        if (i === e.start) path.moveTo(pp[i * 2], pp[i * 2 + 1]);
+        else path.lineTo(pp[i * 2], pp[i * 2 + 1]);
+      }
+      this.avoidPaths.set(ei, path);
+    }
+    return path;
   }
 
   scheduleDraw() {
@@ -713,6 +814,14 @@ export class MapScreen {
       ctx.strokeStyle = "#40c8ff";
       ctx.lineWidth = 4.5 * s;
       ctx.stroke(this.routePath);
+    }
+    // Avoided roads: dashed red over everything, so an unavoidable one shows through the route.
+    if (this.prefs.avoid.length) {
+      ctx.strokeStyle = "#ff5c5c";
+      ctx.lineWidth = 3 * s;
+      ctx.setLineDash([5 * s, 4 * s]);
+      for (const ei of this.prefs.avoid) ctx.stroke(this.avoidPath(ei));
+      ctx.setLineDash([]);
     }
     ctx.restore();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -880,7 +989,19 @@ export class MapScreen {
     $("map-ride").onclick = () => {
       if (!this.path) return;
       const name = $<HTMLInputElement>("map-route-name").value.trim() || this.autoName();
-      this.cb.plannedRide(this.path, name, this.waypoints[0]);
+      this.cb.plannedRide(this.path, name, this.waypoints[0], this.weights());
+    };
+    $<HTMLInputElement>("map-main-roads").onchange = (e) => {
+      this.setPrefs({ ...this.prefs, mainRoads: (e.target as HTMLInputElement).checked });
+      this.commit();
+    };
+    const gpx = $<HTMLInputElement>("map-gpx");
+    $("map-import").onclick = () => gpx.click();
+    gpx.onchange = async () => {
+      const file = gpx.files?.[0];
+      gpx.value = "";
+      if (!file || !this.net) return;
+      this.importTrack(await file.text(), file.name);
     };
     $("map-reverse").onclick = () => {
       this.waypoints.reverse();

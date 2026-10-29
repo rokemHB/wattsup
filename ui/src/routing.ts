@@ -1,6 +1,7 @@
 // Shortest road routes over a network, for planning rides on the map: Dijkstra
 // over the junction graph with the start, the destination and any waypoint
-// allowed to lie in the middle of an edge. The network is small (about a
+// allowed to lie in the middle of an edge. Preferences weight the edges (main
+// roads first, roads to avoid); the length reported is always the real one. The network is small (about a
 // thousand junctions), so a query takes well under a millisecond and the map
 // can re-route while a waypoint is dragged.
 import type { RoadNetwork } from "./world/network";
@@ -26,6 +27,27 @@ export interface PlannedPath {
   length_m: number;
   /** For a path through several waypoints: the index in `points` where each waypoint sits. */
   stops: number[];
+}
+
+/** How the rider wants the route chosen: main roads first, and roads (edges) to stay off. */
+export interface RoutePreferences {
+  mainRoads: boolean;
+  /** Edge indices the route avoids whenever another way exists. */
+  avoid: number[];
+}
+
+/** Cost per metre by road kind (primary, secondary, tertiary, unclassified) when main roads are preferred. */
+const MAIN_ROAD_WEIGHTS = [1, 1.2, 1.45, 1.7];
+/** An avoided edge costs this many times its length: a detour is taken unless none exists. */
+const AVOID_WEIGHT = 30;
+
+/** Cost multiplier per edge for these preferences; null when they change nothing. */
+export function edgeWeights(net: RoadNetwork, prefs: RoutePreferences): Float64Array | null {
+  if (!prefs.mainRoads && !prefs.avoid.length) return null;
+  const w = new Float64Array(net.edges.length).fill(1);
+  if (prefs.mainRoads) net.edges.forEach((e, ei) => (w[ei] = MAIN_ROAD_WEIGHTS[Math.min(3, Math.max(0, e.kind))]));
+  for (const ei of prefs.avoid) if (ei >= 0 && ei < w.length) w[ei] *= AVOID_WEIGHT;
+  return w;
 }
 
 /** A binary min-heap of (cost, node) pairs with lazy deletion. */
@@ -90,6 +112,8 @@ export class Router {
   readonly edgeLength: Float64Array;
   private adjacency: number[][];
   private cache = new Map<string, PlannedPath | null>();
+  /** Cost multiplier per edge (routes minimise length × weight); null means plain shortest paths. */
+  private weight: Float64Array | null = null;
 
   constructor(readonly net: RoadNetwork) {
     const xyz = net.xyz;
@@ -108,7 +132,13 @@ export class Router {
     });
   }
 
-  /** The shortest road path from one road point to another, or null when none exists or they coincide. */
+  /** Changes the edge weights (see `edgeWeights`); routes asked for afterwards follow them. */
+  setWeights(weight: Float64Array | null) {
+    this.weight = weight;
+    this.cache.clear();
+  }
+
+  /** The cheapest road path from one road point to another, or null when none exists or they coincide. */
   route(from: RoadPoint, to: RoadPoint): PlannedPath | null {
     const key = `${from.i}>${to.i}`;
     const hit = this.cache.get(key);
@@ -151,11 +181,15 @@ export class Router {
     const ti = to.i - et.start;
     if (from.i === to.i) return null;
     const cum = this.cum;
+    const weight = this.weight;
+    const w = (ei: number) => (weight ? weight[ei] : 1);
     // Along the same edge without leaving it.
     let best: PlannedPath | null = null;
+    let bestCost = Infinity;
     if (from.edge === to.edge) {
       const leg = { edge: from.edge, forward: ti > fi, from: fi, to: ti };
       best = { legs: [leg], points: legPoints(net, leg), length_m: Math.abs(cum[to.i] - cum[from.i]), stops: [] };
+      bestCost = best.length_m * w(from.edge);
     }
     // Through the junctions: Dijkstra from the two ends of the starting edge.
     const n = net.nodes.length;
@@ -168,8 +202,8 @@ export class Router {
         heap.push(d, node);
       }
     };
-    seed(ef.a, cum[from.i]);
-    seed(ef.b, this.edgeLength[from.edge] - cum[from.i]);
+    seed(ef.a, cum[from.i] * w(from.edge));
+    seed(ef.b, (this.edgeLength[from.edge] - cum[from.i]) * w(from.edge));
     const done = new Uint8Array(n);
     while (heap.size) {
       const d = heap.top;
@@ -177,13 +211,13 @@ export class Router {
       heap.pop();
       if (done[u]) continue;
       done[u] = 1;
-      if (best && d > best.length_m) break;
+      if (d > bestCost) break;
       // Both ends of the destination edge settled: nothing cheaper can turn up.
       if (done[et.a] && done[et.b]) break;
       for (const ei of this.adjacency[u]) {
         const e = edges[ei];
         const v = e.a === u ? e.b : e.a;
-        const nd = d + this.edgeLength[ei];
+        const nd = d + this.edgeLength[ei] * w(ei);
         if (nd < dist[v]) {
           dist[v] = nd;
           prev[v] = ei;
@@ -191,11 +225,11 @@ export class Router {
         }
       }
     }
-    const viaA = dist[et.a] + cum[to.i];
-    const viaB = dist[et.b] + (this.edgeLength[to.edge] - cum[to.i]);
+    const viaA = dist[et.a] + cum[to.i] * w(to.edge);
+    const viaB = dist[et.b] + (this.edgeLength[to.edge] - cum[to.i]) * w(to.edge);
     const end = viaA <= viaB ? et.a : et.b;
     const total = Math.min(viaA, viaB);
-    if (!Number.isFinite(total) || (best && total >= best.length_m)) return best;
+    if (!Number.isFinite(total) || total >= bestCost) return best;
     // Walk back from the arrival node to whichever end of the starting edge was seeded
     // (a seeded end that was later reached more cheaply another way has a predecessor too).
     const chain: number[] = [];
@@ -223,11 +257,14 @@ export class Router {
     if (endStart !== ti) pushLeg(legs, { edge: to.edge, forward: ti > endStart, from: endStart, to: ti });
     if (!legs.length) return best;
     const points: number[] = [];
+    let length = 0;
     for (const l of legs) {
       const pts = legPoints(net, l);
       for (let p = points.length ? 1 : 0; p < pts.length; p++) points.push(pts[p]);
+      const start = edges[l.edge].start;
+      length += Math.abs(cum[start + l.to] - cum[start + l.from]);
     }
-    return { legs, points, length_m: total, stops: [] };
+    return { legs, points, length_m: length, stops: [] };
   }
 }
 

@@ -330,6 +330,8 @@ let plannedRide = false;
 let plannedPath: PlannedPath | null = null;
 let plannedName = "";
 let router: Router | null = null;
+/** The plan's routing preferences (edge weights), so a re-route keeps to them. */
+let plannedWeights: Float64Array | null = null;
 /** The leg end a re-plan was last tried from: a second failure there ends the plan. */
 let rerouteKey = "";
 let rerouting = false;
@@ -347,6 +349,7 @@ function reroute(nav: Navigation): boolean {
   if (key === rerouteKey) return false;
   rerouteKey = key;
   router ??= new Router(network);
+  router.setWeights(plannedWeights);
   const to = { edge: dest.edge, i: network.edges[dest.edge].start + dest.to };
   const path = router.route({ edge: from.edge, i: from.index }, to);
   if (!path) return false;
@@ -364,7 +367,10 @@ function reroute(nav: Navigation): boolean {
 
 const mapScreen = new MapScreen({
   freeRide: (at, forward) => startNetworkRide(at, forward).catch(showError),
-  plannedRide: (path, name, start) => startPlannedRide(path, name, start).catch(showError),
+  plannedRide: (path, name, start, weights) => {
+    plannedWeights = weights;
+    startPlannedRide(path, name, start).catch(showError);
+  },
 });
 mapScreen.onPlansChanged = () => fillRouteList();
 
