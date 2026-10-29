@@ -208,11 +208,23 @@ goes to `set_rider_mass` → `RideSession::set_rider_mass` (the rider's mass in
 `RiderParams`; the trainer's own 75 kg assumption in `TrainerProfile` stays
 separate, which is right: the trainer converts force to a grade with its
 mass, the physics uses the rider's). Built-in single routes: `sa-calobra`,
-`malaga-colmenar` (A-7000, 30.8 km, summit 951 m at km 20.1), `lakeside`,
-`flat`; data for the Málaga one lives in `~/wattsup-data/malaga/` (OSM json,
-Copernicus tile, four overlapping IGN chunks). `build_route.py --dem-fine`
-takes several files (`DemStack`); chunks must overlap, the WCS leaves a
-one-pixel seam otherwise.
+`malaga-colmenar` ("Málaga → Riogordo": 5 km flat made-up warm-up through
+the city, the A-7000 over the Puerto del León, summit 951 m at km 25.1,
+A-7204 down to Riogordo at 412 m, 43.2 km), `lakeside`, `flat`; data for
+the Málaga one lives in `~/wattsup-data/malaga/` (OSM json for the A-7000
+and A-7204 merged as `malaga_riogordo.json`, Copernicus tile, six
+overlapping IGN chunks A–F). `build_route.py` options added for it: several
+`--dem-fine` files (`DemStack`; chunks must overlap, the WCS leaves a
+one-pixel seam otherwise), `--from`/`--to`/`--via` (nearest road nodes),
+`--merge` (collapse split carriageways), `--lead-in`/`--lead-in-bearing`
+(a straight flat stretch appended AFTER the road is splined: splining
+through the junction curled 450 m loops; the ground within 250 m is
+levelled to it), `--urban` (stretches with houses → `urban` in the world
+json → `WorldData.urban` → `buildings()` in `ui/src/world/buildings.ts`:
+painted facades, four merged meshes). Ciudad Jardín's dual carriageways
+and roundabouts are only partly tagged A-7000: start nodes there make
+Dijkstra loop around blocks; the clean start is the lowest A-7000 endpoint
+at 36.7337,-4.4158 with only A-7000/A-7204 ways as input.
 
 ## Hardware (unverified assumptions, see HARDWARE_TESTING.md)
 

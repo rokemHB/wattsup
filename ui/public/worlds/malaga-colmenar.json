@@ -5,36 +5,54 @@
   "scrub": "/worlds/malaga-colmenar/detail-scrub.jpg",
   "metres": 110
  },
- "name": "M\u00e1laga \u2192 Colmenar",
+ "name": "M\u00e1laga \u2192 Riogordo",
+ "urban": [
+  {
+   "from": 0.0,
+   "to": 5600.0,
+   "floors": [
+    3,
+    7
+   ]
+  },
+  {
+   "from": 5600.0,
+   "to": 7200.0,
+   "floors": [
+    2,
+    4
+   ]
+  }
+ ],
  "origin": {
-  "lat": 36.82199129999999,
-  "lon": -4.3772112
+  "lat": 36.82535915,
+  "lon": -4.352786099999999
  },
  "near": {
   "file": "/worlds/malaga-colmenar-near.bin",
-  "cols": 596,
-  "rows": 1227,
-  "x0": -5954.3,
-  "z0": -12266.1,
+  "cols": 1048,
+  "rows": 1350,
+  "x0": -12813.3,
+  "z0": -12641.3,
   "spacing": 20.0,
   "ortho": {
    "rowEdges": [
     0,
-    204,
-    409,
-    613,
-    817,
-    1022,
-    1226
+    225,
+    450,
+    674,
+    899,
+    1124,
+    1349
    ],
    "colEdges": [
     0,
-    99,
-    198,
-    298,
-    397,
-    496,
-    595
+    174,
+    349,
+    524,
+    698,
+    872,
+    1047
    ],
    "size": 1024,
    "files": [
@@ -93,8 +111,8 @@
   "file": "/worlds/malaga-colmenar-far.bin",
   "cols": 241,
   "rows": 241,
-  "x0": -17999.2,
-  "z0": -17999.7,
+  "x0": -20340.3,
+  "z0": -17146.1,
   "spacing": 150.0,
   "ortho": {
    "rowEdges": [
@@ -115,10 +133,10 @@
  },
  "band": {
   "file": "/worlds/malaga-colmenar-band.bin",
-  "cols": 752,
-  "rows": 2014,
-  "x0": -3754.3,
-  "z0": -10066.1,
+  "cols": 1655,
+  "rows": 2260,
+  "x0": -10613.3,
+  "z0": -10441.3,
   "spacing": 10.0
  },
  "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0)."

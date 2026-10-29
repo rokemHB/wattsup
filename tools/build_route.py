@@ -121,10 +121,13 @@ class DemStack(Dem):
         return out
 
 
-def chain_ways(elements, dem, start_lowest=True, cut_at_top=False):
-    """Shortest path through the ways from the lowest endpoint to the highest."""
+def chain_ways(elements, dem, start_lowest=True, cut_at_top=False, start_at=None, end_at=None, via=(), merge_m=0.0):
+    """Shortest path through the ways from the lowest endpoint to the highest,
+    or between the nodes nearest `start_at` / `end_at` (lat, lon) when given,
+    through the nodes nearest each of `via` in order (where the shortest way
+    would otherwise stray from the road, e.g. around split carriageways)."""
     nodes = {}
-    adj = {}
+    links = []
     for e in elements:
         if e["type"] != "way":
             continue
@@ -132,36 +135,81 @@ def chain_ways(elements, dem, start_lowest=True, cut_at_top=False):
         geom = e["geometry"]
         for nid, g in zip(ids, geom):
             nodes[nid] = (g["lat"], g["lon"])
-        for a, b in zip(ids, ids[1:]):
-            w = haversine(nodes[a], nodes[b])
-            adj.setdefault(a, []).append((b, w))
-            adj.setdefault(b, []).append((a, w))
+        links += list(zip(ids, ids[1:]))
+    if merge_m > 0:
+        # Nodes within `merge_m` of each other become one: the two carriageways
+        # of a split road and the arcs of a roundabout collapse into a single
+        # line, so the shortest path cannot zigzag between them.
+        rep = {}
+        cell = merge_m / EARTH_LAT_M
+        buckets = {}
+        for nid, (lat, lon) in nodes.items():
+            key = (math.floor(lat / cell), math.floor(lon / cell))
+            found = None
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    for other in buckets.get((key[0] + di, key[1] + dj), ()):
+                        if haversine(nodes[other], (lat, lon)) <= merge_m:
+                            found = rep[other]
+                            break
+                    if found is not None:
+                        break
+                if found is not None:
+                    break
+            rep[nid] = nid if found is None else found
+            buckets.setdefault(key, []).append(nid)
+        links = [(rep[a], rep[b]) for a, b in links if rep[a] != rep[b]]
+        nodes = {n: nodes[n] for n in set(rep.values())}
+    adj = {}
+    for a, b in links:
+        w = haversine(nodes[a], nodes[b])
+        adj.setdefault(a, []).append((b, w))
+        adj.setdefault(b, []).append((a, w))
     ends = [n for n, nb in adj.items() if len(nb) == 1]
     elev = {n: dem.sample(*nodes[n]) for n in ends}
-    if any(math.isnan(v) for v in elev.values()):
-        raise SystemExit("the DEM does not cover all road endpoints")
-    lo = min(ends, key=lambda n: elev[n])
-    hi = max(ends, key=lambda n: elev[n])
+    # Endpoints outside the DEM cannot be the lowest or highest; with explicit ends they do not matter at all.
+    known = [n for n in ends if not math.isnan(elev[n])]
+    if not known:
+        raise SystemExit("the DEM does not cover any road endpoint")
+    lo = min(known, key=lambda n: elev[n])
+    hi = max(known, key=lambda n: elev[n])
     start, goal = (lo, hi) if start_lowest else (hi, lo)
-    dist = {start: 0.0}
-    prev = {}
-    heap = [(0.0, start)]
-    while heap:
-        d, n = heapq.heappop(heap)
-        if n == goal:
-            break
-        if d > dist.get(n, math.inf):
-            continue
-        for m, w in adj[n]:
-            nd = d + w
-            if nd < dist.get(m, math.inf):
-                dist[m] = nd
-                prev[m] = n
-                heapq.heappush(heap, (nd, m))
-    path = [goal]
-    while path[-1] != start:
-        path.append(prev[path[-1]])
-    path.reverse()
+    nearest = lambda ll: min(nodes, key=lambda n: haversine(nodes[n], ll))
+    if start_at:
+        start = nearest(start_at)
+    if end_at:
+        goal = nearest(end_at)
+    for n in (start, goal):
+        elev.setdefault(n, dem.sample(*nodes[n]))
+
+    def shortest(a, b):
+        dist = {a: 0.0}
+        prev = {}
+        heap = [(0.0, a)]
+        while heap:
+            d, n = heapq.heappop(heap)
+            if n == b:
+                break
+            if d > dist.get(n, math.inf):
+                continue
+            for m, w in adj[n]:
+                nd = d + w
+                if nd < dist.get(m, math.inf):
+                    dist[m] = nd
+                    prev[m] = n
+                    heapq.heappush(heap, (nd, m))
+        if b != a and b not in prev:
+            raise SystemExit(f"no road joins {nodes[a]} and {nodes[b]}: the OSM ways are not connected")
+        leg = [b]
+        while leg[-1] != a:
+            leg.append(prev[leg[-1]])
+        leg.reverse()
+        return leg
+
+    stops = [start] + [nearest(v) for v in via] + [goal]
+    path = [start]
+    for a, b in zip(stops, stops[1:]):
+        path += shortest(a, b)[1:]
     if cut_at_top:
         # A climb ends at its summit, not where the road number ends.
         heights = [dem.sample(*nodes[n]) for n in path]
@@ -360,6 +408,13 @@ def main():
     ap.add_argument("--ortho-blocks", type=int, default=4, help="split the near grid into N x N textured blocks")
     ap.add_argument("--cache", default=str(Path.home() / ".cache/wattsup/tiles"), help="tile cache directory")
     ap.add_argument("--cut-at-top", action="store_true", help="end the route at its highest point (a climb)")
+    ap.add_argument("--from", dest="start_at", help="lat,lon: start at the road node nearest this (default: the lowest end)")
+    ap.add_argument("--to", dest="end_at", help="lat,lon: end at the road node nearest this (default: the highest end)")
+    ap.add_argument("--via", help="lat,lon;lat,lon;... road nodes the path must pass through, in order")
+    ap.add_argument("--merge", type=float, default=0.0, help="metres: merge road nodes this close (collapses split carriageways and roundabouts into one line)")
+    ap.add_argument("--lead-in", type=float, default=0.0, help="metres of flat, straight, made-up road before the start (a warm-up)")
+    ap.add_argument("--lead-in-bearing", type=float, help="compass bearing the lead-in arrives from (default: straight back from the first bend)")
+    ap.add_argument("--urban", help="stretches with buildings along the road: from_m,to_m,min_floors,max_floors;... (metres along the final route)")
     ap.add_argument("--smooth", type=int, default=12, help="elevation smoothing half-window in 5 m samples")
     ap.add_argument("--max-grade", type=float, default=14.0, help="cap on the grade in percent")
     ap.add_argument("--min-grade", type=float, default=-14.0, help="cap on descents in percent (use e.g. -6 for a pure climb)")
@@ -369,9 +424,10 @@ def main():
     dem = Dem(args.dem)
     fine = DemStack(args.dem_fine) if args.dem_fine else dem
     osm = json.load(open(args.osm))
-    latlon, e_start, e_end = chain_ways(osm["elements"], fine, cut_at_top=args.cut_at_top)
+    parse_ll = lambda t: tuple(map(float, t.split(","))) if t else None
+    via = [parse_ll(v) for v in args.via.split(";")] if args.via else []
+    latlon, e_start, e_end = chain_ways(osm["elements"], fine, cut_at_top=args.cut_at_top, start_at=parse_ll(args.start_at), end_at=parse_ll(args.end_at), via=via, merge_m=args.merge)
     print(f"path: {len(latlon)} nodes, {e_start:.0f} m -> {e_end:.0f} m")
-
     lat_ref = (max(p[0] for p in latlon) + min(p[0] for p in latlon)) / 2
     lon_ref = (max(p[1] for p in latlon) + min(p[1] for p in latlon)) / 2
     kx = EARTH_LON_M * math.cos(math.radians(lat_ref))
@@ -379,6 +435,21 @@ def main():
     to_latlon = lambda x, z: (lat_ref - z / EARTH_LAT_M, lon_ref + x / kx)
 
     xz = resample([to_xz(*p) for p in latlon], SPACING)
+    if args.lead_in > 0:
+        # A straight, flat run into the first point, added after the road is
+        # splined (a spline through the sharp junction would curl around it).
+        # It arrives from `bearing`: by default straight back along the first
+        # stretch of road.
+        if args.lead_in_bearing is not None:
+            b = math.radians(args.lead_in_bearing)
+            direction = np.array([math.sin(b), -math.cos(b)])  # x east, z south
+        else:
+            direction = xz[0] - xz[min(10, len(xz) - 1)]
+            direction = direction / np.linalg.norm(direction)
+        n = int(round(args.lead_in / SPACING))
+        lead = np.array([xz[0] + direction * (k * SPACING) for k in range(n, 0, -1)])
+        xz = np.concatenate([lead, xz])
+        print(f"lead-in: {n * SPACING:.0f} m arriving from bearing {math.degrees(math.atan2(direction[0], -direction[1])) % 360:.0f}°, starting at {to_latlon(*xz[0])[0]:.5f}, {to_latlon(*xz[0])[1]:.5f}")
     # Sample the elevation a little toward the outside of each bend: at a
     # hairpin the inside of the road is within one DEM cell of the other leg.
     d = np.gradient(xz, axis=0)
@@ -391,14 +462,24 @@ def main():
     ll = np.array([to_latlon(x, z) for x, z in xz_sample])
     raw = fine.sample_many(ll[:, 0], ll[:, 1])
     if np.isnan(raw).any():
-        raise SystemExit("the fine DEM does not cover the whole route")
+        missing = np.isnan(raw)
+        raw[missing] = dem.sample_many(ll[missing, 0], ll[missing, 1])
+        print(f"warning: {int(missing.sum())} of {len(raw)} samples lie outside the fine DEM and use the coarse one")
+        if np.isnan(raw).any():
+            raise SystemExit("the DEMs do not cover the whole route")
+    if args.lead_in > 0:
+        # The warm-up is flat at the height where the real road begins.
+        k = int(round(args.lead_in / SPACING))
+        raw[: k + 1] = raw[k]
     # The DEM is a surface model on 30 m cells: on a cliff road with stacked
     # hairpins it is off by tens of metres. Smooth, cap the grade, then
     # re-integrate so the profile stays plausible and ends at the right height.
     y = smooth(raw, args.smooth)
     step = np.clip(np.diff(y), args.min_grade / 100 * SPACING, args.max_grade / 100 * SPACING)
     y = np.concatenate([[y[0]], y[0] + np.cumsum(step)])
-    y += np.linspace(0, smooth(raw, args.smooth)[-1] - y[-1], len(y))
+    # Land at the right height: the error the capping left is spread over the real road (the lead-in stays flat).
+    k0 = int(round(args.lead_in / SPACING)) if args.lead_in > 0 else 0
+    y[k0:] += np.linspace(0, smooth(raw, args.smooth)[-1] - y[-1], len(y) - k0)
     y, crossings = bridge_crossings(xz, y)
     for i, j, gap in crossings:
         print(f"bridge: {i * SPACING:.0f} m crosses {j * SPACING:.0f} m, {gap:.1f} m apart")
@@ -423,6 +504,20 @@ def main():
         lat_min, lon_max = to_latlon(center_x + half_w, center_z + half_h)
         lats, lons, grid = source.grid(lat_min, lat_max, lon_min, lon_max, spacing, lat_ref, fallback=dem)
         x0, z0 = to_xz(lats[0], lons[0])
+        if args.lead_in > 0 and spacing < 100:
+            # The made-up warm-up road gets made-up ground: within 80 m the
+            # terrain is its own height, by 250 m it is the real ground again.
+            a = np.array(xz[0])
+            b = np.array(xz[int(round(args.lead_in / SPACING))])
+            gx = x0 + np.arange(grid.shape[1]) * spacing
+            gz = z0 + np.arange(grid.shape[0]) * spacing
+            gxx, gzz = np.meshgrid(gx, gz)
+            ab = b - a
+            t = np.clip(((gxx - a[0]) * ab[0] + (gzz - a[1]) * ab[1]) / (ab @ ab), 0, 1)
+            dist = np.hypot(gxx - (a[0] + t * ab[0]), gzz - (a[1] + t * ab[1]))
+            w = 1 - np.clip((dist - 80) / 170, 0, 1)
+            w = w * w * (3 - 2 * w)
+            grid = (grid * (1 - w) + y[0] * w).astype(np.float32)
         (repo / "ui/public/worlds" / f"{args.id}-{suffix}.bin").write_bytes(struct.pack(f"<{grid.size}f", *grid.flatten().tolist()))
         rows, cols = grid.shape
         print(f"{suffix}: {cols}x{rows} at {spacing} m, {grid.min():.0f}..{grid.max():.0f} m")
@@ -454,10 +549,12 @@ def main():
     band = heightmap(cx, cz, (xs.max() - xs.min()) / 2 + args.band_margin, (zs.max() - zs.min()) / 2 + args.band_margin, args.band_spacing, "band", fine, 1, 0, 0)
     ortho = saved_ortho
     details = detail_textures(near, ortho, ortho_dir, args, lats_for=to_latlon) if ortho else None
+    urban = [dict(zip(("from", "to", "min_floors", "max_floors"), map(float, part.split(",")))) for part in args.urban.split(";")] if args.urban else []
     meta = {
         "id": args.id,
         "details": details,
         "name": args.name,
+        "urban": [{"from": u["from"], "to": u["to"], "floors": [int(u["min_floors"]), int(u["max_floors"])]} for u in urban],
         "origin": {"lat": lat_ref, "lon": lon_ref},
         "near": near,
         "far": far,

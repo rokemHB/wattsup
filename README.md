@@ -233,10 +233,11 @@ curl -L -o baleares.osm.pbf https://download.geofabrik.de/europe/spain/islas-bal
 
 Three routes ship with the app. *Lakeside loop* is a procedural 4.3 km test
 course. *Sa Calobra* is the real road from the Port de Sa Calobra up to the
-Coll dels Reis on Mallorca, 10.2 km at 6.7 % average. *Málaga → Colmenar* is
-the A-7000 from Ciudad Jardín in Málaga over the Puerto del León (about
-900 m) down to Colmenar, 30.8 km with 1075 m of climbing. Both real roads are
-built from open data:
+Coll dels Reis on Mallorca, 10.2 km at 6.7 % average. *Málaga → Riogordo* is
+a 5 km flat, straight warm-up through the city (made up, with houses along
+it), then the A-7000 from Ciudad Jardín over the Puerto del León (951 m)
+through Colmenar and the A-7204 down to Riogordo, 43 km with 1130 m of
+climbing. Both real roads are built from open data:
 
 - road geometry from OpenStreetMap (© OpenStreetMap contributors, ODbL),
 - elevation near the route from Spain's IGN 5 m terrain model MDT05 (CC BY 4.0),
@@ -273,10 +274,20 @@ for Málaga → Colmenar (the chunks overlap by 0.005° so no seam is left bare)
 curl -A 'WattsUp route builder' -o a7000.json -X POST https://overpass.kumi.systems/api/interpreter \
   --data-urlencode 'data=[out:json];way["highway"]["ref"="A-7000"](36.68,-4.55,36.96,-4.25);out geom;'
 curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_W005_00_DEM/Copernicus_DSM_COG_10_N36_00_W005_00_DEM.tif
-# four 5 m chunks: Lat(36.72,36.82)/(36.815,36.92) × Long(-4.44,-4.375)/(-4.385,-4.32)
-.venv/bin/python tools/build_route.py --osm a7000.json --dem dem.tif --dem-fine ign5_A.tif ign5_B.tif ign5_C.tif ign5_D.tif \
-  --id malaga-colmenar --name "Málaga → Colmenar" --smooth 5 --near-spacing 20 --band-spacing 10 --ortho --ortho-blocks 6 --ortho-zoom 15
+# six overlapping 5 m chunks of 0.1° × 0.065° covering Málaga, the pass, Riogordo and the warm-up
+# the A-7204 to Riogordo comes from a second query (ref A-7204) merged into the same JSON
+.venv/bin/python tools/build_route.py --osm malaga_riogordo.json --dem dem.tif --dem-fine ign5_A.tif ign5_B.tif ign5_C.tif ign5_D.tif ign5_E.tif ign5_F.tif \
+  --id malaga-colmenar --name "Málaga → Riogordo" --from 36.7337,-4.4158 --to 36.9167,-4.2917 \
+  --lead-in 5000 --lead-in-bearing 250 --urban "0,5600,3,7;5600,7200,2,4" \
+  --smooth 5 --near-spacing 20 --band-spacing 10 --ortho --ortho-blocks 6 --ortho-zoom 15
 ```
+
+`--from`/`--to` pick the road nodes nearest those coordinates (default: the
+lowest and highest ends of the ways), `--via` forces the path through
+points in order, `--merge` collapses split carriageways. `--lead-in` adds a
+flat, straight, made-up stretch before the start, arriving from
+`--lead-in-bearing`, with the ground within 250 m levelled to it; `--urban`
+marks stretches (metres along the final route) that get houses on both sides.
 
 `--ortho` fetches about 300 map tiles (cached under `~/.cache/wattsup/tiles`)
 and writes 16 photo textures of 1024 px for the near grid plus one for the

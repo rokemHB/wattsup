@@ -6,6 +6,7 @@ import type { Route } from "../types";
 import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
 import { gridSample, gridSlope, imageMean, OrthoSampler, type Grid, type WorldData } from "./terrain";
+import { buildings } from "./buildings";
 import { foliageDepthMaterial, foliageMaterial, treeGeometry } from "./trees";
 import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockDetailTexture, rockNormalTexture, rockTexture, scrubDetailTexture, waterNormalTexture } from "./textures";
 
@@ -205,6 +206,7 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   group.add(...clouds.meshes);
   const region = { x0: near.x0, z0: near.z0, w: near.cols * near.spacing, h: near.rows * near.spacing };
   group.add(vegetation(index, heightAt, land, region, sampler, true, photo));
+  if (world.urban?.length) group.add(buildings(route, world.urban, heightAt, REAL_ROAD_WIDTH));
 
   const animate = (dt: number) => {
     sea.animate(dt);
