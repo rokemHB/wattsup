@@ -221,6 +221,8 @@ const MID_DROP_M = 9500;
 /** The far layer is lowered this much under a mid block, and both under a loaded tile. */
 const SINK_UNDER_MID = 30;
 const SINK_UNDER_TILE = 80;
+/** How far inside a finer layer's edge coarse ground counts as covered and is not drawn. */
+const COVER_INSET_M = 10;
 
 interface MidBlock {
   key: string;
@@ -545,11 +547,47 @@ export class TileManager {
       if (underMid && mids.some((m) => inside(m.box, x, z, margin))) return SINK_UNDER_MID;
       return 0;
     };
+    // A mid block's mesh can stop short of its box where the mid grid ends: cover only what the mesh spans.
+    const midCover = mids.map((m) => {
+      const bb = m.mesh!.geometry.boundingBox!;
+      return { x0: bb.min.x, z0: bb.min.z, x1: bb.max.x, z1: bb.max.z };
+    });
+    // Strictly under a finer layer (a little inside its edge): no part of the coarse ground there can show.
+    const covered = (x: number, z: number, underMid: boolean) =>
+      tiles.some((t) => inside(t, x, z, -COVER_INSET_M)) || (underMid && midCover.some((c) => inside(c, x, z, -COVER_INSET_M)));
     const lower = (mesh: THREE.Mesh, base: Float32Array, margin: number, underMid: boolean) => {
-      const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) pos.setY(i, base[i * 3 + 1] - depth(base[i * 3], base[i * 3 + 2], margin, underMid));
+      const geo = mesh.geometry;
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      const hidden = new Uint8Array(pos.count);
+      for (let i = 0; i < pos.count; i++) {
+        const x = base[i * 3];
+        const z = base[i * 3 + 2];
+        pos.setY(i, base[i * 3 + 1] - depth(x, z, margin, underMid));
+        hidden[i] = covered(x, z, underMid) ? 1 : 0;
+      }
       pos.needsUpdate = true;
-      mesh.geometry.computeBoundingSphere();
+      geo.computeBoundingSphere();
+      // Sunk ground still cost its full share of vertex and depth work every frame: the far
+      // and mid layers under the loaded tiles were ~270k triangles nobody saw (measured: 26 →
+      // 22 ms a frame at render scale 1.5 without them). Triangles wholly under a finer layer
+      // are left out of the draw: the kept ones are packed at the front of the same index
+      // buffer and the draw range shortened, so no new GPU buffer is made each time.
+      const index = geo.index!;
+      const full: Uint32Array = (geo.userData.fullIndex ??= Uint32Array.from(index.array as ArrayLike<number>));
+      const out = index.array as Uint32Array | Uint16Array;
+      let n = 0;
+      for (let k = 0; k < full.length; k += 3) {
+        const a = full[k];
+        const b = full[k + 1];
+        const c = full[k + 2];
+        if (hidden[a] && hidden[b] && hidden[c]) continue;
+        out[n++] = a;
+        out[n++] = b;
+        out[n++] = c;
+      }
+      index.needsUpdate = true;
+      geo.setDrawRange(0, n);
+      mesh.visible = n > 0;
     };
     const grow = 2 * this.far.spacing;
     const overlaps = (mesh: THREE.Mesh) => {
