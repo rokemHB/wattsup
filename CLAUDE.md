@@ -201,6 +201,19 @@ writes `wattsup_engine::tcx::to_tcx` into the Downloads folder, positions from
 - Terrain grid is 10 m: anything finer near the road comes from the corridor
   strip (`corridorMesh`) and, in tunnels, from the tube.
 
+## Rider weight and routes
+
+The Rider screen's weight (`Profile.weightKg`, localStorage `wattsup.profile`)
+goes to `set_rider_mass` → `RideSession::set_rider_mass` (the rider's mass in
+`RiderParams`; the trainer's own 75 kg assumption in `TrainerProfile` stays
+separate, which is right: the trainer converts force to a grade with its
+mass, the physics uses the rider's). Built-in single routes: `sa-calobra`,
+`malaga-colmenar` (A-7000, 30.8 km, summit 951 m at km 20.1), `lakeside`,
+`flat`; data for the Málaga one lives in `~/wattsup-data/malaga/` (OSM json,
+Copernicus tile, four overlapping IGN chunks). `build_route.py --dem-fine`
+takes several files (`DemStack`); chunks must overlap, the WCS leaves a
+one-pixel seam otherwise.
+
 ## Hardware (unverified assumptions, see HARDWARE_TESTING.md)
 
 Wahoo KICKR CORE 2 with Zwift Cog, Zwift Click v2 (keyboard shifting stays as

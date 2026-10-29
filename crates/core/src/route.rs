@@ -32,7 +32,7 @@ pub struct Route {
 }
 
 /// Ids accepted by [`Route::builtin`].
-pub const BUILTIN_ROUTES: [&str; 3] = ["sa-calobra", "lakeside", "flat"];
+pub const BUILTIN_ROUTES: [&str; 4] = ["sa-calobra", "malaga-colmenar", "lakeside", "flat"];
 
 /// What a route chooser needs to know, without the points.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -156,6 +156,9 @@ impl Route {
             "sa-calobra" => {
                 Some(serde_json::from_str(include_str!("../routes/sa-calobra.json")).expect("valid built-in route"))
             }
+            "malaga-colmenar" => Some(
+                serde_json::from_str(include_str!("../routes/malaga-colmenar.json")).expect("valid built-in route"),
+            ),
             _ => None,
         }
     }
@@ -312,6 +315,16 @@ mod tests {
     }
 
     #[test]
+    fn malaga_colmenar_climbs_over_the_puerto_del_leon() {
+        let r = Route::builtin("malaga-colmenar").unwrap();
+        assert_eq!(r.world.as_deref(), Some("malaga-colmenar"));
+        assert!((r.length_m() - 30810.0).abs() < 200.0, "{}", r.length_m());
+        let top = r.points.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+        assert!(top > 850.0 && top < 1000.0, "summit at {top} m");
+        assert!(r.points.last().unwrap().y > 650.0);
+    }
+
+    #[test]
     fn sa_calobra_is_the_real_climb() {
         let r = Route::builtin("sa-calobra").unwrap();
         assert!(!r.closed);
@@ -332,15 +345,16 @@ mod tests {
             assert!(Route::builtin(id).is_some(), "{id}");
         }
         let list = Route::builtin_list();
-        assert_eq!(list.len(), 3);
-        assert!(list[2].climb_m < 1.0 && list[2].closed, "{:?}", list[2]);
+        assert_eq!(list.len(), 4);
+        assert!(list[3].climb_m < 1.0 && list[3].closed, "{:?}", list[3]);
         assert_eq!(list[0].id, "sa-calobra");
         assert!(
             list[0].climb_m > 650.0 && list[0].climb_m < 760.0,
             "{}",
             list[0].climb_m
         );
-        assert!(list[1].closed);
+        assert!(!list[1].closed && list[1].id == "malaga-colmenar");
+        assert!(list[2].closed);
     }
 
     #[test]

@@ -190,7 +190,7 @@ While riding, type `u` / `d` (shift), `erg <W>`, `sim`, `grade <%>` or `q`.
 | `--no-sim` | `WATTSUP_NO_SIM=1` | `--no-sim` | Hide the simulated devices |
 | `--raw` | `WATTSUP_RAW=1` | `--raw` | Log every Bluetooth packet as hex |
 | `--auto-sim` | `WATTSUP_AUTO_SIM=1` | | Connect the simulated trainer, strap and controller at startup |
-| `--route <id>` | `WATTSUP_ROUTE=<id>` | | Built-in route to ride: `sa-calobra` (default) or `lakeside` |
+| `--route <id>` | `WATTSUP_ROUTE=<id>` | | Built-in route to ride: `sa-calobra` (default), `malaga-colmenar` or `lakeside` |
 | `--start <m>` | `WATTSUP_START_M=<m>` | | Start that many metres along the route (to look at a spot) |
 | `--camera <mode>` | `WATTSUP_CAMERA=<mode>` | | Start in the `chase`, `side`, `front` or `drone` view |
 | `--trainer` | `WATTSUP_TRAINER=1` | | Open the trainer screen (ERG only, no 3D world) |
@@ -231,9 +231,12 @@ curl -L -o baleares.osm.pbf https://download.geofabrik.de/europe/spain/islas-bal
 
 ### Single routes
 
-Two routes ship with the app. *Lakeside loop* is a procedural 4.3 km test
+Three routes ship with the app. *Lakeside loop* is a procedural 4.3 km test
 course. *Sa Calobra* is the real road from the Port de Sa Calobra up to the
-Coll dels Reis on Mallorca, 10.2 km at 6.7 % average, built from open data:
+Coll dels Reis on Mallorca, 10.2 km at 6.7 % average. *Málaga → Colmenar* is
+the A-7000 from Ciudad Jardín in Málaga over the Puerto del León (about
+900 m) down to Colmenar, 30.8 km with 1075 m of climbing. Both real roads are
+built from open data:
 
 - road geometry from OpenStreetMap (© OpenStreetMap contributors, ODbL),
 - elevation near the route from Spain's IGN 5 m terrain model MDT05 (CC BY 4.0),
@@ -260,6 +263,19 @@ curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_1
 curl -A 'WattsUp route builder' -o ign5.tif 'https://servicios.idee.es/wcs-inspire/mdt?service=WCS&request=GetCoverage&version=2.0.1&coverageId=Elevacion4258_5&subset=Lat(39.800,39.880)&subset=Long(2.755,2.850)&format=image/tiff'
 .venv/bin/python tools/build_route.py --osm sa_calobra.json --dem dem.tif --dem-fine ign5.tif \
   --id sa-calobra --name "Sa Calobra" --cut-at-top --smooth 5 --min-grade -6 --ortho
+```
+
+A longer road spans more than one 5 m request (the WCS caps a request at
+about 0.1°): fetch overlapping chunks and pass them all to `--dem-fine`, as
+for Málaga → Colmenar (the chunks overlap by 0.005° so no seam is left bare):
+
+```sh
+curl -A 'WattsUp route builder' -o a7000.json -X POST https://overpass.kumi.systems/api/interpreter \
+  --data-urlencode 'data=[out:json];way["highway"]["ref"="A-7000"](36.68,-4.55,36.96,-4.25);out geom;'
+curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N36_00_W005_00_DEM/Copernicus_DSM_COG_10_N36_00_W005_00_DEM.tif
+# four 5 m chunks: Lat(36.72,36.82)/(36.815,36.92) × Long(-4.44,-4.375)/(-4.385,-4.32)
+.venv/bin/python tools/build_route.py --osm a7000.json --dem dem.tif --dem-fine ign5_A.tif ign5_B.tif ign5_C.tif ign5_D.tif \
+  --id malaga-colmenar --name "Málaga → Colmenar" --smooth 5 --near-spacing 20 --band-spacing 10 --ortho --ortho-blocks 6 --ortho-zoom 15
 ```
 
 `--ortho` fetches about 300 map tiles (cached under `~/.cache/wattsup/tiles`)

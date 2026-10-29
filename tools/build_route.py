@@ -107,6 +107,20 @@ class Dem:
         return lats, lons, out
 
 
+class DemStack(Dem):
+    """Several DEM files read as one: the first that has a value at a point wins."""
+
+    def __init__(self, paths):  # noqa: D107 — no single file to open
+        self.dems = [Dem(p) for p in paths]
+
+    def sample_many(self, lats, lons):
+        out = np.full(np.shape(lats), np.nan)
+        for d in self.dems:
+            v = d.sample_many(lats, lons)
+            out = np.where(np.isnan(out), v, out)
+        return out
+
+
 def chain_ways(elements, dem, start_lowest=True, cut_at_top=False):
     """Shortest path through the ways from the lowest endpoint to the highest."""
     nodes = {}
@@ -331,7 +345,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--osm", required=True)
     ap.add_argument("--dem", required=True)
-    ap.add_argument("--dem-fine")
+    ap.add_argument("--dem-fine", nargs="*", help="5 m GeoTIFFs (several when the route spans more than one WCS request)")
     ap.add_argument("--id", required=True)
     ap.add_argument("--name", required=True)
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
@@ -353,7 +367,7 @@ def main():
     args = ap.parse_args()
 
     dem = Dem(args.dem)
-    fine = Dem(args.dem_fine) if args.dem_fine else dem
+    fine = DemStack(args.dem_fine) if args.dem_fine else dem
     osm = json.load(open(args.osm))
     latlon, e_start, e_end = chain_ways(osm["elements"], fine, cut_at_top=args.cut_at_top)
     print(f"path: {len(latlon)} nodes, {e_start:.0f} m -> {e_end:.0f} m")

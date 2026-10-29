@@ -631,6 +631,16 @@ impl RideSession {
     }
 
     /// Switches the road and starts a fresh ride on it.
+    /// The rider's body mass, in kg (bike mass and drag area keep their defaults).
+    /// Gravity on every climb, and so the trainer's grade, follow from it.
+    pub fn set_rider_mass(&mut self, kg: f64) {
+        self.config.rider.rider_mass_kg = kg.clamp(30.0, 200.0);
+    }
+
+    pub fn rider(&self) -> &RiderParams {
+        &self.config.rider
+    }
+
     pub fn set_route(&mut self, route: Option<Route>) {
         self.config.route = route;
         self.reset_ride();
@@ -1472,5 +1482,19 @@ mod tests {
             p.tick(0.25);
         }
         assert!(p.snapshot().virtual_speed_kmh > 5.0);
+    }
+
+    #[test]
+    fn rider_mass_changes_the_power_a_climb_needs() {
+        let mut s = RideSession::new(SessionConfig::default());
+        s.set_road_grade(8.0);
+        assert_eq!(s.rider().rider_mass_kg, 75.0);
+        let light = virtual_gear_power(s.rider(), 80.0, 2.0, 8.0);
+        s.set_rider_mass(95.0);
+        let heavy = virtual_gear_power(s.rider(), 80.0, 2.0, 8.0);
+        // 20 kg more on an 8 % climb at the same speed: clearly more watts, and the clamp holds.
+        assert!(heavy > light * 1.15, "{heavy} vs {light}");
+        s.set_rider_mass(10.0);
+        assert_eq!(s.rider().rider_mass_kg, 30.0);
     }
 }

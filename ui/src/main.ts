@@ -144,6 +144,7 @@ function applyProfile(p: Profile) {
   for (const id of ["menu-avatar", "hud-avatar"]) $(id).textContent = p.avatar;
   for (const id of ["menu-name", "hud-name"]) $(id).textContent = p.name || "Rider";
   world?.setRider(p.jersey, p.accent, p.bike);
+  api.setRiderMass(p.weightKg).catch(console.error);
 }
 
 function draftChanged(): boolean {
@@ -182,6 +183,8 @@ function choices(id: string, options: string[], current: string, pick: (v: strin
 function fillRiderScreen() {
   const name = $<HTMLInputElement>("rider-name");
   if (document.activeElement !== name) name.value = draft.name;
+  const weight = $<HTMLInputElement>("rider-weight");
+  if (document.activeElement !== weight) weight.value = String(draft.weightKg);
   choices("rider-avatars", AVATARS, draft.avatar, (v) => (draft.avatar = v), false);
   choices("rider-jerseys", JERSEYS, draft.jersey, (v) => (draft.jersey = v), true);
   choices("rider-accents", ACCENTS, draft.accent, (v) => (draft.accent = v), true);
@@ -752,6 +755,13 @@ function wire() {
   const name = $<HTMLInputElement>("rider-name");
   name.oninput = () => {
     draft.name = name.value.slice(0, 24);
+    previewDraft();
+  };
+  const weight = $<HTMLInputElement>("rider-weight");
+  weight.onchange = () => {
+    const kg = Number(weight.value);
+    draft.weightKg = kg >= 30 && kg <= 200 ? kg : profile.weightKg;
+    weight.value = String(draft.weightKg);
     previewDraft();
   };
   $("rider-save").onclick = saveDraft;

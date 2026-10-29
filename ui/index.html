@@ -109,6 +109,8 @@
       <header class="panel-head"><h2>Rider</h2><span class="row"><button id="rider-save" class="primary" disabled>Save</button><button class="back" data-back>Back</button></span></header>
       <div class="panel-body">
         <label class="field">Name <input id="rider-name" type="text" maxlength="24" /></label>
+        <label class="field">Weight <span class="row"><input id="rider-weight" type="number" min="30" max="200" step="0.5" /> kg</span></label>
+        <p class="hint">Your body weight is what the physics works with: with the bike it sets how hard every climb pushes back. Height and bike size do not matter.</p>
         <div class="field"><span>Avatar</span><div id="rider-avatars" class="choices"></div></div>
         <div class="field"><span>Jersey</span><div id="rider-jerseys" class="choices"></div></div>
         <div class="field"><span>Jersey accent</span><div id="rider-accents" class="choices"></div></div>

@@ -2,6 +2,9 @@
 
 Open items, roughly in the order they are worth doing.
 
+- [x] Rider weight in the Rider screen (the one body figure the physics needs; height and bike size do not matter), sent to the engine as the rider mass.
+- [x] Málaga → Colmenar (A-7000 over the Puerto del León) as a built-in route, from OSM + IGN 5 m + PNOA like Sa Calobra; `build_route.py` takes several 5 m chunks for long roads.
+
 - [x] README for the repository with in-game screenshots.
 - [x] Bike geometry more like an aero road bike: deep-section wheels, dropped seat stays, a sloping top tube, integrated bar and stem, a kammtail down tube, disc brakes, a cassette, a bottle.
 - [x] Dropped Bluetooth connections during a ride hold the ride (clock, distance, workout) and show a banner until the trainer is back. Still to verify on real hardware.

@@ -163,6 +163,11 @@ fn set_ftp(state: State<'_, AppState>, watts: f64) {
 }
 
 #[tauri::command]
+fn set_rider_mass(state: State<'_, AppState>, kg: f64) {
+    state.engine.set_rider_mass(kg);
+}
+
+#[tauri::command]
 async fn choose_turn(state: State<'_, AppState>, edge: usize) -> CmdResult<bool> {
     Ok(state.engine.choose_turn(edge).await)
 }
@@ -401,6 +406,7 @@ fn main() {
             replan_ride,
             plan_time,
             set_ftp,
+            set_rider_mass,
             choose_turn,
             turn_around,
             save_ride,

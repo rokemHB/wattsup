@@ -351,6 +351,13 @@ impl Engine {
         Ok(())
     }
 
+    /// The rider's body mass: the one figure the physics needs about the body
+    /// (gravity on every climb). Bike mass and drag area stay at their defaults.
+    pub fn set_rider_mass(&self, kg: f64) {
+        self.inner.session.lock().unwrap().set_rider_mass(kg);
+        self.inner.navigate();
+    }
+
     /// The rider's FTP, which the time estimate of a planned ride starts from.
     pub fn set_ftp(&self, watts: f64) {
         *self.inner.ftp_w.lock().unwrap() = watts.clamp(50.0, 600.0);
