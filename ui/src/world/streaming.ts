@@ -194,6 +194,13 @@ interface Tile {
 /** Vegetation casts shadows only this close to the rider: the shadow pass redraws every caster. */
 const SHADOW_RADIUS_M = 900;
 
+/**
+ * Sign posts farther than this from the rider are hidden: a town has dozens of
+ * junctions, every board is its own draw call with its own texture, and the
+ * lettering cannot be read from that far anyway.
+ */
+const SIGN_RADIUS_M = 400;
+
 /** Tiles further than this from the rider get a 20 m ground; nearer ones the full 10 m. */
 const DETAIL_RADIUS_M = 1300;
 
@@ -323,10 +330,15 @@ export class TileManager {
         }
       }
     }
-    faceCamera(
-      [...this.tiles.values()].flatMap((t) => t.posts),
-      camera,
-    );
+    const near: SignPost[] = [];
+    for (const t of this.tiles.values()) {
+      for (const p of t.posts) {
+        const visible = Math.hypot(p.group.position.x - x, p.group.position.z - z) < SIGN_RADIUS_M;
+        p.group.visible = visible;
+        if (visible) near.push(p);
+      }
+    }
+    faceCamera(near, camera);
   }
 
   private refiningAny = false;
@@ -475,9 +487,10 @@ export class TileManager {
     this.scene.remove(t.group);
     t.group.traverse((o) => {
       if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
+        if (!o.geometry.userData.shared) o.geometry.dispose();
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
+          if (m.userData.shared) continue;
           for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
           m.dispose();
         }

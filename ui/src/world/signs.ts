@@ -57,6 +57,13 @@ function arrowFor(angleDeg: number): string {
   return a > 0 ? "→" : "←";
 }
 
+/** One pole geometry and material for every post: fewer programs and buffers to switch between. */
+const POLE = new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8);
+const POLE_MAT = new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 });
+// Not disposed with a tile (`shared` is what the tile manager checks).
+POLE.userData.shared = true;
+POLE_MAT.userData.shared = true;
+
 export interface SignPost {
   group: THREE.Group;
   boards: THREE.Mesh[];
@@ -74,7 +81,7 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
   const key = (s: Sign) => `${s.ref ?? ""}|${s.to.join(",")}`;
   if (signs.length > 1 && signs.every((s) => key(s) === key(signs[0]))) return null;
   const group = new THREE.Group();
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
+  const post = new THREE.Mesh(POLE, POLE_MAT);
   post.position.set(0, 1.5, 0);
   group.add(post);
   const boards: THREE.Mesh[] = [];
@@ -94,7 +101,7 @@ export function signPost(node: NetworkNode, x: number, z: number, y: number, bea
 /** A confirmation sign between junctions: the next towns ahead with their distance in km, one board per town. */
 export function confirmationPost(to: [string, number][], x: number, z: number, y: number, facingDx: number, facingDz: number): SignPost {
   const group = new THREE.Group();
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.0, 8), new THREE.MeshStandardMaterial({ color: "#8a8f99", roughness: 0.6, metalness: 0.6 }));
+  const post = new THREE.Mesh(POLE, POLE_MAT);
   post.position.set(0, 1.5, 0);
   group.add(post);
   const c = document.createElement("canvas");

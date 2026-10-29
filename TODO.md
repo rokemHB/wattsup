@@ -13,7 +13,8 @@ Open items, roughly in the order they are worth doing.
 - [x] HUD: the junction prompt sits top right under the tiles, smaller, the road ahead clear.
 - [x] Bike through curves: yaw from the route tangent at the bike's own position, lean from the curvature (v²/gr); no more lagging heading.
 - [x] Settings: the real device last used in each role is remembered and connects by itself after the startup scan (Forget drops it); the last route and camera are restored.
-- [ ] Island performance: 27 to 35 fps on an Intel UHD 620; build tiles in a worker, fewer draw calls per tile (merge road strips), lower pixel ratio floor.
+- [x] Island performance, round two (fullscreen at Sóller 42 → 52 fps): sign posts beyond 400 m are hidden (a town had 57 posts = 169 of 221 draw calls, each ~30 µs of CPU in WebKit), no backdrop blur on the ride HUD (2 ms at the window's full resolution), render scale floor 0.6.
+- [ ] Island performance, still open: building tiles in a worker (the 5 ms slices keep p99 under 30 ms, so it is not urgent); the rest of the frame is the GPU's vertex work on ~550k triangles (terrain 10 m grids, vegetation), which a 20 m grid nearer than 1300 m or simpler tree crowns would cut.
 - [x] Ride records: totals and one-second samples stored per ride, the Rides screen with weekly totals and graphs.
 - [x] Trainer mode: ERG workouts and quick blocks with no 3D world, +/− watts, skip, a small always-on-top window, for training beside a video.
 - [x] Trainer mode: "Small window" is a separate fixed-size window, which Hyprland floats by itself; "Free ERG" holds watts with no workout.

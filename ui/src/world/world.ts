@@ -15,6 +15,9 @@ export type CameraMode = "chase" | "side" | "front" | "drone" | "orbit";
 /** The modes the C key cycles through; orbit is for the menus. */
 const MODES: CameraMode[] = ["chase", "side", "front", "drone"];
 
+/** The render scale never drops below this: 0.6 of a 1600×900 window is 960×540, soft but readable. */
+const MIN_PIXEL_RATIO = 0.6;
+
 /** Half the arc (m) over which the road's curvature is measured for the lean. */
 const CURVE_HALF_M = 3;
 
@@ -282,6 +285,10 @@ export class World {
   private lastRender = 0;
   private perfTimes: number[] = [];
   private perfAt = 0;
+  /** CPU time per frame (everything but the GPU's share of `render`): the statistics show it next to the frame time. */
+  private cpuTimes: number[] = [];
+  private frameStart = 0;
+  private bucket = [0, 0, 0];
 
   /** Menus: render at a low rate; the world is only a backdrop there. */
   setIdle(idle: boolean) {
@@ -296,10 +303,14 @@ export class World {
       const s = [...this.perfTimes].sort((a, b) => a - b);
       const q = (f: number) => s[Math.min(s.length - 1, Math.floor(s.length * f))].toFixed(1);
       const info = this.renderer.info.render;
-      console.info(`frames ${s.length}: median ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} worst ${s[s.length - 1].toFixed(0)} ms, >50ms ${s.filter((v) => v > 50).length}; calls ${info.calls} tris ${info.triangles} px ${this.pixelRatio}`);
+      const c = [...this.cpuTimes].sort((a, b) => a - b);
+      const cq = (f: number) => (c.length ? c[Math.min(c.length - 1, Math.floor(c.length * f))].toFixed(1) : "-");
+      console.info(`frames ${s.length}: median ${q(0.5)} p90 ${q(0.9)} p99 ${q(0.99)} worst ${s[s.length - 1].toFixed(0)} ms, >50ms ${s.filter((v) => v > 50).length}; cpu median ${cq(0.5)} p90 ${cq(0.9)} ms; calls ${info.calls} tris ${info.triangles} px ${this.pixelRatio}; per frame: tiles ${(this.bucket[0] / s.length).toFixed(1)} camera+tiles ${(this.bucket[1] / s.length).toFixed(1)} render ${(this.bucket[2] / s.length).toFixed(1)} ms`);
     }
+    this.bucket = [0, 0, 0];
     this.perfAt = now;
     this.perfTimes = [];
+    this.cpuTimes = [];
   }
 
   /** Every four seconds: lower the render scale when frames are slow, raise it when there is clear headroom.
@@ -315,7 +326,7 @@ export class World {
     let next = this.pixelRatio;
     // The display caps frames at its refresh rate (16.7 ms at 60 Hz), so "fast" means sitting on that cap, not below it.
     // A step up needs clear headroom; a step down a clear shortfall; in between nothing changes.
-    if (median > 0.021 && this.pixelRatio > 0.7) next = Math.max(0.7, this.pixelRatio - 0.15);
+    if (median > 0.021 && this.pixelRatio > MIN_PIXEL_RATIO) next = Math.max(MIN_PIXEL_RATIO, this.pixelRatio - 0.15);
     else if (median < 0.0172 && p75 < 0.019 && this.pixelRatio < max) next = Math.min(max, this.pixelRatio + 0.15);
     if (Math.abs(next - this.pixelRatio) > 0.01) {
       this.pixelRatio = next;
@@ -330,6 +341,7 @@ export class World {
     const now = performance.now();
     const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
     this.lastFrame = now;
+    this.frameStart = now;
 
     // The engine steps the physics every 250 ms, so its distance arrives in
     // jumps. Extrapolate it by the time since the snapshot and close the gap
@@ -370,7 +382,9 @@ export class World {
     g.rotateX(-this.lean);
     this.rider.animate(this.cadence, this.speed, dt);
     this.statics.animate(dt);
+    const tUpd0 = performance.now();
     this.tiles?.update(g.position.x, g.position.z, this.camPos);
+    this.bucket[0] += performance.now() - tUpd0;
 
     // Camera.
     const rider = g.position;
@@ -441,6 +455,7 @@ export class World {
     this.clearTerrain(this.camPos, eye);
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);
+    this.bucket[1] += performance.now() - tUpd0;
 
     // The sky dome and the sun's shadow box follow the rider: an island is wider than the dome.
     this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(400));
@@ -454,7 +469,10 @@ export class World {
     }
     const renderDt = this.lastRender ? Math.min((now - this.lastRender) / 1000, 0.1) : dt;
     this.lastRender = now;
+    const tR = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.bucket[2] += performance.now() - tR;
+    this.cpuTimes.push(performance.now() - this.frameStart);
     if (!this.idle) this.adaptResolution(renderDt);
     requestAnimationFrame(() => this.frame());
   }

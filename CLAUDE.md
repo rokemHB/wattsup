@@ -76,7 +76,14 @@ whole region (~175 MB). The IGN servers answer 502 now and then: fetchers retry.
 
 ## Performance (measured 2026-10-28 on the Intel UHD 620 laptop)
 
-The frame is GPU fill-bound: time scales with pixels, not draw calls. The
+The frame is partly GPU fill-bound and partly draw-call-bound: on WebKit's
+JavaScriptCore every draw call costs ~30 µs of CPU in `renderer.render`
+(measured 2026-10-29: 221 calls = 7.5 ms), so count calls (`World.perfStats`
+prints them and a CPU split). Sign posts are the usual culprit in towns (one
+call per board, each with its own texture): `TileManager.update` hides posts
+beyond `SIGN_RADIUS_M`. An empty scene runs at the 60 Hz cap fullscreen, so
+the window itself is not the limit. CSS `backdrop-filter` on the ride HUD
+cost ~2 ms (removed; the menus keep theirs). The
 renderer adapts the pixel ratio (0.7–1.5) every 4 s with hysteresis; each
 change resizes the canvas and flashes once, so keep changes rare. What
 costs per pixel: anisotropic filtering (now 2 on photos, 4 on asphalt),
