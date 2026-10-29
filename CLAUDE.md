@@ -16,8 +16,12 @@ that still need the real trainer.
   (Use the repo's `tsc`, not `npx tsc`, which may fetch a bogus package.)
 - Small commits with a message that says why.
 - Verify graphics by screenshot before claiming they look right ("check the
-  results yourself"). Use only the laptop's main screen (eDP-1); no hidden
-  monitors.
+  results yourself"). Since 2026-10-29 evening Robin wants the game run on a
+  hidden monitor and closed when done: `hyprctl output create headless`, start
+  the dev app, then move its window there with
+  `hyprctl dispatch 'hl.dsp.window.move({ workspace = "<the headless output's
+  workspace>", follow = false, window = "address:0x…" })'` and capture with
+  `grim -g` on the window's geometry; `hyprctl output remove HEADLESS-N` after.
 - Keep the engine UI-independent (the UI talks to it through Tauri commands and
   the `snapshot` event).
 
@@ -86,9 +90,13 @@ whole region (~175 MB). The IGN servers answer 502 now and then: fetchers retry.
 The frame is partly GPU fill-bound and partly draw-call-bound: on WebKit's
 JavaScriptCore every draw call costs ~30 µs of CPU in `renderer.render`
 (measured 2026-10-29: 221 calls = 7.5 ms), so count calls (`World.perfStats`
-prints them and a CPU split). Sign posts are the usual culprit in towns (one
-call per board, each with its own texture): `TileManager.update` hides posts
-beyond `SIGN_RADIUS_M`. An empty scene runs at the 60 Hz cap fullscreen, so
+prints them and a CPU split). Sign posts were the usual culprit in towns;
+each post is now one mesh with one canvas texture (`signs.ts`), and
+`TileManager.update` still hides posts beyond `SIGN_RADIUS_M`. Never put
+`PointLight`s in streamed content: each adds a loop to every lit pixel and a
+change in the light count recompiles every shader (tunnel lamps are baked
+into vertex colours instead). The far and mid layers skip triangles wholly
+under a finer layer (`resink`, draw range on the same index buffer). An empty scene runs at the 60 Hz cap fullscreen, so
 the window itself is not the limit. CSS `backdrop-filter` on the ride HUD
 cost ~2 ms (removed; the menus keep theirs). The
 renderer adapts the pixel ratio (0.7–1.5) every 4 s with hysteresis; each
@@ -102,6 +110,15 @@ in the dev log temporarily change that `console.info` to `console.warn`
 (Vite forwards warn, not info). Beware: with no `SCREEN=ride`/`island` the app
 idles in a menu at 15 fps and the statistics then measure nothing useful;
 with `AUTO_SIM=0` the connection banner animates and skews them too.
+
+Measuring a change (learned 2026-10-29): the frame sits on the 60 Hz cap at
+the adapted render scale, so force the scale up (`renderer.setPixelRatio(1.5)`
+with `adaptResolution` stubbed) until the GPU is saturated, freeze the rider
+(`world.update = () => {}`, `speed = 0`) so every variant draws the same
+frame, and wait until all tiles are built: a measurement taken while tiles
+still build once made the PBR terrain look 10 ms dearer than Lambert; frozen,
+they cost the same. Tone mapping is `NeutralToneMapping` (ACES turned the
+island grey-beige); asphalt `#9a9894` times its texture is ~10 % reflectance.
 
 ## Vegetation
 
