@@ -594,7 +594,9 @@ export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_W
   const meshes = [
     // Shoulder: a wide sandy verge on the test course, a narrow gravel edge on a mountain road.
     tag(ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"), "shoulder"),
-    tag(ribbon(pts, closed, width, 0.05, mountain ? "#454341" : "#55585f", { map: asphalt }), "asphalt"),
+    // Multiplied with the speckle texture (mean ~0.47), this lands near real asphalt's
+    // 8–12 % reflectance; the old #454341 came to ~1 %, a black road in the sun.
+    tag(ribbon(pts, closed, width, 0.05, mountain ? "#9a9894" : "#a2a5ab", { map: asphalt }), "asphalt"),
   ];
   if (lines !== "none") meshes.push(tag(ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }), "edge"));
   if (lines === "test") meshes.push(tag(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }), "centre"));

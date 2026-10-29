@@ -64,8 +64,10 @@ export class World {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.56;
+    // Neutral, not ACES: ACES pulls every colour toward grey-beige, which turned the
+    // island's olive scrub and pines drab and the sky white. Neutral keeps hue and saturation.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 0.72;
 
     // Sky with atmospheric scattering; it also lights the materials through an environment map.
     const sky = new Sky();
