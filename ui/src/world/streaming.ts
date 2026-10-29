@@ -708,9 +708,19 @@ export class TileManager {
         const cls = ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, e.kind)];
         // Numbered tertiary roads (the Ma-10 itself, Sa Calobra) are marked like main roads.
         const lines = e.kind === 2 && e.ref ? "centre" : cls.lines;
-        pieces.push(...roadMeshes(part, false, cls.width, true, this.asphalt, lines));
+        const road = roadMeshes(part, false, cls.width, true, this.asphalt, lines);
         if (e.tunnel) {
-          group.add(tunnelMesh(part, this.detail.rock));
+          // Out of the sun, lit by the lamps' pools only: a road of its own kind, so it merges apart from the sunlit ones.
+          for (const m of road) {
+            m.userData.kind += "-tunnel";
+            (m.material as THREE.MeshStandardMaterial).color.multiplyScalar(0.3);
+          }
+        }
+        pieces.push(...road);
+        if (e.tunnel) {
+          // Headwalls only where the tunnel really opens: at the edge's own end, on a node with an open road.
+          const portals: [boolean, boolean] = [partStart === 0 && this.isPortal(e.a), partStart + part.length >= pts.length && this.isPortal(e.b)];
+          group.add(tunnelMesh(part, this.detail.rock, portals));
         } else {
           pieces.push(corridorMesh(part, this.index, this.heightAt, null, this.detail.grain, photo.colorAt, this.detail, ei, e.start + partStart));
           pieces.push(parapets(part, this.heightAt, cls.width, this.detail.rock));
@@ -718,9 +728,16 @@ export class TileManager {
       };
       const flush = async () => {
         // Long runs go in pieces of 60 points (300 m), with a frame between, so no single piece stalls the picture.
+        // A tunnel goes in one piece: cut into pieces, everything past the first 60 points
+        // had neither tube nor road (the Ma-10's Monnàber tunnel is 81 points).
+        if (e.tunnel) {
+          if (run.length >= 2) build(run, runStart);
+          run = [];
+          return;
+        }
         for (let k = 0; k + 1 < run.length; k += 59) {
           const part = run.slice(k, Math.min(run.length, k + 60));
-          if (part.length >= 2 && !(e.tunnel && k > 0)) build(part, runStart + k);
+          if (part.length >= 2) build(part, runStart + k);
           if (k + 60 < run.length) await nextFrame();
         }
         run = [];
@@ -808,6 +825,17 @@ export class TileManager {
     t.state = "ready";
     this.resink(t);
     console.info(`tile ${t.key}: ready at ${(performance.now() / 1000).toFixed(1)} s, fetched in ${(t1 - t0).toFixed(0)} ms, built in ${(performance.now() - t1).toFixed(0)} ms`);
+  }
+
+  /** Does a tunnel open to daylight at this node: a dead end, or an open road meeting it? */
+  private isPortal(node: number): boolean {
+    let degree = 0;
+    for (const f of this.net.edges) {
+      if (f.a !== node && f.b !== node) continue;
+      degree++;
+      if (!f.tunnel) return true;
+    }
+    return degree <= 1;
   }
 
   /** Bearing in degrees (x east, z south) of an edge leaving `node`. */

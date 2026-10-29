@@ -651,7 +651,30 @@ export function mergeByKind(meshes: THREE.Mesh[]): THREE.Mesh[] {
  * A tunnel: a concrete tube around the road, a few metres past each portal,
  * with a headwall at both ends to hide where the hillside meets the road.
  */
-export function tunnelMesh(pts: Route["points"], stone: THREE.Texture): THREE.Group {
+let glow: THREE.Texture | null = null;
+/** A soft round spot, white in the middle and clear at the edge: light pools under the tunnel lamps. */
+function glowTexture(): THREE.Texture {
+  if (glow) return glow;
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.5, "rgba(255,255,255,0.45)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  glow = new THREE.CanvasTexture(c);
+  glow.colorSpace = THREE.SRGBColorSpace;
+  glow.userData.shared = true;
+  return glow;
+}
+
+/**
+ * `portals` says which ends of `pts` are real portals (headwall, daylight reaching in);
+ * an end where a tile boundary or another tunnel edge cuts the run continues underground.
+ */
+export function tunnelMesh(pts: Route["points"], stone: THREE.Texture, portals: [boolean, boolean] = [true, true]): THREE.Group {
   const n = pts.length;
   const group = new THREE.Group();
   if (n < 2) return group;
@@ -706,33 +729,66 @@ export function tunnelMesh(pts: Route["points"], stone: THREE.Texture): THREE.Gr
   geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  // Rough rock, lit only by the lamps: a dim self-light stands in for them, and fog is kept out.
+  // Lamps along the roof every 25 m (distances from the start of the run).
+  const length = run[run.length - 1].distance_m - run[0].distance_m;
+  const lampAt: number[] = [];
+  for (let d = 12; d < length - 8; d += 25) lampAt.push(d);
+  // The lamps' light is baked into the tube's vertex colours instead of real point
+  // lights: every point light in the scene adds a loop to the shading of every lit pixel,
+  // and a tunnel tile streaming in or out changed the light count, which recompiles every
+  // shader in the scene (a visible stall). Unlit, the tube also keeps the sun out.
+  const colors = new Float32Array(verts.length);
+  for (let i = 0; i < run.length; i++) {
+    const d = run[i].distance_m - run[0].distance_m;
+    let lamp = 0;
+    for (const a of lampAt) lamp += Math.exp(-(((d - a) / 8) ** 2));
+    // Daylight reaches a few metres in from each portal.
+    const day = Math.max(portals[0] ? smoothstep(14, 0, d) : 0, portals[1] ? smoothstep(length - 14, length, d) : 0);
+    profile.forEach(([, h], k) => {
+      const up = smoothstep(0, wallH + archH, h);
+      const lit = 0.16 + Math.min(1, lamp) * (0.35 + 0.5 * up);
+      const v = (i * across + k) * 3;
+      colors[v] = lerp(lit, 0.85, day);
+      colors[v + 1] = lerp(lit * 0.9, 0.85, day);
+      colors[v + 2] = lerp(lit * 0.72, 0.85, day);
+    });
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   const rock = stone.clone();
   rock.needsUpdate = true;
-  const tube = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: "#4a4742", map: rock, emissive: "#0f0e0b", roughness: 1, side: THREE.DoubleSide, fog: false }));
-  tube.receiveShadow = true;
+  const tube = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: "#9a948a", map: rock, vertexColors: true, side: THREE.DoubleSide, fog: false }));
   group.add(tube);
-  // Lamps along the roof every 25 m, with a little light on the road under each.
-  const lampGeo = new THREE.BoxGeometry(0.5, 0.15, 1.2);
-  const lampMat = new THREE.MeshBasicMaterial({ color: "#fff2c8" });
-  for (let d = 12; d < run[run.length - 1].distance_m - run[0].distance_m - 8; d += 25) {
+  // The lamps as one mesh, and a pool of light on the road under each as one more.
+  const lamps: THREE.BufferGeometry[] = [];
+  const pools: THREE.BufferGeometry[] = [];
+  const m4 = new THREE.Matrix4();
+  for (const d of lampAt) {
     let i = 0;
     while (i < run.length - 2 && run[i + 1].distance_m - run[0].distance_m < d) i++;
     const p = run[i];
     const q = run[i + 1];
-    const lamp = new THREE.Mesh(lampGeo, lampMat);
-    lamp.position.set(p.x, p.y + wallH + archH - 0.3, p.z);
-    lamp.rotation.y = Math.atan2(q.x - p.x, q.z - p.z);
-    group.add(lamp);
-    const light = new THREE.PointLight("#ffe9b0", 2.5, 22, 2);
-    light.position.set(p.x, p.y + wallH + archH - 0.6, p.z);
-    group.add(light);
+    const yaw = Math.atan2(q.x - p.x, q.z - p.z);
+    m4.makeRotationY(yaw).setPosition(p.x, p.y + wallH + archH - 0.3, p.z);
+    lamps.push(new THREE.BoxGeometry(0.5, 0.15, 1.2).applyMatrix4(m4));
+    const pool = new THREE.PlaneGeometry(half * 2 - 0.6, 9).rotateX(-Math.PI / 2);
+    m4.makeRotationY(yaw).setPosition(p.x, p.y + 0.1, p.z);
+    pools.push(pool.applyMatrix4(m4));
   }
-  // Headwalls: a wide slab of stone around each portal mouth.
-  for (const [p, q] of [
-    [run[0], run[1]],
-    [run[run.length - 1], run[run.length - 2]],
-  ]) {
+  if (lamps.length) {
+    group.add(new THREE.Mesh(mergeGeometries(lamps, false)!, new THREE.MeshBasicMaterial({ color: "#fff2c8" })));
+    const poolMesh = new THREE.Mesh(
+      mergeGeometries(pools, false)!,
+      new THREE.MeshBasicMaterial({ map: glowTexture(), color: "#ffcf80", transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
+    );
+    poolMesh.renderOrder = 2;
+    group.add(poolMesh);
+  }
+  // Headwalls: a wide slab of stone around each portal mouth, all in one mesh.
+  const walls: THREE.BufferGeometry[] = [];
+  const ends: [Route["points"][number], Route["points"][number]][] = [];
+  if (portals[0]) ends.push([run[0], run[1]]);
+  if (portals[1]) ends.push([run[run.length - 1], run[run.length - 2]]);
+  for (const [p, q] of ends) {
     const l = Math.hypot(q.x - p.x, q.z - p.z) || 1;
     const nx = -(q.z - p.z) / l;
     const nz = (q.x - p.x) / l;
@@ -745,19 +801,20 @@ export function tunnelMesh(pts: Route["points"], stone: THREE.Texture): THREE.Gr
     const top = wallH + archH;
     const lintel = 3.0;
     const depth = 6.5;
-    const mat = new THREE.MeshStandardMaterial({ color: "#8d8577", map: stone, roughness: 1 });
     const yaw = Math.atan2(nx, nz) + Math.PI / 2;
     const place = (w: number, h: number, across: number, y: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, depth), mat);
-      m.position.set(p.x + dx * (depth / 2 - 0.7) + nx * across, y, p.z + dz * (depth / 2 - 0.7) + nz * across);
-      m.rotation.y = yaw;
-      m.castShadow = true;
-      m.receiveShadow = true;
-      group.add(m);
+      m4.makeRotationY(yaw).setPosition(p.x + dx * (depth / 2 - 0.7) + nx * across, y, p.z + dz * (depth / 2 - 0.7) + nz * across);
+      walls.push(new THREE.BoxGeometry(w, h, depth).applyMatrix4(m4));
     };
     place(pier, top + lintel + 1.5, -(half + pier / 2), p.y + (top + lintel + 1.5) / 2 - 1.5);
     place(pier, top + lintel + 1.5, half + pier / 2, p.y + (top + lintel + 1.5) / 2 - 1.5);
     place(half * 2, lintel, 0, p.y + top + lintel / 2);
+  }
+  if (walls.length) {
+    const wallMesh = new THREE.Mesh(mergeGeometries(walls, false)!, new THREE.MeshStandardMaterial({ color: "#8d8577", map: stone, roughness: 1 }));
+    wallMesh.castShadow = true;
+    wallMesh.receiveShadow = true;
+    group.add(wallMesh);
   }
   return group;
 }
