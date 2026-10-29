@@ -191,6 +191,13 @@ interface Tile {
   photoColor: ((x: number, z: number) => [number, number, number] | null) | null;
 }
 
+/**
+ * Trees per area relative to the single-route worlds' counts (sized for 53 km²). At 1 the
+ * Tramuntana's pine woods came out as a few hundred trees per tile, scattered over bare
+ * scrub; card trees are instanced, so three times as many cost about a millisecond.
+ */
+const VEG_DENSITY = 3;
+
 /** Vegetation casts shadows only this close to the rider: the shadow pass redraws every caster. */
 const SHADOW_RADIUS_M = 900;
 
@@ -477,7 +484,7 @@ export class TileManager {
     const land: Land = { height: this.heightAt, water: (x, z) => this.rawAt(x, z) < SEA_LEVEL + 1.5, slope: (x, z) => gridSlope(grid, x, z) };
     const region = { x0: t.x0, z0: t.z0, w: t.x1 - t.x0, h: t.z1 - t.z0 };
     const area = region.w * region.h;
-    t.veg = vegetation(this.index, this.heightAt, land, region, new RouteSampler({ name: "", points: [], closed: false, world: null }), true, t.photoColor, area / 53e6);
+    t.veg = vegetation(this.index, this.heightAt, land, region, new RouteSampler({ name: "", points: [], closed: false, world: null }), true, t.photoColor, (area / 53e6) * VEG_DENSITY);
     t.veg.userData.cast = true;
     t.group.add(t.veg);
   }
