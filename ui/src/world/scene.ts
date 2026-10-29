@@ -6,6 +6,7 @@ import type { Route } from "../types";
 import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
 import { gridSample, gridSlope, imageMean, OrthoSampler, type Grid, type WorldData } from "./terrain";
+import { foliageDepthMaterial, foliageMaterial, treeGeometry } from "./trees";
 import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockDetailTexture, rockNormalTexture, rockTexture, scrubDetailTexture, waterNormalTexture } from "./textures";
 
 /** Road width in metres: a mountain road for real-world routes, a wider one for the procedural course. */
@@ -985,7 +986,7 @@ function buildProceduralWorld(route: Route): WorldStatics {
   return { group, heightAt, animate };
 }
 
-/** Pines, round trees, cypresses, bushes and rocks, instanced per kind. */
+/** Pines, round trees, cypresses, bushes (card models from the foliage atlas) and rocks, instanced per kind. */
 export function vegetation(
   index: RoadIndex,
   heightAt: (x: number, z: number) => number,
@@ -1011,54 +1012,25 @@ export function vegetation(
   const q = new THREE.Quaternion();
   const col = new THREE.Color();
 
-  const trunkMat = new THREE.MeshStandardMaterial({ color: "#6b4a2b", roughness: 1 });
-  const leafMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.9 });
   const rockMat = new THREE.MeshStandardMaterial({ color: "#8d8880", roughness: 1 });
-
-  // Pine: trunk + two stacked cones (the test course), or an Aleppo pine with
-  // a broad, uneven crown of flattened blobs (real terrain).
-  const c1 = new THREE.ConeGeometry(2.6, 6, 7);
-  c1.translate(0, 5, 0);
-  const c2 = new THREE.ConeGeometry(1.8, 5, 7);
-  c2.translate(0, 8.5, 0);
-  const blob = (r: number, sy: number, x: number, y: number, z: number) => {
-    const b = new THREE.SphereGeometry(r, 6, 4);
-    b.scale(1, sy, 1);
-    b.translate(x, y, z);
-    return b;
-  };
-  const aleppo = mergeGeometries([blob(2.9, 0.55, 0, 6.4, 0), blob(2.2, 0.6, 1.6, 5.6, 0.9), blob(2.0, 0.6, -1.5, 5.9, -1.0), blob(1.7, 0.65, 0.3, 7.3, -0.4), blob(1.5, 0.6, -0.8, 4.9, 1.4)]);
-
-  // Round tree: trunk + three spheres, one geometry.
-  const crownParts = [new THREE.SphereGeometry(2.2, 7, 5), new THREE.SphereGeometry(1.7, 7, 5), new THREE.SphereGeometry(1.6, 7, 5)];
-  crownParts[0].translate(0, 4.6, 0);
-  crownParts[1].translate(1.4, 3.9, 0.7);
-  crownParts[2].translate(-1.2, 4.1, -0.8);
-  const roundCrown = [mergeGeometries(crownParts)];
-  // Cypress: tall narrow ellipsoid.
-  const cypress = new THREE.SphereGeometry(1, 7, 8);
-  cypress.scale(0.9, 4.2, 0.9);
-  cypress.translate(0, 4.2, 0);
-  const trunk = new THREE.CylinderGeometry(0.22, 0.38, 2.6, 6);
-  trunk.translate(0, 1.3, 0);
-  const bush = new THREE.SphereGeometry(1, 5, 4);
-  bush.scale(1.4, 0.9, 1.4);
-  bush.translate(0, 0.7, 0);
+  const foliage = foliageMaterial();
   const rock = new THREE.IcosahedronGeometry(1, 1);
   rock.scale(1.3, 0.8, 1);
 
+  // Trees are card models from the foliage atlas (see trees.ts); the palette
+  // tints the texture, so it stays close to white.
   const kinds = mediterranean
     ? {
-        pine: { geos: [aleppo], count: 3000, palette: ["#263f24", "#2d4a28", "#213822", "#345430", "#2a4327", "#3b5a33"] },
-        round: { geos: roundCrown, count: 250, palette: ["#3d5a2e", "#46632f", "#35502a"] },
-        cypress: { geos: [cypress], count: 60, palette: ["#24502a", "#2b5a30", "#1f4524"] },
+        pine: { geos: [treeGeometry("pine")], count: 3000, palette: ["#e2e8dc", "#d4dccc", "#eaeee2", "#c8d4be", "#dce4d0"] },
+        round: { geos: [treeGeometry("round")], count: 250, palette: ["#e4ead8", "#d6dec8", "#ecf0e0"] },
+        cypress: { geos: [treeGeometry("cypress")], count: 60, palette: ["#e0e6dc", "#d2dccc", "#eaeee4"] },
       }
     : {
-        pine: { geos: [c1, c2], count: 1500, palette: ["#2f7d3a", "#3c8f3f", "#2b6b45", "#4a8f3e"] },
-        round: { geos: roundCrown, count: 900, palette: ["#3e8a3c", "#4f8f44", "#467a2f", "#5a9a44"] },
-        cypress: { geos: [cypress], count: 350, palette: ["#24502a", "#2b5a30", "#1f4524"] },
+        pine: { geos: [treeGeometry("pine")], count: 1500, palette: ["#e6f0dc", "#f0f6e6", "#d8e8d0", "#ecf4e0"] },
+        round: { geos: [treeGeometry("round")], count: 900, palette: ["#e8f0d8", "#f0f4e0", "#dce8cc", "#f2f6e4"] },
+        cypress: { geos: [treeGeometry("cypress")], count: 350, palette: ["#e0e6dc", "#d2dccc", "#eaeee4"] },
       };
-  const bushes = { count: mediterranean ? 1500 : 1800, palette: mediterranean ? ["#4e5f2a", "#596a33", "#465525"] : ["#5f8233", "#75903f", "#6a7f34"] };
+  const bushes = { geos: [treeGeometry("bush")], count: mediterranean ? 1500 : 1800, palette: mediterranean ? ["#dce0cc", "#e6e8d4", "#d0d6c0"] : ["#e6f0d4", "#eef4dc", "#dce8c8"] };
   const rocks = { count: mediterranean ? 1500 : 400 };
 
   const canPlace = (x: number, z: number, minRoad: number): { ok: boolean; near: number } => {
@@ -1072,10 +1044,13 @@ export function vegetation(
   const terrainOk = (x: number, z: number, y: number, maxSlope: number) =>
     !mediterranean || (land.slope(x, z) < maxSlope && rand() > smoothstep(450, 950, y));
 
-  const place = (geos: THREE.BufferGeometry[], count0: number, palette: string[], withTrunk: boolean, density: (near: number, x: number, z: number) => number, sizeRange: [number, number], minRoad: number, mat = leafMat, shadows = true) => {
+  const place = (geos: THREE.BufferGeometry[], count0: number, palette: string[], density: (near: number, x: number, z: number) => number, sizeRange: [number, number], minRoad: number, mat: THREE.Material = foliage, shadows = true) => {
     const count = Math.max(1, Math.round(count0 * scale));
-    const meshes = geos.map((geo) => new THREE.InstancedMesh(geo, mat, count));
-    const trunks = withTrunk ? new THREE.InstancedMesh(trunk, trunkMat, count) : null;
+    const meshes = geos.map((geo) => {
+      const mesh = new THREE.InstancedMesh(geo, mat, count);
+      if (mat === foliage) mesh.customDepthMaterial = foliageDepthMaterial();
+      return mesh;
+    });
     let placed = 0;
     for (let tries = 0; placed < count && tries < count * 25; tries++) {
       const [x, z] = spot();
@@ -1092,7 +1067,6 @@ export function vegetation(
         mesh.setMatrixAt(placed, m);
         mesh.setColorAt(placed, col.set(palette[Math.floor(rand() * palette.length)]).offsetHSL(0, 0, (rand() - 0.5) * 0.08));
       }
-      trunks?.setMatrixAt(placed, m);
       placed++;
     }
     for (const mesh of meshes) {
@@ -1100,20 +1074,15 @@ export function vegetation(
       mesh.castShadow = shadows;
       g.add(mesh);
     }
-    if (trunks) {
-      trunks.count = placed;
-      trunks.castShadow = true;
-      g.add(trunks);
-    }
   };
 
   const forest = (near: number, x: number, z: number) =>
     mediterranean ? (photo ? treeCover(x, z) : fbm(x, z, 350, 5) > 0.4 ? 0.9 : 0.15) : (0.2 + 0.8 * (1 - smoothstep(30, 500, near))) * (fbm(x, z, 300, 5) > 0.42 ? 1 : 0.1);
-  place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, true, forest, mediterranean ? [0.55, 1.15] : [0.7, 1.4], mediterranean ? 3 : 5);
-  place(kinds.round.geos, kinds.round.count, kinds.round.palette, true, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
-  place(kinds.cypress.geos, kinds.cypress.count, kinds.cypress.palette, true, (n) => 0.9 * (1 - smoothstep(12, 120, n)), [0.55, 1.0], 3);
-  place([bush], bushes.count, bushes.palette, false, (n, x, z) => (mediterranean ? 0.5 + 0.5 * treeCover(x, z) : 0.9) * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, leafMat, false);
-  place([rock], rocks.count, ["#aaa49a", "#9c968c", "#b5afa5"], false, (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.25, mediterranean ? 0.8 : 1.0], 1.8, rockMat, false);
+  place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, forest, mediterranean ? [0.55, 1.15] : [0.7, 1.4], mediterranean ? 3 : 5);
+  place(kinds.round.geos, kinds.round.count, kinds.round.palette, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
+  place(kinds.cypress.geos, kinds.cypress.count, kinds.cypress.palette, (n) => 0.9 * (1 - smoothstep(12, 120, n)), [0.55, 1.0], 3);
+  place(bushes.geos, bushes.count, bushes.palette, (n, x, z) => (mediterranean ? 0.5 + 0.5 * treeCover(x, z) : 0.9) * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, foliage, false);
+  place([rock], rocks.count, ["#aaa49a", "#9c968c", "#b5afa5"], (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.25, mediterranean ? 0.8 : 1.0], 1.8, rockMat, false);
   return g;
 }
 

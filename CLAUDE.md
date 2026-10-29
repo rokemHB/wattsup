@@ -96,6 +96,16 @@ in the dev log temporarily change that `console.info` to `console.warn`
 idles in a menu at 15 fps and the statistics then measure nothing useful;
 with `AUTO_SIM=0` the connection banner animates and skews them too.
 
+## Vegetation
+
+`ui/src/world/trees.ts` paints a foliage atlas once (pine, holm oak, cypress,
+bush, a bark patch) and builds one geometry per kind: a trunk, three crossed
+cards and a top card with every normal pointing up (the material keeps it up
+on back faces too, see `onBeforeCompile`). `vegetation()` in `scene.ts`
+instances them per tile with near-white tints and a `customDepthMaterial`
+so shadows follow the cut-out. Geometry, atlas and materials are shared and
+marked `userData.shared`, which `TileManager.unload` leaves alone.
+
 ## Route planner (map screen)
 
 `ui/src/map.ts` is the map screen (view, click menu, waypoints, side panel,

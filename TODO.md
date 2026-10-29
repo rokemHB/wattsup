@@ -6,7 +6,7 @@ Open items, roughly in the order they are worth doing.
 - [x] Bike geometry more like an aero road bike: deep-section wheels, dropped seat stays, a sloping top tube, integrated bar and stem, a kammtail down tube, disc brakes, a cassette, a bottle.
 - [x] Dropped Bluetooth connections during a ride hold the ride (clock, distance, workout) and show a banner until the trainer is back. Still to verify on real hardware.
 - [x] Riders without a Zwift Cog: the drivetrain setting turns virtual gearing off and hides the gear tile and auto-shift; cadence shows a dash unless the trainer reports it.
-- [ ] Trees and bushes as real models instead of primitives; place them from the aerial photo as now.
+- [x] Trees and bushes as card models (a trunk and crossed cut-out cards from a painted foliage atlas, `ui/src/world/trees.ts`), one instanced draw call per kind and tile, alpha-cut shadows; placed from the aerial photo as before. Real glTF models could replace the cards later without touching the placement.
 - [x] Parapet floated where the road bridges itself at the Nus de sa Corbata: parapets now stand on a retaining wall down to the ground (12 m at most).
 - [x] Rider model: a face with sunglasses, nose and ears; a two-tone jersey with a chest band, zip, cuffs and rear pockets; a vented aero helmet with a chin strap; socks and shoes with soles.
 - [x] Rider model: the saddle clipped into the rider's backside; the saddle is lower, the pelvis sits on it.
