@@ -30,6 +30,9 @@ export class World {
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private sunDir: THREE.Vector3;
+  private shadowX = new THREE.Vector3();
+  private shadowY = new THREE.Vector3();
+  private shadowTexel = 1;
   private statics: WorldStatics;
   private rider = new Rider();
   private envTex: THREE.Texture | null = null;
@@ -115,6 +118,11 @@ export class World {
     fill.position.copy(sunDir.clone().multiply(new THREE.Vector3(-1, 0.6, -1)).normalize().multiplyScalar(100));
     this.scene.add(fill);
     this.sunDir = sunDir;
+    // The shadow camera's own axes (it looks along -sunDir), for snapping it to its texels.
+    const basis = new THREE.Matrix4().lookAt(sunDir, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
+    this.shadowX.setFromMatrixColumn(basis, 0);
+    this.shadowY.setFromMatrixColumn(basis, 1);
+    this.shadowTexel = (2 * s) / this.sun.shadow.mapSize.x;
     this.scene.add(this.sun, this.sun.target);
 
     this.statics = network ? this.buildNetworkWorld(network.data, network.net) : buildWorld(route, world);
@@ -341,6 +349,12 @@ export class World {
   private frame() {
     if (!this.running) return;
     const now = performance.now();
+    // Behind the menus 15 frames a second are plenty, and the frames in between do
+    // no work at all (tiles, camera, physics smoothing): the rest is for the UI.
+    if (this.idle && now - this.lastRender < 66) {
+      requestAnimationFrame(() => this.frame());
+      return;
+    }
     const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
     this.lastFrame = now;
     this.frameStart = now;
@@ -459,16 +473,17 @@ export class World {
     this.camera.lookAt(this.camLook);
     this.bucket[1] += performance.now() - tUpd0;
 
-    // The sky dome and the sun's shadow box follow the rider: an island is wider than the dome.
-    this.sun.position.copy(rider).add(this.sunDir.clone().multiplyScalar(400));
-    this.sun.target.position.copy(rider);
+    // The sun's shadow box follows the rider, in whole shadow-map texels: moved
+    // smoothly, every texel's sample point slid along the ground and the shadow
+    // edges crawled and shimmered as the rider rode.
+    const lx = rider.dot(this.shadowX);
+    const ly = rider.dot(this.shadowY);
+    const target = this.sun.target.position.copy(rider);
+    target.addScaledVector(this.shadowX, Math.round(lx / this.shadowTexel) * this.shadowTexel - lx);
+    target.addScaledVector(this.shadowY, Math.round(ly / this.shadowTexel) * this.shadowTexel - ly);
+    this.sun.position.copy(target).addScaledVector(this.sunDir, 400);
 
     this.perfStats(dt);
-    // Behind the menus 15 frames a second are plenty; the rest of the frame stays free for the UI.
-    if (this.idle && now - this.lastRender < 66) {
-      requestAnimationFrame(() => this.frame());
-      return;
-    }
     const renderDt = this.lastRender ? Math.min((now - this.lastRender) / 1000, 0.1) : dt;
     this.lastRender = now;
     const tR = performance.now();
