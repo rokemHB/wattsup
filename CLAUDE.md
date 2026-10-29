@@ -33,8 +33,9 @@ workout|map|map-download|ride|island|workout-ride>`, `WATTSUP_ISLAND_AT=lat,lon[
 front|drone|orbit>` for single routes. The Tauri CLI swallows flags, so use env.
 
 `WATTSUP_DEV_JS='<javascript>'` runs a script in the UI once it is up, with
-`wattsup.map` (the map screen object, private fields reachable), `wattsup.api`
-and `wattsup.screen()` in scope: the only way to click, hover and drag on the
+`wattsup.map` (the map screen object, private fields reachable), `wattsup.api`,
+`wattsup.screen()` and `wattsup.world()` (the `World`; wrap `renderer.render` to
+place the camera for close-ups of the rider) in scope: the only way to click, hover and drag on the
 map from a script here (no mouse automation on this machine). Dispatch
 `MouseEvent`s on `map.canvas` (mousedown) and `window` (mousemove, mouseup)
 with `clientX/Y` from `canvas.getBoundingClientRect()`; log with

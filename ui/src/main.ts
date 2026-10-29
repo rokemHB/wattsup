@@ -861,7 +861,7 @@ async function start() {
   }
   if (startup.dev_js) {
     // Test driving: WATTSUP_DEV_JS runs with `wattsup.map` (the map screen), `wattsup.api` and `wattsup.screen()` in scope.
-    Object.assign(window, { wattsup: { map: mapScreen, api, screen: () => screen } });
+    Object.assign(window, { wattsup: { map: mapScreen, api, screen: () => screen, world: () => world } });
     new Function(startup.dev_js)();
   }
   if (startup.screen === "workout-ride") {
