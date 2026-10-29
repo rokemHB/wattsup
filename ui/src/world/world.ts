@@ -179,7 +179,7 @@ export class World {
     group.add(sea.mesh);
     const clouds = cloudLayers(cx, cz);
     group.add(...clouds.meshes);
-    const tiles = new TileManager(group, data, net, far, farMeshes, detail, data.mid);
+    const tiles = new TileManager(group, data, net, far, farMeshes, detail, data.mid, (tex) => this.renderer.initTexture(tex));
     this.tiles = tiles;
     return {
       group,

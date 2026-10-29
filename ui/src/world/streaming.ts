@@ -261,9 +261,12 @@ export class TileManager {
     private farMeshes: THREE.Mesh[],
     private detail: Detail,
     private mid: Grid | null = null,
+    /** Uploads a texture to the GPU now (the renderer's initTexture), so a tile's first frame on screen does not do it. */
+    private prepare: ((tex: THREE.Texture) => void) | null = null,
   ) {
     this.frame = new Frame(meta.origin.lat, meta.origin.lon);
     this.index = new NetworkIndex(net);
+    for (const tex of [this.asphalt, detail.grain, detail.rock, detail.scrub, detail.normal]) tex.userData.shared = true;
     this.inTunnel = new Uint8Array(net.points);
     this.uncut = new Uint8Array(net.points);
     this.tubeZone = new Uint8Array(net.points);
@@ -523,7 +526,9 @@ export class TileManager {
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
           if (m.userData.shared) continue;
-          for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
+          // Textures every tile uses (asphalt, rock detail, the foliage atlas) stay: disposing one
+          // here only made the next tile upload it again.
+          for (const v of Object.values(m)) if (v instanceof THREE.Texture && !v.userData.shared) v.dispose();
           m.dispose();
         }
       }
@@ -676,6 +681,12 @@ export class TileManager {
       return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
     };
     const tex = imageTexture(photo.bitmap);
+    this.prepare?.(tex);
+    await nextFrame();
+    if (!this.mids.has(b.key)) {
+      tex.dispose();
+      return;
+    }
     const mesh = gridBlockMesh(g, height, [r0, r1], [c0, c1], tex, this.detail, 0.7, undefined, [fr0, fr1], [fc0, fc1]);
     mesh.geometry.computeBoundingBox();
     b.mesh = mesh;
@@ -722,6 +733,13 @@ export class TileManager {
     const group = t.group;
     t.tex = imageTexture(photo.bitmap);
     t.photoColor = photo.colorAt;
+    // The photo and its mipmaps (~5 MB) go up in a frame of their own, not in the frame the tile appears.
+    this.prepare?.(t.tex);
+    await nextFrame();
+    if (!this.tiles.has(t.key)) {
+      t.tex.dispose();
+      return;
+    }
     // Near tiles get the full 10 m ground now; far ones a 20 m one, refined when the rider comes close.
     t.coarse = Math.hypot((t.x0 + t.x1) / 2 - this.riderX, (t.z0 + t.z1) / 2 - this.riderZ) > DETAIL_RADIUS_M;
     const ground = await this.buildGround(t, t.coarse ? 4 : 2);
