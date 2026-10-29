@@ -208,6 +208,32 @@ const DETAIL_RADIUS_M = 1300;
 const LOAD_RADIUS_M = 2000;
 const DROP_RADIUS_M = 3400;
 
+/**
+ * Mid-distance blocks: one per WMTS zoom-13 tile (about 3.8 km × 2.9 km here),
+ * heights from the world's 45 m mid grid, imagery at zoom 14, kept within
+ * these distances of the rider. They give the mountains their shape where
+ * the tiles have not loaded (or never will, beyond 2 km).
+ */
+const MID_ZOOM = 13;
+const MID_ORTHO_ZOOM = 14;
+const MID_RADIUS_M = 7500;
+const MID_DROP_M = 9500;
+/** The far layer is lowered this much under a mid block, and both under a loaded tile. */
+const SINK_UNDER_MID = 30;
+const SINK_UNDER_TILE = 80;
+
+interface MidBlock {
+  key: string;
+  box: { x0: number; z0: number; x1: number; z1: number };
+  lat0: number;
+  lat1: number;
+  lon0: number;
+  lon1: number;
+  mesh: THREE.Mesh | null;
+  base: Float32Array | null;
+  state: "loading" | "ready" | "failed";
+}
+
 export class TileManager {
   private tiles = new Map<string, Tile>();
   private queue: Tile[] = [];
@@ -216,6 +242,8 @@ export class TileManager {
   private index: NetworkIndex;
   private asphalt = asphaltTexture();
   private farBase = new Map<THREE.Mesh, Float32Array>();
+  private mids = new Map<string, MidBlock>();
+  private midLoading = 0;
   /** 1 where a road point lies in a tunnel (the camera stays in the tube there). */
   private inTunnel: Uint8Array;
   /** 1 where the ground is left as it is: inside a tunnel, but not its first and last 20 m, so the hillside is cut open to the portal. */
@@ -230,6 +258,7 @@ export class TileManager {
     private far: Grid,
     private farMeshes: THREE.Mesh[],
     private detail: Detail,
+    private mid: Grid | null = null,
   ) {
     this.frame = new Frame(meta.origin.lat, meta.origin.lon);
     this.index = new NetworkIndex(net);
@@ -270,7 +299,7 @@ export class TileManager {
         if (h !== null) return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
       }
     }
-    const h = gridSample(this.far, x, z) ?? SEA_LEVEL - 10;
+    const h = (this.mid && gridSample(this.mid, x, z)) ?? gridSample(this.far, x, z) ?? SEA_LEVEL - 10;
     return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
   }
 
@@ -330,6 +359,7 @@ export class TileManager {
         }
       }
     }
+    this.updateMid(x, z, lat, lon);
     const near: SignPost[] = [];
     for (const t of this.tiles.values()) {
       for (const p of t.posts) {
@@ -496,31 +526,136 @@ export class TileManager {
         }
       }
     });
-    this.sinkFar(t, false);
+    this.resink(t);
   }
 
-  /** Lowers (or restores) the far mesh under a tile so it cannot poke through the detailed terrain. */
-  private sinkFar(t: Tile, sink: boolean) {
-    const g = this.far;
-    const sz = g.spacingZ ?? g.spacing;
-    const c0 = Math.max(0, Math.floor((t.x0 - g.x0) / g.spacing) - 1);
-    const c1 = Math.min(g.cols - 1, Math.ceil((t.x1 - g.x0) / g.spacing) + 1);
-    const r0 = Math.max(0, Math.floor((t.z0 - g.z0) / sz) - 1);
-    const r1 = Math.min(g.rows - 1, Math.ceil((t.z1 - g.z0) / sz) + 1);
-    for (const m of this.farMeshes) {
-      const b = m.userData.block as { r0: number; r1: number; c0: number; c1: number };
-      if (b.r1 < r0 || b.r0 > r1 || b.c1 < c0 || b.c0 > c1) continue;
-      const base = this.farBase.get(m)!;
-      const pos = m.geometry.attributes.position as THREE.BufferAttribute;
-      const w = b.c1 - b.c0 + 1;
-      for (let r = Math.max(r0, b.r0); r <= Math.min(r1, b.r1); r++) {
-        for (let c = Math.max(c0, b.c0); c <= Math.min(c1, b.c1); c++) {
-          const i = (r - b.r0) * w + (c - b.c0);
-          pos.setY(i, base[i * 3 + 1] - (sink ? 80 : 0));
-        }
-      }
+  /**
+   * Lowers the coarser layers under the finer ones so they cannot poke
+   * through: the far layer under mid blocks and tiles, mid blocks under
+   * tiles. Recomputed for every mesh overlapping `box` from the meshes' base
+   * heights, so a layer dropped elsewhere restores only what nothing covers.
+   */
+  private resink(box: { x0: number; z0: number; x1: number; z1: number }) {
+    const tiles = [...this.tiles.values()].filter((t) => t.state === "ready");
+    const mids = [...this.mids.values()].filter((m) => m.mesh);
+    // A vertex one sample beyond the finer layer's edge goes down too: its cell would otherwise rise through the edge.
+    const inside = (b: { x0: number; z0: number; x1: number; z1: number }, x: number, z: number, m: number) => x >= b.x0 - m && x <= b.x1 + m && z >= b.z0 - m && z <= b.z1 + m;
+    const depth = (x: number, z: number, margin: number, underMid: boolean) => {
+      if (tiles.some((t) => inside(t, x, z, margin))) return SINK_UNDER_TILE;
+      if (underMid && mids.some((m) => inside(m.box, x, z, margin))) return SINK_UNDER_MID;
+      return 0;
+    };
+    const lower = (mesh: THREE.Mesh, base: Float32Array, margin: number, underMid: boolean) => {
+      const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) pos.setY(i, base[i * 3 + 1] - depth(base[i * 3], base[i * 3 + 2], margin, underMid));
       pos.needsUpdate = true;
-      m.geometry.computeBoundingSphere();
+      mesh.geometry.computeBoundingSphere();
+    };
+    const grow = 2 * this.far.spacing;
+    const overlaps = (mesh: THREE.Mesh) => {
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      const b = mesh.geometry.boundingBox!;
+      return b.max.x >= box.x0 - grow && b.min.x <= box.x1 + grow && b.max.z >= box.z0 - grow && b.min.z <= box.z1 + grow;
+    };
+    for (const m of this.farMeshes) if (overlaps(m)) lower(m, this.farBase.get(m)!, this.far.spacing, true);
+    const midSpacing = this.mid?.spacing ?? 0;
+    for (const b of mids) if (overlaps(b.mesh!)) lower(b.mesh!, b.base!, midSpacing, false);
+  }
+
+  // --- mid-distance blocks --------------------------------------------------------
+
+  private updateMid(x: number, z: number, lat: number, lon: number) {
+    if (!this.mid) return;
+    const [mx, my] = mercator(lat, lon, MID_ZOOM);
+    const tx0 = Math.floor(mx);
+    const ty0 = Math.floor(my);
+    const n = 2 ** MID_ZOOM;
+    for (let ty = ty0 - 3; ty <= ty0 + 3; ty++) {
+      for (let tx = tx0 - 3; tx <= tx0 + 3; tx++) {
+        const key = `${tx}_${ty}`;
+        if (this.mids.has(key)) continue;
+        // The tile's bounds: lon from x, lat from the inverse Mercator of y.
+        const lon0 = (tx / n) * 360 - 180;
+        const lon1 = ((tx + 1) / n) * 360 - 180;
+        const latOf = (y: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+        const lat1 = latOf(ty);
+        const lat0 = latOf(ty + 1);
+        const [x0, z0] = this.frame.toXZ(lat1, lon0);
+        const [x1, z1] = this.frame.toXZ(lat0, lon1);
+        if (Math.hypot((x0 + x1) / 2 - x, (z0 + z1) / 2 - z) > MID_RADIUS_M) continue;
+        // Only where the mid grid has data.
+        const g = this.mid;
+        if (x1 < g.x0 || z1 < g.z0 || x0 > g.x0 + (g.cols - 1) * g.spacing || z0 > g.z0 + (g.rows - 1) * (g.spacingZ ?? g.spacing)) continue;
+        this.mids.set(key, { key, box: { x0, z0, x1, z1 }, lat0, lat1, lon0, lon1, mesh: null, base: null, state: "loading" });
+      }
+    }
+    for (const b of this.mids.values()) {
+      const d = Math.hypot((b.box.x0 + b.box.x1) / 2 - x, (b.box.z0 + b.box.z1) / 2 - z);
+      if (d > MID_DROP_M && b.state !== "loading") this.unloadMid(b);
+    }
+    this.pumpMid(x, z);
+  }
+
+  private pumpMid(x: number, z: number) {
+    if (this.midLoading >= 1) return;
+    // Nearest first.
+    const waiting = [...this.mids.values()].filter((b) => b.state === "loading" && !b.mesh && !b.base);
+    if (!waiting.length) return;
+    waiting.sort((a, b) => Math.hypot((a.box.x0 + a.box.x1) / 2 - x, (a.box.z0 + a.box.z1) / 2 - z) - Math.hypot((b.box.x0 + b.box.x1) / 2 - x, (b.box.z0 + b.box.z1) / 2 - z));
+    const b = waiting[0];
+    b.base = new Float32Array(0); // claimed
+    this.midLoading++;
+    this.loadMid(b)
+      .catch((e) => {
+        console.warn(`mid block ${b.key}: ${e}`);
+        b.state = "failed";
+      })
+      .finally(() => {
+        this.midLoading--;
+        this.pumpMid(this.riderX, this.riderZ);
+      });
+  }
+
+  private async loadMid(b: MidBlock) {
+    const g = this.mid!;
+    const photo = await this.fetchOrtho(b.lat0, b.lat1, b.lon0, b.lon1, this.meta.tiles.ortho, MID_ORTHO_ZOOM, 512);
+    if (!this.mids.has(b.key)) return;
+    const sz = g.spacingZ ?? g.spacing;
+    const fr0 = (b.box.z0 - g.z0) / sz;
+    const fr1 = (b.box.z1 - g.z0) / sz;
+    const fc0 = (b.box.x0 - g.x0) / g.spacing;
+    const fc1 = (b.box.x1 - g.x0) / g.spacing;
+    const r0 = Math.max(0, Math.floor(fr0));
+    const r1 = Math.min(g.rows - 1, Math.ceil(fr1));
+    const c0 = Math.max(0, Math.floor(fc0));
+    const c1 = Math.min(g.cols - 1, Math.ceil(fc1));
+    if (r1 - r0 < 2 || c1 - c0 < 2) {
+      b.state = "failed";
+      return;
+    }
+    const height = (x: number, z: number) => {
+      const h = gridSample(g, x, z) ?? SEA_LEVEL - 10;
+      return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
+    };
+    const tex = imageTexture(photo.bitmap);
+    const mesh = gridBlockMesh(g, height, [r0, r1], [c0, c1], tex, this.detail, 0.7, undefined, [fr0, fr1], [fc0, fc1]);
+    mesh.geometry.computeBoundingBox();
+    b.mesh = mesh;
+    b.base = Float32Array.from((mesh.geometry.attributes.position as THREE.BufferAttribute).array);
+    b.state = "ready";
+    this.scene.add(mesh);
+    this.resink(b.box);
+  }
+
+  private unloadMid(b: MidBlock) {
+    this.mids.delete(b.key);
+    if (b.mesh) {
+      this.scene.remove(b.mesh);
+      b.mesh.geometry.dispose();
+      const m = b.mesh.material as THREE.MeshStandardMaterial;
+      m.map?.dispose();
+      m.dispose();
+      this.resink(b.box);
     }
   }
 
@@ -670,8 +805,8 @@ export class TileManager {
     if (!t.coarse) this.plant(t);
 
     this.scene.add(group);
-    this.sinkFar(t, true);
     t.state = "ready";
+    this.resink(t);
     console.info(`tile ${t.key}: ready at ${(performance.now() / 1000).toFixed(1)} s, fetched in ${(t1 - t0).toFixed(0)} ms, built in ${(performance.now() - t1).toFixed(0)} ms`);
   }
 
@@ -685,7 +820,7 @@ export class TileManager {
   }
 
   /** The aerial photo of a tile: WMTS tiles stitched, cropped to the tile's box, with a sampler for colours. */
-  private async fetchOrtho(lat0: number, lat1: number, lon0: number, lon1: number, template: string, zoom: number) {
+  private async fetchOrtho(lat0: number, lat1: number, lon0: number, lon1: number, template: string, zoom: number, size = 1024) {
     const [mx0, my0] = mercator(lat1, lon0, zoom);
     const [mx1, my1] = mercator(lat0, lon1, zoom);
     const tx0 = Math.floor(mx0);
@@ -710,7 +845,6 @@ export class TileManager {
       }
     }
     await Promise.all(jobs);
-    const size = 1024;
     const out = document.createElement("canvas");
     out.width = out.height = size;
     const octx = out.getContext("2d")!;

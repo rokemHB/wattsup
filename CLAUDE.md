@@ -68,6 +68,13 @@ The exact build commands are in README.md ("The island", "Single routes").
 Outputs are committed: `crates/core/worlds/mallorca/network.{json,bin}`
 (include_bytes in `network.rs`) and `ui/public/worlds/`.
 
+`tools/build_mid.py` (also run by `build_network.py`) writes `<id>-mid.bin`: a 45 m
+int16 height grid over the roads' region (`mid` in the world json, loaded as
+`NetworkWorldData.mid`). `TileManager.updateMid` streams mid-distance blocks
+from it, one per WMTS zoom-13 tile with zoom-14 imagery, within `MID_RADIUS_M`
+(7.5 km); `resink` lowers the far layer under mid blocks and tiles, and mid
+blocks under tiles, recomputed from base heights whenever a layer changes.
+
 At ride time terrain tiles (IGN WCS elevation + PNOA WMTS imagery) stream in
 through `fetch_cached` (sha256 disk cache under the app cache dir,
 `~/.cache/app.wattsup.desktop/tiles` on Linux; hosts allow-listed in

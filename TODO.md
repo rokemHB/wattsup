@@ -28,7 +28,7 @@ Open items, roughly in the order they are worth doing.
 - [x] Planner: a destination before the start, the ride time at the rider's FTP in the summary.
 - [x] Planner: routing preferences ("Prefer main roads", "Avoid this road" from the click menu, both saved with the plan and kept for re-routes), GPX import (the track becomes the few waypoints that make the route follow it).
 - [x] Island, known rough edges: the flat pale strips at hairpins were the corridor strip and the parapet's retaining wall folding over on the inside of the bend (the inner reach is now capped by the bend's radius, folded wall pieces are left out); the map picture's lighter band over the sea is harmonised away in the pipeline (`harmonise_sea`) and in the committed `map.jpg`. (Done earlier: the tube no longer pokes past the headwall, the portal is a stone collar around it; the drone and side cameras ride in the tube through tunnels instead of sitting in the rock, and the ground stays over a tunnel wherever it is 8 m above the road.)
-- [ ] Island: the far layer (150 m) is coarse where tiles have not loaded; a 30 m middle layer for the Tramuntana would hide that.
+- [x] Island: a middle layer between the tiles and the 150 m far layer: a 45 m height grid over the roads' region ships with the app (`tools/build_mid.py`, 4 MB), and the app streams mid-distance blocks from it (one per WMTS zoom-13 tile, zoom-14 imagery) within 7.5 km of the rider; the far layer is sunk under them as under the tiles. Still open: "Download all terrain" does not prefetch the mid imagery yet; blocks beyond 4 km could use every other sample.
 - [ ] More roads can be added to the whitelist in `~/wattsup-data/refs.txt` (see README, "The island").
 
 ## Ideas

@@ -284,6 +284,7 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--far", default="39.25,40.0,2.3,3.5", help="lat_min,lat_max,lon_min,lon_max of the far layer")
+    ap.add_argument("--mid-spacing", type=float, default=45.0, help="metres between samples of the middle layer (build_mid.py); 0 for none")
     ap.add_argument("--far-spacing", type=float, default=150.0)
     ap.add_argument("--ortho", action="store_true")
     ap.add_argument("--cache", default=str(Path.home() / ".cache/wattsup/tiles"))
@@ -591,6 +592,10 @@ def main():
         "attribution": "Road data © OpenStreetMap contributors (ODbL). Elevation: IGN España MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 © ESA. Aerial imagery: PNOA © IGN España (CC BY 4.0).",
     }
     (out_ui / f"{args.id}.json").write_text(json.dumps(meta, indent=1))
+    if args.mid_spacing > 0:
+        from build_mid import write_mid
+
+        write_mid(repo, args.id, args.dem, args.mid_spacing)
     print("world metadata written")
 
 

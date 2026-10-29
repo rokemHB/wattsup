@@ -220,10 +220,13 @@ curl -L -o baleares.osm.pbf https://download.geofabrik.de/europe/spain/islas-bal
 .venv/bin/pip install osmium
 .venv/bin/python tools/pbf_extract.py baleares.osm.pbf tramuntana.json --bbox 39.50,2.33,39.99,3.25
 # the 5 m model in 0.05° chunks (the WCS caps one request at about 0.1°), into dem5/
-# then the network, far layer, map and world metadata
+# then the network, far layer, middle layer, map and world metadata
 .venv/bin/python tools/build_network.py --osm tramuntana.json --dem-dir dem5 \
   --dem dem_n39_e002.tif dem_n39_e003.tif --id mallorca --name Mallorca --ortho \
   --refs Ma-10,Ma-11,Ma-11A,Ma-2141,Ma-2130,Ma-2131,Ma-2210,Ma-2220,Ma-2200,Ma-2100,Ma-1110,Ma-1101,Ma-1100,Ma-1032,Ma-1041,Ma-1040,Ma-1043,Ma-1016,Ma-1031,Ma-1030
+# the middle layer alone (a 45 m height grid over the roads' region, int16, for the
+# mid-distance blocks the app builds at ride time with zoom-14 imagery):
+.venv/bin/python tools/build_mid.py --id mallorca --dem dem_n39_e002.tif dem_n39_e003.tif
 ```
 
 ### Single routes

@@ -40,6 +40,8 @@ interface GridMeta {
   x0: number;
   z0: number;
   spacing: number;
+  /** Samples are float32 unless said otherwise; "int16" is whole metres. */
+  format?: "int16";
   ortho?: { rowEdges: number[]; colEdges: number[]; size: number; files: string[][] };
 }
 
@@ -52,10 +54,11 @@ async function loadImage(url: string): Promise<ImageBitmap> {
 async function loadGrid(meta: GridMeta): Promise<Grid> {
   const res = await fetch(meta.file);
   if (!res.ok) throw new Error(`${meta.file}: ${res.status}`);
-  const data = new Float32Array(await res.arrayBuffer());
+  const buffer = await res.arrayBuffer();
+  const data = meta.format === "int16" ? Float32Array.from(new Int16Array(buffer)) : new Float32Array(buffer);
   if (data.length !== meta.cols * meta.rows) throw new Error(`${meta.file}: ${data.length} samples, expected ${meta.cols * meta.rows}`);
-  const { ortho: o, ...rest } = meta;
-  const grid: Grid = { ...rest, data };
+  const o = meta.ortho;
+  const grid: Grid = { cols: meta.cols, rows: meta.rows, x0: meta.x0, z0: meta.z0, spacing: meta.spacing, data };
   if (o) {
     const images = await Promise.all(o.files.map((row) => Promise.all(row.map(loadImage))));
     grid.ortho = { rowEdges: o.rowEdges, colEdges: o.colEdges, size: o.size, images };
@@ -70,6 +73,8 @@ export interface NetworkWorldData {
   attribution: string;
   origin: { lat: number; lon: number };
   far: Grid;
+  /** A finer height grid over the roads' region (45 m), for mid-distance blocks between the tiles and the far layer. */
+  mid: Grid | null;
   tiles: { dlat: number; dlon: number; dem: string; ortho: string; orthoZoom: number };
   map: { image: ImageBitmap; lat_min: number; lat_max: number; lon_min: number; lon_max: number } | null;
   details?: { rock: ImageBitmap; scrub: ImageBitmap; metres: number };
@@ -84,14 +89,16 @@ export async function loadNetworkWorld(id: string): Promise<NetworkWorldData> {
     attribution: string;
     origin: { lat: number; lon: number };
     far: GridMeta;
+    mid?: GridMeta;
     tiles: NetworkWorldData["tiles"];
     map: { file: string; lat_min: number; lat_max: number; lon_min: number; lon_max: number } | null;
     details?: { rock: string; scrub: string; metres: number };
   };
   // Close-up patches: this world's own, or the ones cut for Sa Calobra, which is the same limestone.
   const details = meta.details ?? { rock: "/worlds/sa-calobra/detail-rock.jpg", scrub: "/worlds/sa-calobra/detail-scrub.jpg", metres: 110 };
-  const [far, mapImage, rock, scrub] = await Promise.all([
+  const [far, mid, mapImage, rock, scrub] = await Promise.all([
     loadGrid(meta.far),
+    meta.mid ? loadGrid(meta.mid).catch((e) => (console.warn(`mid layer: ${e}`), null)) : Promise.resolve(null),
     meta.map ? loadImage(meta.map.file) : Promise.resolve(null),
     loadImage(details.rock).catch(() => null),
     loadImage(details.scrub).catch(() => null),
@@ -102,6 +109,7 @@ export async function loadNetworkWorld(id: string): Promise<NetworkWorldData> {
     attribution: meta.attribution,
     origin: meta.origin,
     far,
+    mid,
     tiles: meta.tiles,
     map: meta.map && mapImage ? { image: mapImage, ...meta.map } : null,
     details: rock && scrub ? { rock, scrub, metres: details.metres } : undefined,
