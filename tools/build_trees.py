@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trees of a network world from a 1 m canopy height model.
+"""Trees of a world (the island's road network, or a single route) from a 1 m canopy height model.
 
 Source: Meta / World Resources Institute "High Resolution Canopy Height Maps"
 (Tolan et al. 2024, CC BY 4.0), 1.19 m pixels in EPSG:3857, one uint8 metre per
@@ -22,6 +22,8 @@ holm oak; pines above).
 
     python tools/build_trees.py --network crates/core/worlds/mallorca/network.json \\
         --chm ~/wattsup-data/canopy/chm_*.tif --out ui/public/worlds/mallorca-trees.bin
+    python tools/build_trees.py --route crates/core/routes/sa-calobra.json \\
+        --world ui/public/worlds/sa-calobra.json --chm ... --out ui/public/worlds/sa-calobra-trees.bin
 """
 import argparse
 import gzip
@@ -52,15 +54,24 @@ def crown_width(h):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--network", required=True)
+    ap.add_argument("--network", help="network json (its points in the .bin beside it)")
+    ap.add_argument("--route", help="a single route's json (crates/core/routes), with --world for its origin")
+    ap.add_argument("--world", help="the route's world json (ui/public/worlds)")
     ap.add_argument("--chm", nargs="+", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--reach", type=float, default=REACH_M)
     a = ap.parse_args()
 
-    net = json.load(open(a.network))
-    xyz = np.fromfile(a.network.replace(".json", ".bin"), dtype="<f4").reshape(-1, 3)
-    lat0, lon0 = net["origin"]["lat"], net["origin"]["lon"]
+    if a.network:
+        net = json.load(open(a.network))
+        xyz = np.fromfile(a.network.replace(".json", ".bin"), dtype="<f4").reshape(-1, 3)
+        origin = net["origin"]
+    elif a.route and a.world:
+        xyz = np.array([[p["x"], p["y"], p["z"]] for p in json.load(open(a.route))["points"]], np.float32)
+        origin = json.load(open(a.world))["origin"]
+    else:
+        sys.exit("--network, or --route with --world")
+    lat0, lon0 = origin["lat"], origin["lon"]
     kx = EARTH_LON_M * math.cos(math.radians(lat0))
 
     # Cells within reach of a road point.

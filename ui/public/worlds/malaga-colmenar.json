@@ -139,5 +139,6 @@
   "z0": -10441.3,
   "spacing": 10.0
  },
- "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0)."
+ "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0). Trees: Meta and World Resources Institute, High Resolution Canopy Height Maps (CC BY 4.0).",
+ "trees": "/worlds/malaga-colmenar-trees.bin.gz"
 }
