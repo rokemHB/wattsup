@@ -120,6 +120,28 @@ still build once made the PBR terrain look 10 ms dearer than Lambert; frozen,
 they cost the same. Tone mapping is `NeutralToneMapping` (ACES turned the
 island grey-beige); asphalt `#9a9894` times its texture is ~10 % reflectance.
 
+GPU time per pass (learned 2026-10-30): WebKitGTK exposes no WebGL timer
+queries, so stop the game loop (`world.running = false`) and time
+`renderer.render` bracketed by `gl.finish()`, ten renders per sample
+(`performance.now()` has 1 ms resolution in WebKit); a part's cost is the total
+minus the total with that part hidden. That is not capped by the display.
+Draw order is the big lever: opaque objects go front to back
+(`renderer.setOpaqueSort` in `world.ts`; three's default sorts by material
+first, which drew the sea and the far layer before the tiles and shaded every
+pixel twice), layers lying a few centimetres on top of each other draw top
+first (`LAYER_ORDER` in `scene.ts`: markings, asphalt, shoulder, corridor),
+the sea after all land and the sky last (`skyBox`: three's background cube
+shader, depth-tested at the far plane). Measured on five spots at render scale
+1.5 this took frames from 18-28 ms to 9-14 ms of GPU time (same camera,
+same frame; `tools/dev/gpu-bench.sh` reruns it). Shader cost per
+material: extract the programs' GLSL from the page (`gl.getShaderSource`) and
+compile each alone in a surfaceless EGL context with `INTEL_DEBUG=fs`
+(`MESA_SHADER_CACHE_DISABLE=true`, or cached shaders print nothing); dumps
+from the app itself interleave, because shaders compile on parallel threads.
+The sun comes from the solar ephemeris (`sun.ts`) for a fixed moment
+(`SUN_TIME` in `world.ts`, noon CEST on 20 May): south-east at 60°, near where
+it was for the aerial photos; it used to stand in the north-north-east.
+
 ## Vegetation
 
 `ui/src/world/trees.ts` paints a foliage atlas once (pine, holm oak, cypress,
@@ -129,6 +151,16 @@ on back faces too, see `onBeforeCompile`). `vegetation()` in `scene.ts`
 instances them per tile with near-white tints and a `customDepthMaterial`
 so shadows follow the cut-out. Geometry, atlas and materials are shared and
 marked `userData.shared`, which `TileManager.unload` leaves alone.
+
+Island tiles get real trees from `ui/public/worlds/mallorca-trees.bin.gz`
+(`tools/build_trees.py`, see README): `forest.ts` builds them per 400 m cell
+in `TileManager.plantForest`, one instanced mesh per kind (pine above 7 m,
+round crown below) plus infill near the rider, two-card models beyond 320 m,
+nothing beyond 1 km, shadows within 260 m; scattered pines and oaks are then
+left out of `vegetation()` (`trees = false`). Foliage tints are multiplied by
+`CANOPY_SHADE` (a canopy reflects 8-10 %; matched to photos of the Ma-10).
+Tile unload calls `dispose()` on instanced meshes: their instance buffers are
+not freed otherwise.
 
 ## Route planner (map screen)
 
