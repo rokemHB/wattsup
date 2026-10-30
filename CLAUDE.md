@@ -247,6 +247,16 @@ writes `wattsup_engine::tcx::to_tcx` into the Downloads folder, positions from
 - A standing bike waits for the first pedal stroke (`pedalling()` in `session.rs`:
   cadence ≥ 20 rpm, or ≥ 20 W when the trainer sends no cadence). Without it the
   bike rolled off every downhill start by itself, trainer or not.
+- Roundabouts: `build_network.py` fits a circle to every OSM `junction=roundabout`
+  ring (radius 6-80 m), snaps its nodes onto it and samples its pieces as arcs, at
+  least 48 points round, heights a straight ramp between the junctions; each piece
+  carries `ring: [x, z, r]`. The renderer draws ring pieces with edge lines only (the
+  outer one broken at each entry), stops the lines of roads coming in at the ring,
+  and gives rings of 8 m and more a kerbed island coloured from the photo
+  (`roundaboutIsland` in `scene.ts`). Network points are therefore not evenly 5 m
+  apart: measure along the road, never by a point count (`heading_span` in
+  `network.rs`: three points on a ring were its tangent and a free ride circled for
+  ever); rides are resampled evenly (`Route::from_polyline`).
 - Terrain grid is 10 m: anything finer near the road comes from the corridor
   strip (`corridorMesh`) and, in tunnels, from the tube.
 

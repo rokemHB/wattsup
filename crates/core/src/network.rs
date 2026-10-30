@@ -44,6 +44,9 @@ pub struct NetworkEdge {
     /// Confirmation signs along the edge (the renderer places them).
     #[serde(default)]
     pub markers: Vec<Marker>,
+    /// A piece of a roundabout: the ring's centre x, z and radius (the renderer draws its island).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring: Option<[f64; 3]>,
 }
 
 /// A confirmation sign between junctions: at edge-local point `at`, for riders
@@ -200,12 +203,31 @@ impl Network {
         }
     }
 
-    /// Bearing (radians, x east, z south) of an edge leaving `node`, measured over its first 30 m.
+    /// How many points from the `a` end (`from_a`) or the `b` end cover `HEADING_SPAN_M` of
+    /// road: headings are measured over a fixed distance, not a fixed point count. Roundabout
+    /// pieces are sampled densely, and three points there were the ring's own tangent, so
+    /// staying on the ring always looked straightest and a free ride circled for ever.
+    fn heading_span(&self, edge: usize, from_a: bool) -> usize {
+        let e = &self.edges[edge];
+        let n = e.count;
+        let at = |k: usize| self.points[if from_a { e.start + k } else { e.start + n - 1 - k }];
+        let mut d = 0.0;
+        for k in 1..n {
+            let (a, b) = (at(k - 1), at(k));
+            d += ((b[0] - a[0]) as f64).hypot((b[2] - a[2]) as f64);
+            if d >= HEADING_SPAN_M {
+                return k;
+            }
+        }
+        n - 1
+    }
+
+    /// Bearing (radians, x east, z south) of an edge leaving `node`, measured over its first `HEADING_SPAN_M`.
     pub fn heading_out(&self, edge: usize, node: usize) -> f64 {
         let e = &self.edges[edge];
         let forward = e.a == node;
         let n = e.count;
-        let k = 3.min(n - 1);
+        let k = self.heading_span(edge, forward);
         let (p0, p1) = if forward {
             (self.points[e.start], self.points[e.start + k])
         } else {
@@ -250,7 +272,7 @@ impl Network {
     pub fn arrival_heading(&self, edge: usize, node: usize) -> f64 {
         let e = &self.edges[edge];
         let n = e.count;
-        let k = 3.min(n - 1);
+        let k = self.heading_span(edge, e.b != node);
         let (p0, p1) = if e.b == node {
             (self.points[e.start + n - 1 - k], self.points[e.start + n - 1])
         } else {
@@ -412,6 +434,8 @@ pub struct Navigator {
 
 /// Keep at least this much road planned ahead of the rider.
 pub const PLAN_AHEAD_M: f64 = 6000.0;
+/// The stretch of road a heading at a junction is measured over (three points at the 5 m spacing).
+const HEADING_SPAN_M: f64 = 15.0;
 
 impl Navigator {
     /// Starts on `edge` at point `index`, riding toward `b` if `forward`.
@@ -851,6 +875,7 @@ mod tests {
                 length_m: 100.0,
                 tunnel: false,
                 markers: vec![],
+                ring: None,
             });
         };
         add(0, 1, [0.0, 0.0], [100.0, 0.0], Some("Ma-10"));
@@ -900,6 +925,73 @@ mod tests {
             points,
             adjacency,
         }
+    }
+
+    #[test]
+    fn free_ride_leaves_a_densely_sampled_roundabout() {
+        // A road from the west into a 10 m ring and out to the east, the ring in two halves
+        // sampled every ~1.2 m like the built network's roundabouts, all of it the Ma-11.
+        let mut points: Vec<[f32; 3]> = Vec::new();
+        let mut edges = Vec::new();
+        let mut add = |a: usize, b: usize, pts: Vec<[f32; 2]>| {
+            let start = points.len();
+            let length_m = pts
+                .windows(2)
+                .map(|w| ((w[1][0] - w[0][0]) as f64).hypot((w[1][1] - w[0][1]) as f64))
+                .sum();
+            points.extend(pts.iter().map(|p| [p[0], 10.0, p[1]]));
+            edges.push(NetworkEdge {
+                a,
+                b,
+                road_ref: Some("Ma-11".into()),
+                name: None,
+                kind: 0,
+                start,
+                count: pts.len(),
+                length_m,
+                tunnel: false,
+                markers: vec![],
+                ring: None,
+            });
+        };
+        let line = |from: [f32; 2], to: [f32; 2]| {
+            (0..=20)
+                .map(|i| i as f32 / 20.0)
+                .map(|t| [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t])
+                .collect::<Vec<_>>()
+        };
+        let arc = |t0: f32, t1: f32| {
+            (0..=26)
+                .map(|i| t0 + (t1 - t0) * i as f32 / 26.0)
+                .map(|t| [10.0 * t.cos(), 10.0 * t.sin()])
+                .collect::<Vec<_>>()
+        };
+        add(0, 1, line([-100.0, 0.0], [-10.0, 0.0]));
+        add(1, 2, arc(std::f32::consts::PI, 0.0)); // the southern half (z is south)
+        add(2, 1, arc(0.0, -std::f32::consts::PI)); // the northern half, on round
+        add(2, 3, line([10.0, 0.0], [100.0, 0.0]));
+        let node = |x: f64| NetworkNode {
+            x,
+            z: 0.0,
+            y: 10.0,
+            signs: None,
+        };
+        let mut adjacency = vec![Vec::new(); 4];
+        for (i, e) in edges.iter().enumerate() {
+            adjacency[e.a].push(i);
+            adjacency[e.b].push(i);
+        }
+        let net = Network {
+            name: "t".into(),
+            origin: Origin { lat: 0.0, lon: 0.0 },
+            nodes: vec![node(-100.0), node(-10.0), node(10.0), node(100.0)],
+            edges,
+            places: vec![],
+            points,
+            adjacency,
+        };
+        // Round the southern half to the east side: out along the road, not round again.
+        assert_eq!(net.default_continuation(2, 1), Some(3));
     }
 
     #[test]

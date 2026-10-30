@@ -205,7 +205,8 @@ The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
 road refs (`--refs`, plus the roundabouts, short links and shortest runs of
 other roads that join them; without it every road from OSM `primary` to
 `unclassified`) as a graph with
-10 m sampled geometry, elevation from the 5 m model, and sign destinations
+10 m sampled geometry (roundabouts as true circles, from a circle fitted to
+each OSM ring), elevation from the 5 m model, and sign destinations
 at junctions (OSM `destination` tags, else the nearest towns along the
 graph). It also writes the coarse far layer and the island map. The
 Tramuntana network (420 km of road, 692 signed junctions; tunnels are

@@ -190,6 +190,8 @@ export interface NetworkEdge {
   tunnel?: boolean;
   /** Confirmation signs along the edge: at point `at` (edge-local), for riders heading toward b or a, the next towns with km. */
   markers?: { at: number; toward_b: boolean; to: [string, number][] }[];
+  /** A piece of a roundabout: the ring's centre x, z and radius. */
+  ring?: [number, number, number];
 }
 
 export interface Place {

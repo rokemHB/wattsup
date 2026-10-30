@@ -20,6 +20,7 @@ import {
   parapets,
   ROAD_CLASS,
   roadMeshes,
+  roundaboutIsland,
   SEA_LEVEL,
   SHOULDER,
   smoothstep,
@@ -31,8 +32,13 @@ import { confirmationPost, faceCamera, signPost, type SignPost } from "./signs";
 import { buildCell, cellsIn, type ForestCell, type TreeData, updateCell } from "./forest";
 
 const cls_width = (kind: number) => ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, kind)].width;
+/** Roundabouts smaller than this get no raised island (a mini-roundabout is paint on the junction). */
+const ISLAND_MIN_R = 8;
+/** How far along the ring either side of an entry its outer edge line is left out. */
+const RING_ENTRY_GAP_M = 6;
 import { gridSample, gridSlope, type Grid } from "./terrain";
 import { parseGeoTiff } from "./tiff";
+import type { NetworkEdge } from "../types";
 import { asphaltTexture } from "./textures";
 import { RouteSampler } from "./route";
 
@@ -263,6 +269,8 @@ export class TileManager {
   private uncut: Uint8Array;
   /** 1 where the ground mesh gets a hole for the tube: the tunnel and the last metres of road into each portal. */
   private tubeZone: Uint8Array;
+  /** The roundabout each ring node belongs to: centre x, z and radius. */
+  private ringOf = new Map<number, [number, number, number]>();
 
   constructor(
     private scene: THREE.Group,
@@ -281,6 +289,11 @@ export class TileManager {
     this.inTunnel = new Uint8Array(net.points);
     this.uncut = new Uint8Array(net.points);
     this.tubeZone = new Uint8Array(net.points);
+    for (const e of net.edges) {
+      if (!e.ring) continue;
+      this.ringOf.set(e.a, e.ring);
+      this.ringOf.set(e.b, e.ring);
+    }
     for (const e of net.edges) {
       if (!e.tunnel) continue;
       this.inTunnel.fill(1, e.start, e.start + e.count);
@@ -799,8 +812,8 @@ export class TileManager {
       const build = (part: typeof pts, partStart: number) => {
         const cls = ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, e.kind)];
         // Numbered tertiary roads (the Ma-10 itself, Sa Calobra) are marked like main roads.
-        const lines = e.kind === 2 && e.ref ? "centre" : cls.lines;
-        const road = roadMeshes(part, false, cls.width, true, this.asphalt, lines);
+        const lines = e.ring ? "edge" : e.kind === 2 && e.ref ? "centre" : cls.lines;
+        const road = roadMeshes(part, false, cls.width, true, this.asphalt, lines, this.ringMarks(e, part));
         if (e.tunnel) {
           // Out of the sun, lit by the lamps' pools only: a road of its own kind, so it merges apart from the sunlit ones.
           for (const m of road) {
@@ -851,6 +864,16 @@ export class TileManager {
         if (!this.tiles.has(t.key)) return;
         budget = performance.now();
       }
+    }
+    // Roundabout islands whose centre is in this tile.
+    const islands = new Set<string>();
+    for (const ei of edges) {
+      const ring = this.index.edge(ei).ring;
+      if (!ring || ring[2] < ISLAND_MIN_R || !inside(ring[0], ring[1]) || islands.has(String(ring))) continue;
+      islands.add(String(ring));
+      const [cx, cz, r] = ring;
+      const width = cls_width(this.index.edge(ei).kind);
+      pieces.push(...roundaboutIsland(cx, cz, r, width, (a) => this.index.nearest(cx + Math.cos(a) * r, cz + Math.sin(a) * r, 12).y, photo.colorAt, this.detail));
     }
     group.add(...mergeByKind(pieces));
     await nextFrame();
@@ -920,6 +943,31 @@ export class TileManager {
   }
 
   /** Does a tunnel open to daylight at this node: a dead end, or an open road meeting it? */
+  /**
+   * Which painted lines a road piece keeps at a roundabout. On the ring itself the outer
+   * edge line stops where the roads come in (the edge's ends are the entries); on a road
+   * into a ring, every line stops at the ring's outer edge instead of running across it.
+   * The piece's points carry their distance from the edge's start.
+   */
+  private ringMarks(e: NetworkEdge, part: { distance_m: number; x: number; z: number }[]): ((i: number, side: number) => boolean) | undefined {
+    if (e.ring) {
+      const [cx, cz] = e.ring;
+      // Which side is outside: the one whose offset point lies farther from the centre.
+      const k = Math.min(1, part.length - 1);
+      const dx = part[k].x - part[0].x;
+      const dz = part[k].z - part[0].z;
+      const outer = (part[0].x - dz - cx) ** 2 + (part[0].z + dx - cz) ** 2 > (part[0].x + dz - cx) ** 2 + (part[0].z - dx - cz) ** 2 ? 1 : -1;
+      return (i, side) => {
+        if (side !== outer) return true;
+        const d = part[i].distance_m;
+        return d > RING_ENTRY_GAP_M && d < e.length_m - RING_ENTRY_GAP_M;
+      };
+    }
+    const rings = [this.ringOf.get(e.a), this.ringOf.get(e.b)].filter((r) => r !== undefined);
+    if (!rings.length) return undefined;
+    return (i) => rings.every(([cx, cz, r]) => Math.hypot(part[i].x - cx, part[i].z - cz) > r + cls_width(e.kind) / 2 + 0.5);
+  }
+
   private isPortal(node: number): boolean {
     let degree = 0;
     for (const f of this.net.edges) {

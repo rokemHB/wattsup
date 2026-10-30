@@ -33,6 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_route import EARTH_LAT_M, EARTH_LON_M, Dem, Ortho, mercator_tile  # noqa: E402
 
 SPACING = 5.0
+# Roundabouts drawn as circles: smaller ones are mini-roundabouts painted on a junction, larger ones not roundabouts.
+ROUNDABOUT_MIN_R = 6.0
+ROUNDABOUT_MAX_R = 80.0
 MAX_GRADE = 0.14
 ROAD_KINDS = {"primary": 0, "secondary": 1, "tertiary": 2, "unclassified": 3, "primary_link": 1, "secondary_link": 2, "tertiary_link": 3}
 
@@ -129,6 +132,69 @@ def spline(xz, step=1.0):
             b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
             out.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
     return np.array(out)
+
+
+def roundabout_rings(ways, to_xz, to_latlon, coords):
+    """Fits a circle to every roundabout (OSM ways tagged junction=roundabout, joined
+    end to end into rings) and moves its nodes onto it. Returns {node: (centre, radius)}.
+
+    Each piece of a roundabout between two junctions is its own edge, and splined on its
+    own it cut the corners at every entry: a polygon of kinks instead of a ring. Rings
+    that are not round (a few long one-way loops are tagged roundabout too) are left alone."""
+    pieces = [w for w in ways if w["tags"].get("junction") in ("roundabout", "circular")]
+    parent = list(range(len(pieces)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    by_node = {}
+    for i, w in enumerate(pieces):
+        for n in w["nodes"]:
+            if n in by_node:
+                parent[find(i)] = find(by_node[n])
+            else:
+                by_node[n] = i
+    groups = collections.defaultdict(set)
+    for i, w in enumerate(pieces):
+        groups[find(i)].update(w["nodes"])
+    rings = {}
+    for nodes in groups.values():
+        xz = np.array([to_xz(*coords[n]) for n in nodes])
+        if len(xz) < 5:
+            continue
+        # Algebraic least-squares circle: x^2 + z^2 + D x + E z + F = 0.
+        A = np.column_stack([xz, np.ones(len(xz))])
+        D, E, F = np.linalg.lstsq(A, -(xz ** 2).sum(axis=1), rcond=None)[0]
+        centre = np.array([-D / 2, -E / 2])
+        r2 = centre @ centre - F
+        if r2 <= 0:
+            continue
+        r = math.sqrt(r2)
+        dev = np.abs(np.linalg.norm(xz - centre, axis=1) - r)
+        if not (ROUNDABOUT_MIN_R <= r <= ROUNDABOUT_MAX_R) or dev.max() > 0.25 * r:
+            continue
+        ring = (centre, r)
+        for n in nodes:
+            d = np.array(to_xz(*coords[n])) - centre
+            coords[n] = to_latlon(*(centre + d / np.linalg.norm(d) * r))
+            rings[n] = ring
+    return rings
+
+
+def arc(xz, centre, r, spacing):
+    """Points every `spacing` metres on the circle from the first to the last of `xz`, the way they go round."""
+    ang = np.arctan2(xz[:, 1] - centre[1], xz[:, 0] - centre[0])
+    sweep = np.diff(ang)
+    sweep = (sweep + np.pi) % (2 * np.pi) - np.pi
+    total = float(sweep.sum())
+    if abs(total) < 1e-6 and len(xz) > 2:
+        total = 2 * np.pi * np.sign(sweep.sum() or 1.0)
+    n = max(1, int(round(abs(total) * r / spacing)))
+    t = ang[0] + total * np.arange(n + 1) / n
+    return np.column_stack([centre[0] + r * np.cos(t), centre[1] + r * np.sin(t)])
 
 
 def resample(xz, spacing):
@@ -321,6 +387,8 @@ def main():
     for w in ways:
         for n, g in zip(w["nodes"], w["geometry"]):
             coords[n] = (g["lat"], g["lon"])
+    rings = roundabout_rings(ways, to_xz, to_latlon, coords)
+    print(f"{len(set(id(c) for c, _ in rings.values()))} roundabouts drawn as circles")
 
     # Raw edges: way pieces between junction nodes.
     raw_edges = []
@@ -399,7 +467,13 @@ def main():
         xz = np.array([to_xz(*coords[n]) for n in nodes])
         if len(xz) < 2:
             continue
-        pts = resample(xz, SPACING)
+        ring = rings.get(nodes[0]) if tags.get("junction") in ("roundabout", "circular") else None
+        if ring is not None and all(rings.get(n) is ring for n in nodes):
+            # At least 48 points round: at 5 m a 9 m ring was an octagon.
+            pts = arc(xz, ring[0], ring[1], min(SPACING, 2 * math.pi * ring[1] / 48))
+        else:
+            ring = None
+            pts = resample(xz, SPACING)
         ll = np.array([to_latlon(x, z) for x, z in pts])
         y = dem.sample_many(ll[:, 0], ll[:, 1])
         if np.isnan(y).any():
@@ -409,14 +483,15 @@ def main():
         y = smooth(y, 6)
         node_samples[node_ids[nodes[0]]].append(float(y[0]))
         node_samples[node_ids[nodes[-1]]].append(float(y[-1]))
-        prepared.append((nodes, tags, pts, y, tunnel))
+        prepared.append((nodes, tags, pts, y, tunnel, ring))
     node_y = {ni: float(np.mean(v)) for ni, v in node_samples.items()}
     points = []
     edges_out = []
-    for nodes, tags, pts, y, tunnel in prepared:
+    for nodes, tags, pts, y, tunnel, ring in prepared:
         ya = node_y[node_ids[nodes[0]]]
         yb = node_y[node_ids[nodes[-1]]]
-        if tunnel or len(y) < 3:
+        # Roundabout pieces too: short, and sampled too densely for the 6-point smoothing to even out.
+        if tunnel or ring is not None or len(y) < 3:
             y = np.linspace(ya, yb, len(y))
         else:
             step = np.clip(np.diff(y), -MAX_GRADE * SPACING, MAX_GRADE * SPACING)
@@ -438,6 +513,7 @@ def main():
             "destination": tags.get("destination"),
             "destination_ref": tags.get("destination:ref"),
             "tunnel": tunnel,
+            **({"ring": [round(float(ring[0][0]), 1), round(float(ring[0][1]), 1), round(ring[1], 1)]} if ring is not None else {}),
         })
     # Node heights from their edges.
     for e in edges_out:

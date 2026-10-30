@@ -597,7 +597,15 @@ export const ROAD_CLASS: { width: number; lines: "centre" | "edge" | "none" }[] 
  */
 export const LAYER_ORDER: Record<string, number> = { centre: -5, edge: -5, asphalt: -4, shoulder: -3, corridor: -2 };
 
-export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false, asphalt = asphaltTexture(), lines: "centre" | "edge" | "none" | "test" = mountain ? "edge" : "test"): THREE.Mesh[] {
+export function roadMeshes(
+  pts: Route["points"],
+  closed: boolean,
+  width = ROAD_WIDTH,
+  mountain = false,
+  asphalt = asphaltTexture(),
+  lines: "centre" | "edge" | "none" | "test" = mountain ? "edge" : "test",
+  keep?: RibbonMarks["keep"],
+): THREE.Mesh[] {
   const tag = (m: THREE.Mesh, kind: string) => {
     m.userData.kind = kind;
     m.renderOrder = LAYER_ORDER[kind] ?? 0;
@@ -610,9 +618,9 @@ export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_W
     // 8–12 % reflectance; the old #454341 came to ~1 %, a black road in the sun.
     tag(ribbon(pts, closed, width, 0.05, mountain ? "#9a9894" : "#a2a5ab", { map: asphalt }), "asphalt"),
   ];
-  if (lines !== "none") meshes.push(tag(ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2 }), "edge"));
-  if (lines === "test") meshes.push(tag(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true }), "centre"));
-  if (lines === "centre") meshes.push(tag(ribbon(pts, closed, 0.12, 0.08, "#dcd9cf", { dashed: true }), "centre"));
+  if (lines !== "none") meshes.push(tag(ribbon(pts, closed, width - 0.4, 0.07, "#dcd9cf", { lineWidth: mountain ? 0.1 : 0.16, offset: (width - 0.4) / 2, keep }), "edge"));
+  if (lines === "test") meshes.push(tag(ribbon(pts, closed, 0.16, 0.08, "#f2d75c", { dashed: true, keep }), "centre"));
+  if (lines === "centre") meshes.push(tag(ribbon(pts, closed, 0.12, 0.08, "#dcd9cf", { dashed: true, keep }), "centre"));
   return meshes;
 }
 
@@ -1183,6 +1191,122 @@ interface RibbonMarks {
   lineWidth?: number;
   offset?: number;
   map?: THREE.Texture;
+  /** Paints the segment from point i to i + 1 on this side (+1 right of travel in the x-east, z-south frame, −1 left, 0 a centre line)? */
+  keep?: (i: number, side: number) => boolean;
+}
+
+/** Kerb height above the road surface, and the kerb's width. */
+const KERB_H = 0.15;
+const KERB_W = 0.3;
+
+/**
+ * The island inside a roundabout of radius `r` (to the ring's centre line) and road width
+ * `width`: a concrete kerb along the ring's inner edge and a low mound inside it, coloured
+ * from the aerial photo like the corridor (what is planted there shows, raised behind its
+ * kerb). `roadY(angle)` is the ring's height at that angle (x = cos, z = sin). Two meshes,
+ * kinds "kerb" and "island", so the islands in a tile merge into two draw calls.
+ */
+export function roundaboutIsland(
+  cx: number,
+  cz: number,
+  r: number,
+  width: number,
+  roadY: (angle: number) => number,
+  photo: ((x: number, z: number) => [number, number, number] | null) | null,
+  detail: Detail | null,
+): THREE.Mesh[] {
+  const R = r - width / 2;
+  const inner = R - KERB_W;
+  const n = Math.max(24, Math.round((2 * Math.PI * R) / 1.2));
+  const ys: number[] = [];
+  for (let i = 0; i < n; i++) ys.push(roadY((i / n) * 2 * Math.PI));
+  const mid = ys.reduce((a, b) => a + b, 0) / n;
+  // The mound rises a little toward the middle, more on a big ring.
+  const crown = Math.min(1.2, 0.04 * R);
+  const top = 0.05 + KERB_H;
+
+  // Kerb: outer face and top, three vertices per angle.
+  const kerb: number[] = [];
+  const kerbIdx: number[] = [];
+  const profile = [
+    [R, 0.02],
+    [R, top],
+    [inner, top],
+  ];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * 2 * Math.PI;
+    for (const [rr, h] of profile) kerb.push(cx + Math.cos(a) * rr, ys[i] + h, cz + Math.sin(a) * rr);
+  }
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    for (let k = 0; k < profile.length - 1; k++) {
+      const a = i * profile.length + k;
+      const b = j * profile.length + k;
+      kerbIdx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
+  }
+
+  // Mound: rings of vertices ~1.2 m apart from the kerb in to the middle, the photo's colour on each.
+  const rows = Math.max(1, Math.round(inner / 1.2));
+  const verts: number[] = [];
+  const colors: number[] = [];
+  const uvs: number[] = [];
+  const idx: number[] = [];
+  const tmp = new THREE.Color();
+  const put = (x: number, y: number, z: number) => {
+    verts.push(x, y, z);
+    uvs.push(x / 18, z / 18);
+    // Sampled a little inward: the photo's ring can sit a metre off the drawn one.
+    const rgb = photo?.(cx + (x - cx) * 0.85, cz + (z - cz) * 0.85);
+    if (rgb) tmp.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
+    else tmp.set("#5f6b3c");
+    colors.push(tmp.r, tmp.g, tmp.b);
+  };
+  put(cx, mid + top + crown, cz);
+  for (let k = 1; k <= rows; k++) {
+    const f = k / rows;
+    const rr = inner * f;
+    // A gentle dome: flat on top, easing down to the kerb.
+    const rise = crown * (1 - f * f);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * 2 * Math.PI;
+      const y = mid + (ys[i] - mid) * f + top - 0.01 + rise;
+      put(cx + Math.cos(a) * rr, y, cz + Math.sin(a) * rr);
+    }
+  }
+  for (let i = 0; i < n; i++) idx.push(0, 1 + ((i + 1) % n), 1 + i);
+  for (let k = 1; k < rows; k++) {
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const a = 1 + (k - 1) * n;
+      const b = 1 + k * n;
+      idx.push(a + i, a + j, b + i, b + i, a + j, b + j);
+    }
+  }
+
+  const build = (v: number[], ix: number[], uv?: number[], col?: number[]) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv ?? new Array((v.length / 3) * 2).fill(0), 2));
+    if (col) g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(ix);
+    g.computeVertexNormals();
+    return g;
+  };
+  // Concrete kerb, ~35 % reflectance.
+  const kerbMesh = new THREE.Mesh(build(kerb, kerbIdx), new THREE.MeshStandardMaterial({ color: "#b9b5ac", roughness: 0.9 }));
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+  if (photo) mat.color.setScalar(PHOTO_REFLECTANCE);
+  if (detail) withDetail(mat, detail);
+  const mound = new THREE.Mesh(build(verts, idx, uvs, colors), mat);
+  for (const [m, kind] of [
+    [kerbMesh, "kerb"],
+    [mound, "island"],
+  ] as const) {
+    m.receiveShadow = true;
+    m.userData.kind = kind;
+  }
+  return [kerbMesh, mound];
 }
 
 /** A flat strip of `width` metres following the route points, `lift` above them. */
@@ -1219,6 +1343,7 @@ function ribbon(pts: Route["points"], closed: boolean, width: number, lift: numb
   for (let i = 0; i < n - 1; i++) {
     if (marks.dashed && i % 4 >= 2) continue;
     for (let s = 0; s < stride; s += 2) {
+      if (marks.keep && !marks.keep(i, edge ? (s === 0 ? -1 : 1) : 0)) continue;
       const a = i * stride + s;
       const b = (i + 1) * stride + s;
       idx.push(a, b, a + 1, a + 1, b, b + 1);
