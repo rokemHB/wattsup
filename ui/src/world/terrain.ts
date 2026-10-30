@@ -36,6 +36,8 @@ export interface WorldData {
   urban?: { from: number; to: number; floors: [number, number] }[];
   /** Where the local frame's origin lies, for the sun's position. */
   origin?: { lat: number; lon: number };
+  /** Real tree positions and heights from a canopy height model (tools/build_trees.py --route). */
+  trees?: TreeData | null;
 }
 
 interface GridMeta {
@@ -196,16 +198,18 @@ export async function loadWorld(id: string): Promise<WorldData> {
     details?: { rock: string; scrub: string; metres: number };
     urban?: WorldData["urban"];
     origin?: { lat: number; lon: number };
+    trees?: string;
   };
-  const [near, far, band, rock, scrub] = await Promise.all([
+  const [near, far, band, rock, scrub, trees] = await Promise.all([
     loadGrid(meta.near),
     loadGrid(meta.far),
     meta.band ? loadGrid(meta.band) : undefined,
     meta.details ? loadImage(meta.details.rock) : undefined,
     meta.details ? loadImage(meta.details.scrub) : undefined,
+    meta.trees ? loadTrees(meta.trees).catch((e) => (console.warn(`trees: ${e}`), null)) : Promise.resolve(null),
   ]);
   const details = meta.details && rock && scrub ? { rock, scrub, metres: meta.details.metres } : undefined;
-  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details, urban: meta.urban, origin: meta.origin };
+  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details, urban: meta.urban, origin: meta.origin, trees };
 }
 
 /** Bilinear height, or null outside the grid. */

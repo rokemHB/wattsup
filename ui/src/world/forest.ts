@@ -220,3 +220,49 @@ export function updateCell(c: ForestCell, x: number, z: number) {
     m.mesh.castShadow = cast;
   }
 }
+
+/** Time a frame may spend building cells for a single route. */
+const ROUTE_BUILD_MS = 4;
+
+/**
+ * Real trees along a single route (a built-in route's world, not the network): the
+ * route's terrain is one static mesh, so the cells within reach of the rider are built a
+ * few a frame as the rider comes near and dropped well behind, instead of all at load
+ * (Málaga's 43 km hold 190 000 trees).
+ */
+export class RouteForest {
+  readonly group = new THREE.Group();
+  private cells = new Map<number, ForestCell | null>();
+
+  constructor(
+    private d: TreeData,
+    private ground: (x: number, z: number) => number,
+    private clear: (x: number, z: number) => boolean,
+  ) {}
+
+  update(x: number, z: number) {
+    const reach = FOREST_RADIUS_M + this.d.cell;
+    const started = performance.now();
+    for (const idx of cellsIn(this.d, x - reach, z - reach, x + reach, z + reach)) {
+      if (this.cells.has(idx)) continue;
+      if (performance.now() - started > ROUTE_BUILD_MS) break;
+      const cell = buildCell(this.d, idx, this.ground, this.clear);
+      this.cells.set(idx, cell);
+      if (cell) for (const m of cell.meshes) this.group.add(m.mesh);
+    }
+    for (const [idx, cell] of this.cells) {
+      const cx = this.d.x0 + ((idx % this.d.cols) + 0.5) * this.d.cell;
+      const cz = this.d.z0 + (Math.floor(idx / this.d.cols) + 0.5) * this.d.cell;
+      if (Math.hypot(cx - x, cz - z) > reach + 2 * this.d.cell) {
+        // Instance buffers are only freed by dispose(); the tree geometries are shared.
+        for (const m of cell?.meshes ?? []) {
+          this.group.remove(m.mesh);
+          m.mesh.dispose();
+        }
+        this.cells.delete(idx);
+      } else if (cell) {
+        updateCell(cell, x, z);
+      }
+    }
+  }
+}

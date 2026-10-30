@@ -159,6 +159,16 @@ round crown below) plus infill near the rider, two-card models beyond 320 m,
 nothing beyond 1 km, shadows within 260 m; scattered pines and oaks are then
 left out of `vegetation()` (`trees = false`). Foliage tints are multiplied by
 `CANOPY_SHADE` (a canopy reflects 8-10 %; matched to photos of the Ma-10).
+The single routes have real trees too (`<id>-trees.bin.gz`, `build_trees.py
+--route`; Sa Calobra 15 000, Málaga 193 000): `RouteForest` in `forest.ts` builds
+the cells near the rider a few a frame and drops those far behind, driven by
+`WorldStatics.update`. The scatter on a single route places its plants within
+1.2 km of the road, its counts scaled to the route's length (spread over the
+whole terrain grid, Málaga's were one per hectare and none in sight). The near
+grid of a route is kept below the road wherever its triangles could span it
+(`tucked` in `buildRealWorld`): on Málaga's 20 m grid a deep cut roofed the road
+over at 18 km. `roadMeshes` adds points on sharp curves (`densify`), so hairpins
+are curves, not corners; dashes go by distance.
 Tile unload calls `dispose()` on instanced meshes: their instance buffers are
 not freed otherwise.
 

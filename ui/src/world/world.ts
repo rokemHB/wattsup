@@ -449,6 +449,7 @@ export class World {
     g.rotateX(-this.lean);
     this.rider.animate(this.cadence, this.speed, dt);
     this.statics.animate(dt);
+    this.statics.update?.(g.position.x, g.position.z);
     const tUpd0 = performance.now();
     this.tiles?.update(g.position.x, g.position.z, this.camPos);
     this.bucket[0] += performance.now() - tUpd0;

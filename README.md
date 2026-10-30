@@ -249,6 +249,13 @@ for q in 122000031 122000102 122000120; do   # Mallorca; 122000013 is open sea
 done
 .venv/bin/python tools/build_trees.py --reach 1100 --network crates/core/worlds/mallorca/network.json \
   --chm ~/wattsup-data/canopy/chm_*.tif --out ui/public/worlds/mallorca-trees.bin.gz
+# the single routes: Sa Calobra from the Mallorca tiles, Málaga from 033111223
+.venv/bin/python tools/build_trees.py --reach 1100 --route crates/core/routes/sa-calobra.json \
+  --world ui/public/worlds/sa-calobra.json --chm ~/wattsup-data/canopy/chm_122000031.tif \
+  ~/wattsup-data/canopy/chm_122000120.tif --out ui/public/worlds/sa-calobra-trees.bin.gz
+.venv/bin/python tools/build_trees.py --reach 1100 --route crates/core/routes/malaga-colmenar.json \
+  --world ui/public/worlds/malaga-colmenar.json --chm ~/wattsup-data/canopy/chm_033111223.tif \
+  --out ui/public/worlds/malaga-colmenar-trees.bin.gz
 ```
 
 ### Single routes

@@ -7,6 +7,7 @@ import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
 import { gridSample, gridSlope, imageMean, OrthoSampler, type Grid, type WorldData } from "./terrain";
 import { buildings } from "./buildings";
+import { RouteForest } from "./forest";
 import { CANOPY_SHADE, foliageDepthMaterial, foliageMaterial, treeGeometry } from "./trees";
 import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockDetailTexture, rockNormalTexture, rockTexture, scrubDetailTexture, waterNormalTexture } from "./textures";
 
@@ -30,6 +31,8 @@ export interface WorldStatics {
   inTunnel?: (x: number, z: number) => boolean;
   /** Advances water and clouds. */
   animate: (dt: number) => void;
+  /** Follows the rider at ground position (x, z): what is built or shown near them. */
+  update?: (x: number, z: number) => void;
 }
 
 /** Anything that can answer "nearest road point": a route's own index or the network's. */
@@ -135,7 +138,11 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     const n = index.nearest(x, z, CORRIDOR_REACH);
     // Deeper on steep ground: a 10 m grid and the fine strip disagree by metres there.
     const depth = 1.2 + 3.5 * Math.min(1.5, gridSlope(near, x, z));
-    return h - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
+    const lowered = h - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
+    // A vertex this close has triangles that span the road: kept below it. In a deep cut
+    // on Málaga's 20 m grid the vertices either side stood 20 m up the cut slope and the
+    // triangle between them roofed the road over.
+    return n.d < 1.5 * near.spacing ? Math.min(lowered, n.y - 1.5) : lowered;
   };
   const land: Land = {
     height: heightAt,
@@ -205,18 +212,36 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   const clouds = cloudLayers((near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
   group.add(...clouds.meshes);
   const region = { x0: near.x0, z0: near.z0, w: near.cols * near.spacing, h: near.rows * near.spacing };
-  group.add(vegetation(index, heightAt, land, region, sampler, true, photo));
+  // Real trees where the world has them (see forest.ts); the scatter then adds only cypresses, bushes and rocks.
+  let forest: RouteForest | null = null;
+  if (world.trees) {
+    const urban = world.urban ?? [];
+    forest = new RouteForest(world.trees, heightAt, (x, z) => {
+      const n = index.nearest(x, z, 30);
+      // Off the road and its shoulder (canopy over a road shows up as a tree top), clear of
+      // the houses in town (up to 25 m out), not in the sea.
+      const d = pts[n.i]?.distance_m ?? -1;
+      const inTown = n.i >= 0 && urban.some((u) => d >= u.from && d <= u.to);
+      return n.d > (inTown ? 27 : 4.5) && raw(x, z) > SEA_LEVEL + 1.5;
+    });
+    group.add(forest.group);
+  }
+  // The scatter's counts were set for Sa Calobra's 10 km: a longer route gets more, or Málaga's 43 km came out bare.
+  group.add(vegetation(index, heightAt, land, region, sampler, true, photo, Math.max(1, sampler.length / 10000), !forest));
   if (world.urban?.length) group.add(buildings(route, world.urban, heightAt, REAL_ROAD_WIDTH));
 
   const animate = (dt: number) => {
     sea.animate(dt);
     clouds.animate(dt);
   };
-  return { group, heightAt, animate };
+  const update = forest ? (x: number, z: number) => forest.update(x, z) : undefined;
+  return { group, heightAt, animate, update };
 }
 
 /** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
 export const PHOTO_REFLECTANCE = 0.46;
+/** How far either side of a single route the scatter places its plants and rocks. */
+const SCATTER_REACH_M = 1200;
 export const SHOULDER = REAL_ROAD_WIDTH / 2 + 0.9;
 /** Metres either side of the road that the corridor shapes. */
 export const CORRIDOR_REACH = 46;
@@ -597,6 +622,41 @@ export const ROAD_CLASS: { width: number; lines: "centre" | "edge" | "none" }[] 
  */
 export const LAYER_ORDER: Record<string, number> = { centre: -5, edge: -5, asphalt: -4, shoulder: -3, corridor: -2 };
 
+/** Largest change of direction from one road point to the next that the ribbons show as a curve. */
+const MAX_TURN_RAD = (6 * Math.PI) / 180;
+
+/**
+ * The points with Catmull-Rom points added where the road turns sharply: at 5 m spacing a
+ * hairpin turns 30-40° a point, and the ribbons' outer edge showed it as corners.
+ */
+export function densify(pts: Route["points"]): Route["points"] {
+  const n = pts.length;
+  if (n < 3) return pts;
+  const heading = (a: Route["points"][number], b: Route["points"][number]) => Math.atan2(b.z - a.z, b.x - a.x);
+  const turn = (i: number) => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const d = heading(pts[i], pts[i + 1]) - heading(pts[i - 1], pts[i]);
+    return Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
+  };
+  const out: Route["points"] = [pts[0]];
+  for (let i = 0; i < n - 1; i++) {
+    const k = Math.min(8, Math.ceil(Math.max(turn(i), turn(i + 1)) / MAX_TURN_RAD));
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(n - 1, i + 2)];
+    for (let j = 1; j < k; j++) {
+      const t = j / k;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const cr = (a: number, b: number, c: number, d: number) => 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (3 * b - a - 3 * c + d) * t3);
+      out.push({ distance_m: p1.distance_m + (p2.distance_m - p1.distance_m) * t, x: cr(p0.x, p1.x, p2.x, p3.x), y: p1.y + (p2.y - p1.y) * t, z: cr(p0.z, p1.z, p2.z, p3.z) });
+    }
+    out.push(p2);
+  }
+  return out;
+}
+
 export function roadMeshes(
   pts: Route["points"],
   closed: boolean,
@@ -611,6 +671,18 @@ export function roadMeshes(
     m.renderOrder = LAYER_ORDER[kind] ?? 0;
     return m;
   };
+  // `keep` speaks of the given points' indices: map the densified ones back to the segment they lie on.
+  const given = pts;
+  pts = densify(pts);
+  if (keep && pts !== given) {
+    const from: number[] = [];
+    for (let i = 0, j = 0; i < pts.length; i++) {
+      while (j < given.length - 2 && pts[i].distance_m >= given[j + 1].distance_m) j++;
+      from.push(j);
+    }
+    const inner = keep;
+    keep = (i, side) => inner(from[i], side);
+  }
   const meshes = [
     // Shoulder: a wide sandy verge on the test course, a narrow gravel edge on a mountain road.
     tag(ribbon(pts, closed, width + (mountain ? 1.0 : 2.2), 0.02, mountain ? "#7d7566" : "#b3a483"), "shoulder"),
@@ -1135,7 +1207,15 @@ export function vegetation(
     if (near < ROAD_WIDTH / 2 + minRoad) return { ok: false, near };
     return { ok: true, near };
   };
-  const spot = () => [region.x0 + rand() * region.w, region.z0 + rand() * region.h] as const;
+  // Along the route where there is one (within SCATTER_REACH_M of it, where the rider can
+  // see), else anywhere in the region (a network tile). Spread over a single route's whole
+  // terrain grid, Málaga's few thousand plants were one per hectare and none in sight.
+  const spot = (): readonly [number, number] => {
+    if (sampler.length <= 0) return [region.x0 + rand() * region.w, region.z0 + rand() * region.h];
+    const p = sampler.pose(rand() * sampler.length);
+    const off = (rand() * 2 - 1) * SCATTER_REACH_M;
+    return [p.x - p.dz * off, p.z + p.dx * off];
+  };
   // Real terrain: nothing on cliffs, thinning out with altitude.
   const terrainOk = (x: number, z: number, y: number, maxSlope: number) =>
     !mediterranean || (land.slope(x, z) < maxSlope && rand() > smoothstep(450, 950, y));
@@ -1341,7 +1421,8 @@ function ribbon(pts: Route["points"], closed: boolean, width: number, lift: numb
   }
   const stride = edge ? 4 : 2;
   for (let i = 0; i < n - 1; i++) {
-    if (marks.dashed && i % 4 >= 2) continue;
+    // 10 m painted, 10 m gap, by distance: curves carry extra points (densify).
+    if (marks.dashed && Math.floor((pts[i].distance_m + pts[i + 1].distance_m) / 20) % 2 === 1) continue;
     for (let s = 0; s < stride; s += 2) {
       if (marks.keep && !marks.keep(i, edge ? (s === 0 ? -1 : 1) : 0)) continue;
       const a = i * stride + s;
