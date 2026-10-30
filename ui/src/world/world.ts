@@ -3,7 +3,7 @@
 import * as THREE from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
-import { Rider, TYRE_BULGE } from "./rider";
+import { HALF_WHEELBASE, Rider, TYRE_BULGE } from "./rider";
 import { RouteSampler } from "./route";
 import type { RoadNetwork } from "./network";
 import { buildWorld, cloudLayers, type Detail, FAR_SIZE, gridBlockMesh, imageTexture, patchTexture, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, seaMesh, type WorldStatics } from "./scene";
@@ -441,7 +441,7 @@ export class World {
     // The road surface sits ROAD_LIFT above the route line and the tyre bulges
     // TYRE_BULGE below the hub height; pitching about the bike's middle dips one
     // wheel by half the wheelbase times the slope.
-    const clearance = ROAD_LIFT + TYRE_BULGE + 0.5 * Math.abs(Math.sin(pitch)) + 0.005;
+    const clearance = ROAD_LIFT + TYRE_BULGE + HALF_WHEELBASE * Math.abs(Math.sin(pitch)) + 0.005;
     g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(this.laneOffset));
     g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), fwd.clone().negate(), up));
     g.rotateY(-Math.PI / 2);

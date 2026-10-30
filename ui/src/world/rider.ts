@@ -13,10 +13,15 @@ const SADDLE = new THREE.Vector3(-0.2, 0.93, 0); // top of the seat post; the hi
 const BARS = new THREE.Vector3(0.52, 0.97, 0);
 const HIP = new THREE.Vector3(-0.14, 1.03, 0);
 const SHOULDER = new THREE.Vector3(0.2, 1.33, 0);
-const REAR_HUB = new THREE.Vector3(-0.5, WHEEL_R, 0);
-const FRONT_HUB = new THREE.Vector3(0.5, WHEEL_R, 0);
-const HEAD_TOP = new THREE.Vector3(0.44, 0.9, 0);
-const HEAD_BOTTOM = new THREE.Vector3(0.47, 0.72, 0);
+// Road geometry: 0.47 m chain stays, the front hub 0.61 m ahead of the bottom
+// bracket and a 73° steering axis with 4 cm of rake. With the hub any closer the
+// down tube, the bottle and the head tube cut through the front tyre.
+const REAR_HUB = new THREE.Vector3(-0.45, WHEEL_R, 0);
+const HEAD_TOP = new THREE.Vector3(0.425, 0.9, 0);
+const HEAD_BOTTOM = new THREE.Vector3(0.47, 0.75, 0);
+const FRONT_HUB = new THREE.Vector3(HEAD_BOTTOM.x + (HEAD_BOTTOM.y - WHEEL_R) * 0.3 + 0.04, WHEEL_R, 0);
+/** The farther hub's distance from the origin, which the bike pitches about. */
+export const HALF_WHEELBASE = Math.max(-REAR_HUB.x, FRONT_HUB.x);
 /** The seat tube runs from the bottom bracket through the saddle; the sloping top tube meets it here. */
 const SEAT_CLUSTER = BB.clone().lerp(SADDLE, (0.8 - BB.y) / (SADDLE.y - BB.y));
 /** Dropped seat stays join the seat tube well below the top tube. */
