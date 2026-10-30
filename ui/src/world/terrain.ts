@@ -33,6 +33,8 @@ export interface WorldData {
   details?: { rock: ImageBitmap; scrub: ImageBitmap; metres: number };
   /** Stretches of the route with houses along it (metres along the route, storeys). */
   urban?: { from: number; to: number; floors: [number, number] }[];
+  /** Where the local frame's origin lies, for the sun's position. */
+  origin?: { lat: number; lon: number };
 }
 
 interface GridMeta {
@@ -187,6 +189,7 @@ export async function loadWorld(id: string): Promise<WorldData> {
     band?: GridMeta;
     details?: { rock: string; scrub: string; metres: number };
     urban?: WorldData["urban"];
+    origin?: { lat: number; lon: number };
   };
   const [near, far, band, rock, scrub] = await Promise.all([
     loadGrid(meta.near),
@@ -196,7 +199,7 @@ export async function loadWorld(id: string): Promise<WorldData> {
     meta.details ? loadImage(meta.details.scrub) : undefined,
   ]);
   const details = meta.details && rock && scrub ? { rock, scrub, metres: meta.details.metres } : undefined;
-  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details, urban: meta.urban };
+  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details, urban: meta.urban, origin: meta.origin };
 }
 
 /** Bilinear height, or null outside the grid. */

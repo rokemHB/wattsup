@@ -10,6 +10,18 @@ import { buildWorld, cloudLayers, type Detail, FAR_SIZE, gridBlockMesh, imageTex
 import { TileManager } from "./streaming";
 import { gridSample as gridSampleOr, imageMean, type NetworkWorldData, type WorldData } from "./terrain";
 import { detailTexture, rockDetailTexture, rockNormalTexture, scrubDetailTexture } from "./textures";
+import { sunPosition, sunVector } from "./sun";
+
+/**
+ * The moment the scene is lit for: a late-spring day at noon local time (CEST, 10:00 UTC).
+ * The sun then stands south-east (azimuth ~123°) at 60°, close to where it was when the aerial photos
+ * were flown (around midday), so the photos' own shading and the scene's agree, yet low
+ * enough to model the slopes. The old fixed direction had the sun in the north-north-east,
+ * where it never stands at these latitudes, lighting every slope against its photo.
+ */
+const SUN_TIME = new Date(Date.UTC(2026, 4, 20, 10, 0));
+/** Central Mallorca, for worlds without an origin (the procedural courses). */
+const DEFAULT_ORIGIN = { lat: 39.7, lon: 2.75 };
 
 export type CameraMode = "chase" | "side" | "front" | "drone" | "orbit";
 /** The modes the C key cycles through; orbit is for the menus. */
@@ -110,7 +122,8 @@ export class World {
     // Sky with atmospheric scattering; it also lights the materials through an environment map.
     const sky = new Sky();
     sky.scale.setScalar(40000);
-    const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 46), THREE.MathUtils.degToRad(160));
+    const origin = network?.data.origin ?? world?.origin ?? DEFAULT_ORIGIN;
+    const sunDir = new THREE.Vector3(...sunVector(sunPosition(origin.lat, origin.lon, SUN_TIME)));
     Object.assign(sky.material.uniforms, {});
     sky.material.uniforms.turbidity.value = 2.0;
     sky.material.uniforms.rayleigh.value = 1.0;
