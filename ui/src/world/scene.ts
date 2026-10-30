@@ -367,6 +367,7 @@ export function corridorMesh(
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.userData.kind = "corridor";
+  mesh.renderOrder = LAYER_ORDER.corridor;
   return mesh;
 }
 
@@ -567,6 +568,8 @@ export function seaMesh(size: number, cx: number, cz: number): { mesh: THREE.Mes
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
   mesh.userData.kind = "sea";
+  // After all the land: only the pixels where no land is in front get shaded.
+  mesh.renderOrder = 1;
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(cx, SEA_LEVEL, cz);
   return {
@@ -586,9 +589,18 @@ export const ROAD_CLASS: { width: number; lines: "centre" | "edge" | "none" }[] 
   { width: 4.6, lines: "none" },
 ];
 
+/**
+ * Draw order of the layers that lie on top of each other a few centimetres apart (opaque
+ * objects otherwise go front to back): the top layer first, so the layers underneath fail
+ * the depth test instead of being shaded and then painted over. The corridor strip covered
+ * the ground grid and cost up to 6.7 ms of a 25 ms frame on Sa Calobra drawn the other way.
+ */
+export const LAYER_ORDER: Record<string, number> = { centre: -5, edge: -5, asphalt: -4, shoulder: -3, corridor: -2 };
+
 export function roadMeshes(pts: Route["points"], closed: boolean, width = ROAD_WIDTH, mountain = false, asphalt = asphaltTexture(), lines: "centre" | "edge" | "none" | "test" = mountain ? "edge" : "test"): THREE.Mesh[] {
   const tag = (m: THREE.Mesh, kind: string) => {
     m.userData.kind = kind;
+    m.renderOrder = LAYER_ORDER[kind] ?? 0;
     return m;
   };
   const meshes = [
@@ -635,6 +647,7 @@ export function mergeByKind(meshes: THREE.Mesh[]): THREE.Mesh[] {
       continue;
     }
     const mesh = new THREE.Mesh(merged, list[0].material);
+    mesh.renderOrder = list[0].renderOrder;
     mesh.castShadow = list[0].castShadow;
     mesh.receiveShadow = list[0].receiveShadow;
     mesh.userData.kind = list[0].userData.kind;

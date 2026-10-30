@@ -21,6 +21,36 @@ const MIN_PIXEL_RATIO = 0.6;
 /** Half the arc (m) over which the road's curvature is measured for the lean. */
 const CURVE_HALF_M = 3;
 
+/** The baked sky as a box drawn at the far plane after the opaque scene (three's background cube shader, depth-tested). */
+function skyBox(texture: THREE.Texture): THREE.Mesh {
+  const lib = THREE.ShaderLib.backgroundCube;
+  const material = new THREE.ShaderMaterial({
+    name: "SkyBox",
+    uniforms: THREE.UniformsUtils.clone(lib.uniforms),
+    vertexShader: lib.vertexShader,
+    fragmentShader: lib.fragmentShader,
+    side: THREE.BackSide,
+    depthTest: true,
+    depthFunc: THREE.LessEqualDepth,
+    depthWrite: false,
+    fog: false,
+  });
+  material.uniforms.envMap.value = texture;
+  // The renderer picks the cube-map shader variant from `envMap`, as for its own background.
+  Object.defineProperty(material, "envMap", { get: () => texture });
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  geo.deleteAttribute("normal");
+  geo.deleteAttribute("uv");
+  const box = new THREE.Mesh(geo, material);
+  box.frustumCulled = false;
+  box.renderOrder = 1000;
+  box.onBeforeRender = (_r, _s, camera) => {
+    box.matrixWorld.copyPosition(camera.matrixWorld);
+  };
+  box.matrixAutoUpdate = false;
+  return box;
+}
+
 export class World {
   sampler: RouteSampler;
   /** Present when the world streams tiles around a road network. */
@@ -70,6 +100,11 @@ export class World {
     // Neutral, not ACES: ACES pulls every colour toward grey-beige, which turned the
     // island's olive scrub and pines drab and the sky white. Neutral keeps hue and saturation.
     this.renderer.toneMapping = THREE.NeutralToneMapping;
+    // Opaque objects front to back. three's default sorts by material first, depth only
+    // within a material: the sea and the far layer, whose materials are made first, were
+    // drawn before the tiles and then painted over, every pixel shaded twice (the sea cost
+    // 4.4 ms of a 22 ms frame at Sóller, render scale 1.5, behind land 100 m above it).
+    this.renderer.setOpaqueSort((a, b) => a.groupOrder - b.groupOrder || a.renderOrder - b.renderOrder || a.z - b.z || a.id - b.id);
     this.renderer.toneMappingExposure = 0.72;
 
     // Sky with atmospheric scattering; it also lights the materials through an environment map.
@@ -94,7 +129,10 @@ export class World {
     this.renderer.toneMapping = THREE.NoToneMapping;
     new THREE.CubeCamera(1, 100000, skyTarget).update(this.renderer, envScene);
     this.renderer.toneMapping = mapping;
-    this.scene.background = skyTarget.texture;
+    // The sky is drawn last, not first (three draws scene.background before everything):
+    // a box at the far plane with a depth test, so it shades only the pixels nothing else
+    // covered instead of the whole screen.
+    this.scene.add(skyBox(skyTarget.texture));
     // The blurred sky lights only the few shiny things (chrome, water): as a
     // scene-wide environment map it cost a fifth of every frame on terrain
     // that a hemisphere light lights just as well.
