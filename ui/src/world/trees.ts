@@ -23,10 +23,18 @@ const SHAPE: Record<TreeKind, { w: number; h: number; trunk: number; trunkR: num
   bush: { w: 2.6, h: 1.7, trunk: 0, trunkR: 0 },
 };
 
+/**
+ * Multiplies every foliage instance's tint (linear light). A real canopy reflects 8-10 %
+ * of the light, darkened by its own inner shadows; these cards all face up into full sun
+ * and came out as bright as the ground, a spring-lawn green next to the dark Aleppo pines
+ * and holm oaks of the Ma-10 in photos. Chosen side by side with those photos.
+ */
+export const CANOPY_SHADE = 0.5;
+
 let atlas: THREE.CanvasTexture | null = null;
 let material: THREE.MeshStandardMaterial | null = null;
 let depthMaterial: THREE.MeshDepthMaterial | null = null;
-const geometries = new Map<TreeKind, THREE.BufferGeometry>();
+const geometries = new Map<string, THREE.BufferGeometry>();
 
 /** The foliage material: alpha-cut (no sorting), lit as a canopy from above, shared by every tile. */
 export function foliageMaterial(): THREE.MeshStandardMaterial {
@@ -53,9 +61,13 @@ export function foliageDepthMaterial(): THREE.MeshDepthMaterial {
   return depthMaterial;
 }
 
-/** A tree of this kind at size 1, standing on the origin: trunk, three crossed cards and a top card. */
-export function treeGeometry(kind: TreeKind): THREE.BufferGeometry {
-  let geo = geometries.get(kind);
+/**
+ * A tree of this kind at size 1, standing on the origin: trunk, three crossed cards and a
+ * top card; `lite`, for trees a few hundred metres off, is two crossed cards only.
+ */
+export function treeGeometry(kind: TreeKind, lite = false): THREE.BufferGeometry {
+  const key = lite ? `${kind}-lite` : kind;
+  let geo = geometries.get(key);
   if (geo) return geo;
   const { w, h, trunk, trunkR } = SHAPE[kind];
   const [sc, sr] = SLOT[kind];
@@ -70,6 +82,15 @@ export function treeGeometry(kind: TreeKind): THREE.BufferGeometry {
     for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + uv.getX(i) / 2, v0 + uv.getY(i) / 2);
     return g;
   };
+  if (lite) {
+    parts.push(card(0), card(Math.PI / 2));
+    geo = mergeGeometries(parts, false)!;
+    const ln = geo.attributes.normal as THREE.BufferAttribute;
+    for (let i = 0; i < ln.count; i++) ln.setXYZ(i, 0, 1, 0);
+    geo.userData.shared = true;
+    geometries.set(key, geo);
+    return geo;
+  }
   for (let k = 0; k < 3; k++) parts.push(card((k * Math.PI) / 3));
   // A horizontal card at two thirds of the height, for the drone's view from above.
   const top = new THREE.PlaneGeometry(w * 0.9, w * 0.9);
@@ -90,7 +111,7 @@ export function treeGeometry(kind: TreeKind): THREE.BufferGeometry {
   const n = geo.attributes.normal as THREE.BufferAttribute;
   for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0);
   geo.userData.shared = true;
-  geometries.set(kind, geo);
+  geometries.set(key, geo);
   return geo;
 }
 

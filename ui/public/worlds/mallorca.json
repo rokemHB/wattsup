@@ -44,7 +44,7 @@
   "ortho": "https://www.ign.es/wmts/pnoa-ma?service=WMTS&request=GetTile&version=1.0.0&layer=OI.OrthoimageCoverage&style=default&format=image/jpeg&tilematrixset=GoogleMapsCompatible&tilematrix={z}&tilerow={y}&tilecol={x}",
   "orthoZoom": 16
  },
- "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0).",
+ "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0). Trees: Meta and World Resources Institute, High Resolution Canopy Height Maps (CC BY 4.0).",
  "mid": {
   "file": "/worlds/mallorca-mid.bin",
   "cols": 1812,
@@ -53,5 +53,6 @@
   "z0": -26100.0,
   "spacing": 45.0,
   "format": "int16"
- }
+ },
+ "trees": "/worlds/mallorca-trees.bin.gz"
 }

@@ -1,3 +1,5 @@
 numpy
 tifffile
 imagecodecs
+rasterio
+scipy

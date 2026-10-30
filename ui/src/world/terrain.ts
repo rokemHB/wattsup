@@ -1,4 +1,5 @@
 // Real-world terrain: heightmaps produced by tools/build_route.py, served from /worlds.
+import { loadTrees, type TreeData } from "./forest";
 
 export interface Grid {
   cols: number;
@@ -82,6 +83,8 @@ export interface NetworkWorldData {
   tiles: { dlat: number; dlon: number; dem: string; ortho: string; orthoZoom: number };
   map: { image: ImageBitmap; lat_min: number; lat_max: number; lon_min: number; lon_max: number } | null;
   details?: { rock: ImageBitmap; scrub: ImageBitmap; metres: number };
+  /** Real tree positions and heights from a canopy height model (tools/build_trees.py). */
+  trees?: TreeData | null;
 }
 
 export async function loadNetworkWorld(id: string): Promise<NetworkWorldData> {
@@ -97,15 +100,17 @@ export async function loadNetworkWorld(id: string): Promise<NetworkWorldData> {
     tiles: NetworkWorldData["tiles"];
     map: { file: string; lat_min: number; lat_max: number; lon_min: number; lon_max: number } | null;
     details?: { rock: string; scrub: string; metres: number };
+    trees?: string;
   };
   // Close-up patches: this world's own, or the ones cut for Sa Calobra, which is the same limestone.
   const details = meta.details ?? { rock: "/worlds/sa-calobra/detail-rock.jpg", scrub: "/worlds/sa-calobra/detail-scrub.jpg", metres: 110 };
-  const [far, mid, mapImage, rock, scrub] = await Promise.all([
+  const [far, mid, mapImage, rock, scrub, trees] = await Promise.all([
     loadGrid(meta.far),
     meta.mid ? loadGrid(meta.mid).catch((e) => (console.warn(`mid layer: ${e}`), null)) : Promise.resolve(null),
     meta.map ? loadImage(meta.map.file) : Promise.resolve(null),
     loadImage(details.rock).catch(() => null),
     loadImage(details.scrub).catch(() => null),
+    meta.trees ? loadTrees(meta.trees).catch((e) => (console.warn(`trees: ${e}`), null)) : Promise.resolve(null),
   ]);
   return {
     id: meta.id,
@@ -117,6 +122,7 @@ export async function loadNetworkWorld(id: string): Promise<NetworkWorldData> {
     tiles: meta.tiles,
     map: meta.map && mapImage ? { image: mapImage, ...meta.map } : null,
     details: rock && scrub ? { rock, scrub, metres: details.metres } : undefined,
+    trees,
   };
 }
 

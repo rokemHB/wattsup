@@ -7,7 +7,7 @@ import { fbm, mulberry32 } from "./noise";
 import { RouteSampler } from "./route";
 import { gridSample, gridSlope, imageMean, OrthoSampler, type Grid, type WorldData } from "./terrain";
 import { buildings } from "./buildings";
-import { foliageDepthMaterial, foliageMaterial, treeGeometry } from "./trees";
+import { CANOPY_SHADE, foliageDepthMaterial, foliageMaterial, treeGeometry } from "./trees";
 import { asphaltTexture, cloudTexture, detailTexture, grassTexture, rockDetailTexture, rockNormalTexture, rockTexture, scrubDetailTexture, waterNormalTexture } from "./textures";
 
 /** Road width in metres: a mountain road for real-world routes, a wider one for the procedural course. */
@@ -1082,6 +1082,8 @@ export function vegetation(
   mediterranean: boolean,
   photo: ((x: number, z: number) => [number, number, number] | null) | null,
   scale = 1,
+  /** False where real trees come from data (forest.ts): only cypresses, bushes and rocks are scattered. */
+  trees = true,
 ): THREE.Group {
   const g = new THREE.Group();
   /** How much the aerial photo says "trees" here: dark green pixels. 0..1. */
@@ -1151,7 +1153,9 @@ export function vegetation(
       m.compose(new THREE.Vector3(x, y - 0.1, z), q, new THREE.Vector3(s, s * (0.85 + rand() * 0.35), s));
       for (const mesh of meshes) {
         mesh.setMatrixAt(placed, m);
-        mesh.setColorAt(placed, col.set(palette[Math.floor(rand() * palette.length)]).offsetHSL(0, 0, (rand() - 0.5) * 0.08));
+        col.set(palette[Math.floor(rand() * palette.length)]).offsetHSL(0, 0, (rand() - 0.5) * 0.08);
+        if (mat === foliage) col.multiplyScalar(CANOPY_SHADE);
+        mesh.setColorAt(placed, col);
       }
       placed++;
     }
@@ -1164,8 +1168,10 @@ export function vegetation(
 
   const forest = (near: number, x: number, z: number) =>
     mediterranean ? (photo ? treeCover(x, z) : fbm(x, z, 350, 5) > 0.4 ? 0.9 : 0.15) : (0.2 + 0.8 * (1 - smoothstep(30, 500, near))) * (fbm(x, z, 300, 5) > 0.42 ? 1 : 0.1);
-  place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, forest, mediterranean ? [0.55, 1.15] : [0.7, 1.4], mediterranean ? 3 : 5);
-  place(kinds.round.geos, kinds.round.count, kinds.round.palette, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
+  if (trees) {
+    place(kinds.pine.geos, kinds.pine.count, kinds.pine.palette, forest, mediterranean ? [0.55, 1.15] : [0.7, 1.4], mediterranean ? 3 : 5);
+    place(kinds.round.geos, kinds.round.count, kinds.round.palette, (n, x, z) => forest(n, x, z) * (fbm(x, z, 500, 6) > 0.5 ? 1.2 : 0.3), [0.6, 1.1], 6);
+  }
   place(kinds.cypress.geos, kinds.cypress.count, kinds.cypress.palette, (n) => 0.9 * (1 - smoothstep(12, 120, n)), [0.55, 1.0], 3);
   place(bushes.geos, bushes.count, bushes.palette, (n, x, z) => (mediterranean ? 0.5 + 0.5 * treeCover(x, z) : 0.9) * (1 - smoothstep(5, 200, n)), [0.5, 1.3], 1.6, foliage, false);
   place([rock], rocks.count, ["#aaa49a", "#9c968c", "#b5afa5"], (n, x, z) => (mediterranean ? 0.4 + 0.6 * smoothstep(0.3, 0.8, land.slope(x, z)) : 0.8 * (1 - smoothstep(6, 160, n))), [0.25, mediterranean ? 0.8 : 1.0], 1.8, rockMat, false);

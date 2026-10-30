@@ -28,6 +28,7 @@ import {
   vegetation,
 } from "./scene";
 import { confirmationPost, faceCamera, signPost, type SignPost } from "./signs";
+import { buildCell, cellsIn, type ForestCell, type TreeData, updateCell } from "./forest";
 
 const cls_width = (kind: number) => ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, kind)].width;
 import { gridSample, gridSlope, type Grid } from "./terrain";
@@ -53,6 +54,7 @@ export interface NetworkWorldMeta {
   origin: { lat: number; lon: number };
   tiles: TileScheme;
   attribution: string;
+  trees?: TreeData | null;
 }
 
 /** Local metres <-> degrees, as the pipeline defines them. */
@@ -188,6 +190,8 @@ interface Tile {
   refining: boolean;
   /** Trees, bushes and rocks: only built once the tile is near, and casting shadows only nearer still. */
   veg: THREE.Group | null;
+  /** Trees from the canopy data, per cell. */
+  forest: ForestCell[];
   photoColor: ((x: number, z: number) => [number, number, number] | null) | null;
 }
 
@@ -342,7 +346,7 @@ export class TileManager {
         if (!t) {
           const [xa, za] = this.frame.toXZ((i + 1) * dlat, j * dlon);
           const [xb, zb] = this.frame.toXZ(i * dlat, (j + 1) * dlon);
-          t = { key, i, j, x0: xa, z0: za, x1: xb, z1: zb, grid: null, group: new THREE.Group(), posts: [], state: "loading", ground: [], coarse: false, refining: false, veg: null, photoColor: null };
+          t = { key, i, j, x0: xa, z0: za, x1: xb, z1: zb, grid: null, group: new THREE.Group(), posts: [], state: "loading", ground: [], coarse: false, refining: false, veg: null, forest: [], photoColor: null };
           this.tiles.set(key, t);
           wanted.push(t);
           console.info(`tile ${key}: queued at ${(performance.now() / 1000).toFixed(1)} s, ${Math.hypot(cx - x, cz - z).toFixed(0)} m away`);
@@ -361,6 +365,7 @@ export class TileManager {
         refining = true;
         this.refine(t);
       }
+      for (const c of t.forest) updateCell(c, x, z);
       if (t.veg) {
         const cast = d < SHADOW_RADIUS_M;
         if (t.veg.userData.cast !== cast) {
@@ -484,9 +489,31 @@ export class TileManager {
     const land: Land = { height: this.heightAt, water: (x, z) => this.rawAt(x, z) < SEA_LEVEL + 1.5, slope: (x, z) => gridSlope(grid, x, z) };
     const region = { x0: t.x0, z0: t.z0, w: t.x1 - t.x0, h: t.z1 - t.z0 };
     const area = region.w * region.h;
-    t.veg = vegetation(this.index, this.heightAt, land, region, new RouteSampler({ name: "", points: [], closed: false, world: null }), true, t.photoColor, (area / 53e6) * VEG_DENSITY);
+    const trees = this.meta.trees ?? null;
+    t.veg = vegetation(this.index, this.heightAt, land, region, new RouteSampler({ name: "", points: [], closed: false, world: null }), true, t.photoColor, (area / 53e6) * VEG_DENSITY, !trees);
     t.veg.userData.cast = true;
     t.group.add(t.veg);
+    if (trees) this.plantForest(t, trees).catch((e) => console.warn(`tile ${t.key} forest: ${e}`));
+  }
+
+  /** The tile's real trees, a cell at a time within the frame budget. */
+  private async plantForest(t: Tile, trees: TreeData) {
+    // Not on a road or its shoulder (canopy overhanging a road shows up as a tree top), not in the sea.
+    const clear = (x: number, z: number) => this.index.nearest(x, z, 8).d > 4.5 && this.rawAt(x, z) > SEA_LEVEL + 1.5;
+    let budget = performance.now();
+    for (const idx of cellsIn(trees, t.x0, t.z0, t.x1, t.z1)) {
+      const cell = buildCell(trees, idx, this.heightAt, clear);
+      if (cell) {
+        updateCell(cell, this.riderX, this.riderZ);
+        for (const m of cell.meshes) t.group.add(m.mesh);
+        t.forest.push(cell);
+      }
+      if (performance.now() - budget > BUILD_BUDGET_MS) {
+        await nextFrame();
+        if (!this.tiles.has(t.key)) return;
+        budget = performance.now();
+      }
+    }
   }
 
   /** How many tiles are still being built; the HUD shows it. */
@@ -528,6 +555,8 @@ export class TileManager {
     this.tiles.delete(t.key);
     this.scene.remove(t.group);
     t.group.traverse((o) => {
+      // Instance matrices and colours live in buffers of their own, freed only by dispose().
+      if (o instanceof THREE.InstancedMesh) o.dispose();
       if (o instanceof THREE.Mesh) {
         if (!o.geometry.userData.shared) o.geometry.dispose();
         const mats = Array.isArray(o.material) ? o.material : [o.material];

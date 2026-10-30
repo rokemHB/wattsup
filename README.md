@@ -229,6 +229,27 @@ curl -L -o baleares.osm.pbf https://download.geofabrik.de/europe/spain/islas-bal
 .venv/bin/python tools/build_mid.py --id mallorca --dem dem_n39_e002.tif dem_n39_e003.tif
 ```
 
+Trees stand where the real ones do. `tools/build_trees.py` finds tree tops
+(local maxima, with a window that grows with crown width) in Meta and the
+World Resources Institute's 1 m canopy height model (CC BY 4.0, zoom-9
+quadkey tiles on AWS Open Data) within 1.1 km of the roads, and writes each
+tree's position and height, 4 bytes a tree, gzip-compressed, to
+`ui/public/worlds/mallorca-trees.bin.gz` (2.07 million trees, 6.5 MB). The
+model merges neighbouring crowns of a closed wood into one top (about 50 a
+hectare where the orthophoto shows 300 and more), so the renderer widens each
+crown into its share of the space and, near the rider, fills the rest with
+smaller trees (`ui/src/world/forest.ts`).
+
+```sh
+.venv/bin/pip install rasterio scipy
+for q in 122000031 122000102 122000120; do   # Mallorca; 122000013 is open sea
+  curl -o ~/wattsup-data/canopy/chm_$q.tif \
+    https://dataforgood-fb-data.s3.amazonaws.com/forests/v1/alsgedi_global_v6_float/chm/$q.tif
+done
+.venv/bin/python tools/build_trees.py --reach 1100 --network crates/core/worlds/mallorca/network.json \
+  --chm ~/wattsup-data/canopy/chm_*.tif --out ui/public/worlds/mallorca-trees.bin.gz
+```
+
 ### Single routes
 
 Three routes ship with the app. *Lakeside loop* is a procedural 4.3 km test
