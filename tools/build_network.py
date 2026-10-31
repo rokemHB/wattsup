@@ -30,7 +30,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_route import EARTH_LAT_M, EARTH_LON_M, Dem, Ortho, mercator_tile  # noqa: E402
+from build_route import EARTH_LAT_M, EARTH_LON_M, Dem, DemStack, Ortho, mercator_tile  # noqa: E402
 
 SPACING = 5.0
 # Roundabouts drawn as circles: smaller ones are mini-roundabouts painted on a junction, larger ones not roundabouts.
@@ -506,6 +506,7 @@ def main():
     # edges see there, and each edge is pinned to its two junction heights so
     # the road never steps where edges meet.
     dem = DemChunks(args.dem_dir)
+    coarse_dem = DemStack(args.dem)
     missing = 0
     prepared = []
     node_samples = collections.defaultdict(list)
@@ -523,8 +524,18 @@ def main():
         ll = np.array([to_latlon(x, z) for x, z in pts])
         y = dem.sample_many(ll[:, 0], ll[:, 1])
         if np.isnan(y).any():
-            missing += int(np.isnan(y).sum())
-            y = np.where(np.isnan(y), np.nanmean(y) if not np.isnan(y).all() else 0.0, y)
+            # Holes in the 5 m model (on the seams between its chunks): the 30 m model there,
+            # shifted to meet the 5 m heights either side. They used to take the edge's mean
+            # height, and the road dipped or rose up to 18 m for a few points at every seam.
+            miss = np.isnan(y)
+            missing += int(miss.sum())
+            coarse = coarse_dem.sample_many(ll[:, 0], ll[:, 1])
+            if miss.all():
+                y = np.nan_to_num(coarse, nan=0.0)
+            else:
+                idx = np.arange(len(y))
+                offset = np.interp(idx, idx[~miss], (y - np.nan_to_num(coarse, nan=0.0))[~miss])
+                y = np.where(miss, np.nan_to_num(coarse, nan=0.0) + offset, y)
         tunnel = tags.get("tunnel") == "yes"
         y = smooth(y, 6)
         node_samples[node_ids[nodes[0]]].append(float(y[0]))
