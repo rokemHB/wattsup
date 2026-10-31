@@ -16,8 +16,12 @@ export class Hud {
   /** Open-ended rides (a road network) show the next few kilometres instead of the whole route. */
   private windowed = false;
 
+  /** Flying the plane: distance flown and altitude, not laps and grade. */
+  private flight: boolean;
+
   constructor(private sampler: RouteSampler, windowed = false) {
     this.windowed = windowed;
+    this.flight = !!sampler.route.flight;
     $("hud-route-name").textContent = sampler.route.name;
     this.profile = sampler.profile(400);
     window.addEventListener("resize", () => (this.lastKey = ""));
@@ -101,16 +105,24 @@ export class Hud {
     $("hud-gear").textContent = String(s.gear);
     $("hud-gear-ratio").textContent = `of ${s.gear_count}`;
     $("hud-lap").textContent = String(s.lap + 1);
-    ($("hud-lap").parentElement as HTMLElement).classList.toggle("windowed", this.windowed);
-    $("hud-dist").textContent = this.windowed ? `${(s.distance_m / 1000).toFixed(2)} km ridden` : `${(s.route_position_m / 1000).toFixed(2)} / ${(this.sampler.length / 1000).toFixed(1)} km`;
-    const g = s.road_grade_pct;
+    // The lap counter hides on a free ride and a flight (the CSS keys on the strip, not the counter's own span).
+    ($("hud-lap").closest(".hud-route") as HTMLElement).classList.toggle("windowed", this.windowed || this.flight);
     const grade = $("hud-grade");
-    grade.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(1)} %`;
-    grade.className = g > 3 ? "climb" : g < -3 ? "descent" : "";
+    if (this.flight) {
+      // A flight: how far along, and the plane's altitude (the route's height is it).
+      $("hud-dist").textContent = `${(s.route_position_m / 1000).toFixed(1)} / ${(this.sampler.length / 1000).toFixed(1)} km flown`;
+      grade.textContent = `${Math.round(this.sampler.pose(s.route_position_m).y)} m up`;
+      grade.className = "";
+    } else {
+      $("hud-dist").textContent = this.windowed ? `${(s.distance_m / 1000).toFixed(2)} km ridden` : `${(s.route_position_m / 1000).toFixed(2)} / ${(this.sampler.length / 1000).toFixed(1)} km`;
+      const g = s.road_grade_pct;
+      grade.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(1)} %`;
+      grade.className = g > 3 ? "climb" : g < -3 ? "descent" : "";
+    }
     if (this.windowed) {
-      // The profile of the road from 300 m behind to 4.7 km ahead.
-      const from = Math.max(0, s.distance_m - 300);
-      const span = 5000;
+      // The profile of the road from 300 m behind to 4.7 km ahead (a flight: 1 km behind, 19 ahead).
+      const from = Math.max(0, s.distance_m - (this.flight ? 1000 : 300));
+      const span = this.flight ? 20000 : 5000;
       const n = 200;
       let lo = Infinity;
       let hi = -Infinity;
