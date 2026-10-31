@@ -236,6 +236,8 @@ export interface Route {
   closed: boolean;
   /** Id of a real-world terrain under /worlds/, or null for a procedural world. */
   world: string | null;
+  /** Flown by the electric plane: the points' heights are its altitude. */
+  flight?: boolean;
 }
 
 export interface WorkoutStep {
@@ -271,6 +273,7 @@ export interface RouteInfo {
   climb_m: number;
   closed: boolean;
   world: string | null;
+  flight?: boolean;
 }
 
 export interface StartupInfo {

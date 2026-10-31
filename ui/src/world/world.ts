@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
 import { HALF_WHEELBASE, Rider, TYRE_BULGE } from "./rider";
+import { Plane } from "./plane";
 import { RouteSampler } from "./route";
 import type { RoadNetwork } from "./network";
 import { buildWorld, cloudLayers, type Detail, FAR_SIZE, gridBlockMesh, imageTexture, patchTexture, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, seaMesh, type WorldStatics } from "./scene";
@@ -76,7 +77,9 @@ export class World {
   private shadowY = new THREE.Vector3();
   private shadowTexel = 1;
   private statics: WorldStatics;
-  private rider = new Rider();
+  private rider: Rider | Plane = new Rider();
+  /** Flying the electric plane (a flight route), not riding. */
+  private flight: boolean;
   private envTex: THREE.Texture | null = null;
   private orbitAngle = 0;
   private distance = 0;
@@ -101,6 +104,8 @@ export class World {
 
   constructor(canvas: HTMLCanvasElement, route: Route, world?: WorldData, network?: { data: NetworkWorldData; net: RoadNetwork }) {
     this.sampler = new RouteSampler(route);
+    this.flight = !!route.flight;
+    if (this.flight) this.rider = new Plane();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.debug.onShaderError = (gl, _program, vs, fs) => {
@@ -287,7 +292,8 @@ export class World {
   /** Swaps the rider model for one in these colours. */
   setRider(jersey: string, accent: string, bike: string) {
     const old = this.rider;
-    this.rider = new Rider(jersey, accent, bike);
+    // On a flight the plane takes the rider's colours.
+    this.rider = this.flight ? new Plane(jersey, accent) : new Rider(jersey, accent, bike);
     this.reflect(this.rider.group);
     this.rider.group.position.copy(old.group.position);
     this.rider.group.quaternion.copy(old.group.quaternion);
@@ -431,7 +437,10 @@ export class World {
     const ahead = this.sampler.pose(this.distance + CURVE_HALF_M);
     const turn = Math.atan2(back.dz * ahead.dx - back.dx * ahead.dz, back.dx * ahead.dx + back.dz * ahead.dz); // + = left-hand turn, as rotateX(-lean) expects
     const curvature = turn / (2 * CURVE_HALF_M);
-    const wantLean = Math.max(-0.4, Math.min(0.4, Math.atan((this.speed * this.speed * curvature) / 9.81)));
+    // A plane banks harder than a bike leans, and into gentler curves.
+    const bank = this.flight ? 2.5 : 1;
+    const maxLean = this.flight ? 0.7 : 0.4;
+    const wantLean = Math.max(-maxLean, Math.min(maxLean, bank * Math.atan((this.speed * this.speed * curvature) / 9.81)));
     this.lean += (wantLean - this.lean) * Math.min(1, dt * 8);
 
     // Ride on the right-hand side of the lane, not on the centre line.
@@ -441,8 +450,8 @@ export class World {
     // The road surface sits ROAD_LIFT above the route line and the tyre bulges
     // TYRE_BULGE below the hub height; pitching about the bike's middle dips one
     // wheel by half the wheelbase times the slope.
-    const clearance = ROAD_LIFT + TYRE_BULGE + HALF_WHEELBASE * Math.abs(Math.sin(pitch)) + 0.005;
-    g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(this.laneOffset));
+    const clearance = this.flight ? 0 : ROAD_LIFT + TYRE_BULGE + HALF_WHEELBASE * Math.abs(Math.sin(pitch)) + 0.005;
+    g.position.set(pose.x, pose.y + clearance, pose.z).add(right.clone().multiplyScalar(this.flight ? 0 : this.laneOffset));
     g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), fwd.clone().negate(), up));
     g.rotateY(-Math.PI / 2);
     g.rotateZ(pitch);
@@ -484,6 +493,12 @@ export class World {
         wantLook = rider.clone().add(this.heading.clone().multiplyScalar(25));
         break;
       default: {
+        if (this.flight) {
+          // Behind and a little above the plane, looking past it along the flight.
+          wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-22)).add(up.clone().multiplyScalar(6));
+          wantLook = rider.clone().add(this.heading.clone().multiplyScalar(40)).add(up.clone().multiplyScalar(-4));
+          break;
+        }
         // Follow the road itself, not the rider's heading: the camera sits on
         // the road behind and looks along it ahead, so in a hairpin it stays
         // on the tarmac and looks round the bend instead of into the bank.

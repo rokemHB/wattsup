@@ -199,6 +199,16 @@ The CLI also honours `RUST_LOG` (`RUST_LOG=debug` shows btleplug's own logging).
 
 ## Worlds and routes
 
+### Flights
+
+The electric plane's two routes over the Serra de Tramuntana come from
+`tools/build_flight.py` (waypoints, Copernicus heights for the altitude):
+
+```sh
+.venv/bin/python tools/build_flight.py --network crates/core/worlds/mallorca/network.json \
+  --dem ~/wattsup-data/dem_n39_e002.tif ~/wattsup-data/dem_n39_e003.tif
+```
+
 ### The island
 
 `tools/build_network.py` builds a region as a road network: a whitelist of

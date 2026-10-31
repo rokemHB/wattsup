@@ -550,7 +550,7 @@ function fillRouteList() {
         { className: `route-card${r.id === selectedRoute ? " selected" : ""}` },
         el("b", {}, r.name),
         el("button", { className: "primary", textContent: "Ride" }),
-        el("span", { className: "meta" }, `${km} km · ${Math.round(r.climb_m)} m climbing · ${r.closed ? "loop" : "climb"}${r.world ? " · real terrain" : ""}`),
+        el("span", { className: "meta" }, r.flight ? `${km} km · electric plane over the Serra de Tramuntana · your watts fly it` : `${km} km · ${Math.round(r.climb_m)} m climbing · ${r.closed ? "loop" : "climb"}${r.world ? " · real terrain" : ""}`),
       );
       card.onclick = () => startRide(r.id).catch(showError);
       return card;

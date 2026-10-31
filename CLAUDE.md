@@ -22,6 +22,12 @@ that still need the real trainer.
   `hyprctl dispatch 'hl.dsp.window.move({ workspace = "<the headless output's
   workspace>", follow = false, window = "address:0x…" })'` and capture with
   `grim -g` on the window's geometry; `hyprctl output remove HEADLESS-N` after.
+  With the screens asleep (DPMS off) an output is not drawn and grim captures
+  black: wake only the headless one, `hyprctl dispatch 'hl.dsp.dpms({ action =
+  "on", monitor = "HEADLESS-N" })'`. With the session locked every output shows
+  the lock screen; do not get round the lock, read the app's own canvas instead
+  (`renderer.render` then `renderer.domElement.toDataURL` in the same task, logged
+  in chunks under 10 000 characters: Vite cuts longer console lines).
 - Keep the engine UI-independent (the UI talks to it through Tauri commands and
   the `snapshot` event).
 
@@ -191,6 +197,20 @@ over at 18 km. `roadMeshes` adds points on sharp curves (`densify`), so hairpins
 are curves, not corners; dashes go by distance.
 Tile unload calls `dispose()` on instanced meshes: their instance buffers are
 not freed otherwise.
+
+## Electric plane (flights)
+
+Two built-in routes, `tramuntana-flight` and `tramuntana-flight-back` (98.7 km, Port
+d'Andratx to Cap de Formentor and back), are flown by an electric plane instead of
+ridden: `tools/build_flight.py` splines them through waypoints along the range, in the
+island network's frame, with each point's height the plane's altitude (highest ground
+within 350 m plus 170 m, smoothed, at most 9 % up or down) and `"flight": true`. The
+engine flies a flight level (`Route::grade_at` is 0, so the trainer feels a flat road)
+and `FLIGHT_SPEED_FACTOR` (3) times as fast as the bike physics says, distance and
+speed alike; with no pedalling the plane comes to a stop where it is. The front end
+streams the island around it as on a free ride (`world: "mallorca"`), swaps the rider
+for `Plane` (`plane.ts`: propeller turning with the cadence, a bob when standing
+still), banks it 2.5 times as hard as a bike leans and follows it 22 m behind.
 
 ## Route planner (map screen)
 
