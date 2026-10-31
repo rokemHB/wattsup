@@ -9,6 +9,7 @@ import { RouteSampler } from "./route";
 import type { RoadNetwork } from "./network";
 import { buildWorld, cloudLayers, type Detail, FAR_SIZE, gridBlockMesh, imageTexture, patchTexture, REAL_ROAD_WIDTH, ROAD_LIFT, ROAD_WIDTH, seaMesh, type WorldStatics } from "./scene";
 import { TileManager } from "./streaming";
+import { formentorLighthouse } from "./landmarks";
 import { gridSample as gridSampleOr, imageMean, type NetworkWorldData, type WorldData } from "./terrain";
 import { detailTexture, rockDetailTexture, rockNormalTexture, scrubDetailTexture } from "./textures";
 import { sunPosition, sunVector } from "./sun";
@@ -260,6 +261,8 @@ export class World {
     group.add(sea.mesh);
     const clouds = cloudLayers(cx, cz);
     group.add(...clouds.meshes);
+    const lighthouse = formentorLighthouse(net, data.origin);
+    if (lighthouse) group.add(lighthouse);
     const tiles = new TileManager(group, data, net, far, farMeshes, detail, data.mid, (tex) => this.renderer.initTexture(tex));
     this.tiles = tiles;
     return {

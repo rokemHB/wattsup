@@ -30,14 +30,18 @@ pub struct Route {
     #[serde(default)]
     pub world: Option<String>,
     /// Flown, not ridden (the electric plane over the Tramuntana): the points' heights are the
-    /// plane's altitude, the engine flies it level ([`Route::grade_at`] is 0) and
-    /// [`FLIGHT_SPEED_FACTOR`] times as fast as a bike.
+    /// plane's altitude, the engine flies it level ([`Route::grade_at`] is 0) at the plane's
+    /// own speed for the power ([`flight_speed_mps`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flight: bool,
 }
 
-/// How much faster than a bike the plane goes for the same watts.
-pub const FLIGHT_SPEED_FACTOR: f64 = 3.0;
+/// The plane's cruising speed for a power: as air drag would have it, the cube root of the
+/// power, scaled so that 160 W flies at 100 km/h (87 km/h at 100 W, 126 km/h at 320 W).
+pub fn flight_speed_mps(power_w: f64) -> f64 {
+    const MPS_AT_160_W: f64 = 100.0 / 3.6;
+    MPS_AT_160_W * (power_w.max(0.0) / 160.0).cbrt()
+}
 
 /// Ids accepted by [`Route::builtin`].
 pub const BUILTIN_ROUTES: [&str; 6] = [

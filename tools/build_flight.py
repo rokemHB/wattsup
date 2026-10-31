@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The electric plane's flight along the Ma-10, both ways, as built-in routes.
+"""The electric plane's flight along the Ma-10 and out to Cap de Formentor, both ways.
 
-The Ma-10 from the island network (the shortest run of Ma-10 edges from Andratx to
-Pollença), led in from the sea off Port d'Andratx and out over the bay of Pollença,
+The Ma-10 and the Ma-2210 from the island network (Port d'Andratx to the lighthouse on
+Cap de Formentor, preferring those two roads), led in from the sea at Port d'Andratx and
+out over the sea past the cape,
 smoothed into long sweeps instead of its hairpins, yet never more than MAX_OFF_ROAD_M
 from the road, so the road stays in view below the plane all the way. Sampled every
 5 m in the island's frame; each point's height is the plane's altitude: the highest
@@ -29,13 +30,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_network import resample  # noqa: E402
 from build_route import EARTH_LAT_M, EARTH_LON_M, DemStack  # noqa: E402
 
-ROAD = "Ma-10"
-# From the harbour at Port d'Andratx to the one at Port de Pollença: the Ma-10 and, at the
-# ends, the roads that take it down to the sea (Ma-1020, Ma-2200), so a road is always below.
+ROADS = ("Ma-10", "Ma-2210")
+# From the harbour at Port d'Andratx along the Ma-10 and the Formentor road (Ma-2210) to
+# the lighthouse at the tip of Cap de Formentor, so a road is always below.
 FROM = (39.5440, 2.3850)
-TO = (39.9050, 3.0850)
+TO = (39.9610, 3.2122)  # the lighthouse
 SEA_START = (39.5395, 2.3790)  # just out over the harbour
-SEA_END = (39.9070, 3.0960)  # just out over the bay of Pollença
+SEA_END = (39.9628, 3.2168)  # just past the lighthouse, over the cliff edge
 SPACING_M = 5.0
 MAX_OFF_ROAD_M = 150.0
 SMOOTH_HALF_M = 600.0
@@ -47,9 +48,9 @@ ALT_SMOOTH_M = 1200.0
 
 
 def road_polyline(net, xyz, to_xz):
-    """The Ma-10's points from harbour to harbour: Dijkstra over the network with every other
-    road twenty times as dear (roundabouts and links in the towns carry no ref; they bridge)."""
-    on = lambda e: bool(e["ref"]) and ROAD in [r.strip() for r in e["ref"].split(";")]  # noqa: E731
+    """The road's points from the harbour to the lighthouse: Dijkstra over the network with every
+    road but ROADS twenty times as dear (roundabouts and links in the towns carry no ref; they bridge)."""
+    on = lambda e: bool(e["ref"]) and any(r.strip() in ROADS for r in e["ref"].split(";"))  # noqa: E731
     adj = {}
     for i in range(len(net["edges"])):
         e = net["edges"][i]
@@ -78,7 +79,7 @@ def road_polyline(net, xyz, to_xz):
                 prev[m] = (n, ei)
                 heapq.heappush(heap, (nd, m))
     if goal not in prev:
-        sys.exit(f"no road from Port d'Andratx to Port de Pollença")
+        sys.exit("no road from Port d'Andratx to Cap de Formentor")
     chain = []
     n = goal
     while n != start:
@@ -92,7 +93,7 @@ def road_polyline(net, xyz, to_xz):
         if net["edges"][ei]["a"] != a:
             seg = seg[::-1]
         pts.extend(seg if not pts else seg[1:])
-    print(f"{ROAD}: {len(chain)} edges, {dist[goal] / 1000:.1f} km", file=sys.stderr)
+    print(f"road: {len(chain)} edges", file=sys.stderr)
     return np.array(pts, dtype=np.float64)
 
 
@@ -164,8 +165,8 @@ def main():
         }
 
     out = Path(a.out_dir)
-    there = route("Flight along the Ma-10: Andratx → Pollença", pts, alt)
-    back = route("Flight along the Ma-10: Pollença → Andratx", pts[::-1], alt[::-1])
+    there = route("Flight: Andratx → Formentor lighthouse", pts, alt)
+    back = route("Flight: Formentor lighthouse → Andratx", pts[::-1], alt[::-1])
     for rid, r in (("tramuntana-flight", there), ("tramuntana-flight-back", back)):
         (out / f"{rid}.json").write_text(json.dumps(r, separators=(",", ":")))
         print(f"{rid}: {r['points'][-1]['distance_m'] / 1000:.1f} km, altitude {alt.min():.0f}-{alt.max():.0f} m")

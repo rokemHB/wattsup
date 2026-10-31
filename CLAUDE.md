@@ -203,16 +203,21 @@ not freed otherwise.
 
 ## Electric plane (flights)
 
-Two built-in routes, `tramuntana-flight` and `tramuntana-flight-back` (87.5 km along the
-Ma-10, harbour to harbour, Port d'Andratx to Port de Pollença), are flown by an electric
-plane instead of ridden: `tools/build_flight.py` takes the Ma-10 from the network (the
-roads down to the sea at its ends; the network has none for the last 3.4 km to Port
-d'Andratx), smooths it into long sweeps but pulls it back to within 150 m of the road
-each pass, so the road stays in view, with each point's height the plane's altitude
+Two built-in routes, `tramuntana-flight` and `tramuntana-flight-back` (99.6 km: Port
+d'Andratx along the Ma-10 and the Formentor road, Ma-2210, to the lighthouse on Cap de
+Formentor), are flown by an electric plane instead of ridden: `tools/build_flight.py`
+takes those roads from the network (none for the first 3.4 km from the harbour to
+Andratx), smooths them into long sweeps but pulls the path back to within 150 m of the
+road each pass, so the road stays in view, with each point's height the plane's altitude
 (highest ground within 150 m plus 80 m, smoothed, at most 9 % up or down) and `"flight": true`. The
 engine flies a flight level (`Route::grade_at` is 0, so the trainer feels a flat road)
-and `FLIGHT_SPEED_FACTOR` (3) times as fast as the bike physics says, distance and
-speed alike; with no pedalling the plane comes to a stop where it is. The front end
+at the plane's own speed (`flight_speed_mps`: the cube root of the power, 100 km/h at
+160 W, reached over ~3 s); with no pedalling it comes to a stop where it is. The
+lighthouse itself (`landmarks.ts`) stands beyond the road's last point near it.
+Network heights (`grade_limited` in `build_network.py`): the mean of the capped upper
+and lower envelopes of the smoothed 5 m heights, ends pinned to the junctions first and
+settled locally. Summing clipped steps and spreading the end mismatch over the edge had
+put 10 km of the Formentor road on a dam up to 80 m above the valley. The front end
 streams the island around it as on a free ride (`world: "mallorca"`), swaps the rider
 for `Plane` (`plane.ts`: propeller turning with the cadence, a bob when standing
 still), banks it 2.5 times as hard as a bike leans and follows it 22 m behind, looking
