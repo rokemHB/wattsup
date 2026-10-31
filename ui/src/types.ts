@@ -40,6 +40,8 @@ export interface SessionSnapshot {
   lap: number;
   finished: boolean;
   workout: WorkoutSnapshot | null;
+  /** How the last FTP ramp test ended, until the next workout starts. */
+  ramp_result?: RampResult | null;
   trainer_offline: boolean;
   model_power_w: number;
   last_command: TrainerCommand | null;
@@ -248,6 +250,16 @@ export interface WorkoutStep {
 export interface Workout {
   name: string;
   steps: WorkoutStep[];
+  /** An FTP ramp test: the first step is the warm-up, the rest climb until the rider gives out. */
+  ramp?: boolean;
+}
+
+/** How an FTP ramp test ended (crates/core/src/ramp.rs). */
+export interface RampResult {
+  ftp_w: number;
+  best_minute_w: number;
+  last_step_w: number;
+  ramp_s: number;
 }
 
 export interface WorkoutSnapshot {

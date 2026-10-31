@@ -15,7 +15,7 @@ import { Router, type PlannedPath } from "./routing";
 import type { EngineSnapshot, Junction, Navigation, Route, RouteInfo, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
-import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp, saveWorkouts, validStep } from "./workouts";
+import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 
@@ -215,7 +215,7 @@ function fillWorkoutList() {
 }
 
 function openWorkout(w: Workout, index: number) {
-  editing = { name: w.name, steps: w.steps.map((s) => ({ ...s })) };
+  editing = { name: w.name, steps: w.steps.map((s) => ({ ...s })), ramp: w.ramp };
   editingIndex = index;
   show("workout");
   fillWorkoutEditor();
@@ -278,7 +278,7 @@ function refreshWorkoutSummary() {
 }
 
 function saveWorkout() {
-  const w: Workout = { name: editing.name.trim() || "Workout", steps: editing.steps.map((s) => ({ ...s })) };
+  const w: Workout = { name: editing.name.trim() || "Workout", steps: editing.steps.map((s) => ({ ...s })), ramp: editing.ramp };
   if (editingIndex >= 0) workouts[editingIndex] = w;
   else {
     workouts.push(w);
@@ -290,7 +290,7 @@ function saveWorkout() {
 }
 
 async function startWorkout() {
-  const w: Workout = { name: editing.name.trim() || "Workout", steps: editing.steps.map((s) => ({ ...s })) };
+  const w: Workout = { name: editing.name.trim() || "Workout", steps: editing.steps.map((s) => ({ ...s })), ramp: editing.ramp };
   const routeId = $<HTMLSelectElement>("workout-route").value || selectedRoute;
   await startRide(routeId);
   await api.startWorkout(w);
@@ -681,6 +681,13 @@ function showFinish(snap: EngineSnapshot) {
     ...item("Climbing", `${Math.round(st.ascent_m)} m`),
     ...item("Energy", `${Math.round(st.energy_kj)} kJ`),
   );
+  if (s.ramp_result) {
+    const out = rampOutcome(s.ramp_result);
+    if (s.ramp_result.ftp_w >= 50) ftp = s.ramp_result.ftp_w;
+    $("finish-title").textContent = `${profile.avatar} ${out.title}`;
+    $("finish-stats").prepend(...out.rows.flatMap(([k, v]) => item(k, v)));
+    fillWorkoutList();
+  }
   show("finish");
 }
 
@@ -732,6 +739,7 @@ function wire() {
       const w = fromPreset(PRESETS[i], ftp);
       editing.name = w.name;
       editing.steps = w.steps;
+      editing.ramp = w.ramp;
       fillWorkoutEditor();
     }
   };

@@ -6,7 +6,7 @@ import { $, el } from "./dom";
 import { duration, num } from "./format";
 import { drawWorkout } from "./hud";
 import type { EngineSnapshot, Workout } from "./types";
-import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, saveFtp } from "./workouts";
+import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp } from "./workouts";
 
 export interface TrainerCallbacks {
   /** Starts `w` in ERG mode on the flat road, with no world. */
@@ -91,6 +91,7 @@ export class TrainerScreen {
     this.workout = w;
     this.barKey = "";
     this.phase = "live";
+    this.rampShown = false;
     this.starting = true;
     this.show("live");
     this.cb
@@ -272,7 +273,17 @@ export class TrainerScreen {
       ...item("Average cadence", st.avg_cadence_rpm === null ? "–" : `${num(st.avg_cadence_rpm)} rpm`),
       ...item("Energy", `${Math.round(st.energy_kj)} kJ`),
     );
+    if (s.ramp_result && !this.rampShown) {
+      this.rampShown = true;
+      const out = rampOutcome(s.ramp_result);
+      if (s.ramp_result.ftp_w >= 50) this.ftp = s.ramp_result.ftp_w;
+      $("trainer-done-title").textContent = out.title;
+      $("trainer-done-stats").prepend(...out.rows.flatMap(([k, v]) => item(k, v)));
+    }
   }
+
+  /** A ramp result is saved and shown once per test. */
+  private rampShown = false;
 
   private devicesKey = "";
 

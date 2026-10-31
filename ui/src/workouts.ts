@@ -1,23 +1,53 @@
 // Workouts: ERG interval protocols, as presets (in percent of FTP) and the
 // rider's own saved ones (in watts), kept in local storage.
-import type { Workout, WorkoutStep } from "./types";
+import { api } from "./api";
+import type { RampResult, Workout, WorkoutStep } from "./types";
 
 export interface Preset {
   name: string;
-  /** Steps as [percent of FTP, minutes]. */
+  /** Steps as [percent of FTP, minutes], or [watts, minutes] when `absolute`. */
   steps: [number, number][];
+  absolute?: boolean;
+  ramp?: boolean;
 }
+
+/** The FTP ramp test: 5 minutes of warm-up at 100 W, then from 120 W up by 20 W a minute. */
+const RAMP_STEPS: [number, number][] = [[100, 5], ...Array.from({ length: 30 }, (_, k): [number, number] => [120 + 20 * k, 1])];
 
 export const PRESETS: Preset[] = [
   { name: "Sweet spot 3 × 10", steps: [[55, 10], [90, 10], [55, 5], [90, 10], [55, 5], [90, 10], [50, 10]] },
   { name: "Threshold 2 × 20", steps: [[55, 10], [100, 20], [55, 8], [100, 20], [50, 10]] },
   { name: "VO2max 5 × 3", steps: [[55, 10], [120, 3], [50, 3], [120, 3], [50, 3], [120, 3], [50, 3], [120, 3], [50, 3], [120, 3], [50, 10]] },
   { name: "Endurance 60", steps: [[55, 10], [68, 45], [50, 5]] },
-  { name: "Ramp test", steps: [[40, 5], [50, 1], [60, 1], [70, 1], [80, 1], [90, 1], [100, 1], [110, 1], [120, 1], [130, 1], [140, 1], [150, 1]] },
+  { name: "FTP ramp test", steps: RAMP_STEPS, absolute: true, ramp: true },
 ];
 
 export function fromPreset(p: Preset, ftp: number): Workout {
-  return { name: p.name, steps: p.steps.map(([pct, min]) => ({ watts: Math.round((pct / 100) * ftp / 5) * 5, seconds: min * 60 })) };
+  const w: Workout = { name: p.name, steps: p.steps.map(([v, min]) => ({ watts: p.absolute ? v : Math.round((v / 100) * ftp / 5) * 5, seconds: min * 60 })) };
+  if (p.ramp) w.ramp = true;
+  return w;
+}
+
+/**
+ * The end of a ramp test for a finish screen: its title and stat rows. The new FTP is saved
+ * and handed to the engine at once (the HUD's time estimates and the presets use it).
+ */
+export function rampOutcome(r: RampResult): { title: string; rows: [string, string][] } {
+  if (r.ftp_w >= 50) {
+    saveFtp(r.ftp_w);
+    api.setFtp(r.ftp_w).catch(console.error);
+  }
+  const min = Math.floor(r.ramp_s / 60);
+  const sec = Math.round(r.ramp_s % 60);
+  return {
+    title: r.ftp_w >= 50 ? `Your FTP: ${r.ftp_w} W` : "FTP test: too short to tell",
+    rows: [
+      ["FTP (75 % of best minute)", r.ftp_w >= 50 ? `${r.ftp_w} W · saved` : "–"],
+      ["Best minute", `${r.best_minute_w} W`],
+      ["Highest step held", r.last_step_w ? `${r.last_step_w} W` : "–"],
+      ["Ramp ridden", `${min}:${String(sec).padStart(2, "0")}`],
+    ],
+  };
 }
 
 export function totalSeconds(w: Workout): number {

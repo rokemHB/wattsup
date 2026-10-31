@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::gearing::{implied_ratio, GearSet, Gearbox, ShiftDirection};
 use crate::physics::{kmh_to_mps, mps_to_kmh, step_speed, RiderParams};
 use crate::protocol::ftms::ControlRequest;
+use crate::ramp::{RampResult, RampTracker};
 use crate::resistance::{virtual_gear_power, virtual_gear_sim, SimTarget, TrainerProfile};
 use crate::route::{flight_speed_mps, Route};
 
@@ -138,6 +139,10 @@ pub struct WorkoutStep {
 pub struct Workout {
     pub name: String,
     pub steps: Vec<WorkoutStep>,
+    /// An FTP ramp test: the first step is the warm-up, the rest climb until the rider gives
+    /// out, which ends the workout with a [`RampResult`] in the snapshot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ramp: bool,
 }
 
 impl Workout {
@@ -309,6 +314,9 @@ pub struct SessionSnapshot {
     /// The end of an open route has been reached.
     pub finished: bool,
     pub workout: Option<WorkoutSnapshot>,
+    /// How the last FTP ramp test ended (until the next workout starts).
+    #[serde(default)]
+    pub ramp_result: Option<RampResult>,
     /// The trainer's link is down: the ride is held until it is back.
     pub trainer_offline: bool,
     /// Pedal power the virtual road asks for at the current cadence, gear and
@@ -347,6 +355,9 @@ pub struct RideSession {
     /// A running workout, with the seconds of it ridden so far.
     workout: Option<(Workout, f64)>,
     workout_paused: bool,
+    /// Watching a ramp test, and how the last one ended.
+    ramp: Option<RampTracker>,
+    ramp_result: Option<RampResult>,
     workout_bias_w: f64,
     trainer_offline: bool,
     /// Seconds the ride clock has been held for an offline trainer.
@@ -386,6 +397,8 @@ impl RideSession {
             auto_shift: AutoShift::default(),
             ride_start_s: 0.0,
             workout: None,
+            ramp: None,
+            ramp_result: None,
             workout_paused: false,
             workout_bias_w: 0.0,
             trainer_offline: false,
@@ -687,6 +700,8 @@ impl RideSession {
         self.set_mode(ControlMode::Erg);
         self.workout_bias_w = 0.0;
         self.set_erg_target(workout.steps[0].watts);
+        self.ramp = workout.ramp.then(RampTracker::new);
+        self.ramp_result = None;
         self.workout = Some((workout, 0.0));
         self.workout_paused = true;
     }
@@ -718,6 +733,10 @@ impl RideSession {
 
     /// Ends the workout and returns to free riding.
     pub fn stop_workout(&mut self) {
+        // A ramp test stopped by the rider still has a result.
+        if let Some(t) = self.ramp.take() {
+            self.ramp_result = Some(t.result());
+        }
         if self.workout.take().is_some() {
             self.set_mode(ControlMode::Sim);
         }
@@ -772,6 +791,24 @@ impl RideSession {
         if after != before {
             let watts = workout.steps[after].watts + self.workout_bias_w;
             self.set_erg_target(watts);
+        }
+    }
+
+    /// Feeds a running ramp test; when the rider gives out (or rides every step) the workout
+    /// is over: its clock jumps to the end, so it reports done, and the result is kept.
+    fn ramp_step(&mut self, dt: f64, power: f64, pedalling: bool) {
+        let (Some(tracker), Some((w, elapsed))) = (self.ramp.as_mut(), self.workout.as_mut()) else {
+            return;
+        };
+        let total = w.total_seconds();
+        let step = Self::step_index(w, *elapsed);
+        let target = w.steps[step].watts + self.workout_bias_w;
+        // Not pedalling at all (the workout clock stands) counts as giving out too.
+        let result = tracker.feed(dt, if pedalling { power } else { 0.0 }, target, step > 0);
+        if result.is_some() || *elapsed >= total {
+            self.ramp_result = Some(result.unwrap_or_else(|| tracker.result()));
+            *elapsed = total;
+            self.ramp = None;
         }
     }
 
@@ -846,6 +883,7 @@ impl RideSession {
         if !self.trainer_offline {
             self.account(dt, power);
         }
+        self.ramp_step(dt, power, pedalling);
 
         let cadence = self.cadence.fresh(now, timeout);
         let trainer_speed = self.trainer_speed.fresh(now, timeout).map(kmh_to_mps);
@@ -958,6 +996,7 @@ impl RideSession {
             lap,
             finished,
             workout: self.workout(),
+            ramp_result: self.ramp_result.clone(),
             trainer_offline: self.trainer_offline,
             model_power_w,
             last_command: self.last_command,
@@ -1137,6 +1176,42 @@ mod tests {
     }
 
     #[test]
+    fn a_ramp_test_ends_when_the_rider_gives_out_and_reports_ftp() {
+        let mut s = RideSession::default();
+        let mut steps = vec![WorkoutStep {
+            watts: 100.0,
+            seconds: 300.0,
+        }];
+        steps.extend((0..30).map(|k| WorkoutStep {
+            watts: 100.0 + 20.0 * k as f64,
+            seconds: 60.0,
+        }));
+        s.start_workout(Workout {
+            name: "FTP ramp test".into(),
+            steps,
+            ramp: true,
+        });
+        // The rider follows the target up to 300 W, then can only manage 150 W.
+        let mut ended_at = None;
+        for i in 0..(40 * 60 * 4) {
+            let target = s.snapshot().erg_target_w;
+            riding(&mut s, if target <= 300.0 { target } else { 150.0 }, 90.0);
+            s.tick(0.25);
+            if s.snapshot().workout.as_ref().is_some_and(|w| w.done) {
+                ended_at = Some(i as f64 * 0.25);
+                break;
+            }
+        }
+        let ended_at = ended_at.expect("the test ended");
+        // Warm-up 5 min, 11 steps to 300 W, then ten seconds into the 320 W step.
+        assert!((ended_at - (300.0 + 11.0 * 60.0 + 10.0)).abs() < 2.0, "{ended_at}");
+        let r = s.snapshot().ramp_result.expect("a result");
+        assert_eq!(r.last_step_w, 300.0);
+        assert!((r.best_minute_w - 300.0).abs() < 2.0, "{}", r.best_minute_w);
+        assert!((r.ftp_w - 225.0).abs() < 2.0, "{}", r.ftp_w);
+    }
+
+    #[test]
     fn measures_the_trainer_drive_ratio() {
         let mut s = RideSession::default();
         for _ in 0..200 {
@@ -1303,6 +1378,7 @@ mod tests {
                     seconds: 10.0,
                 },
             ],
+            ramp: false,
         };
         s.start_workout(w);
         assert_eq!(s.snapshot().mode, ControlMode::Erg);
@@ -1348,6 +1424,7 @@ mod tests {
                     seconds: 60.0,
                 },
             ],
+            ramp: false,
         });
         s.set_workout_bias(10.0);
         assert_eq!(s.snapshot().erg_target_w, 160.0);
@@ -1365,6 +1442,7 @@ mod tests {
                 watts: 100.0,
                 seconds: 60.0,
             }],
+            ramp: false,
         });
         assert_eq!(s.snapshot().erg_target_w, 100.0);
         assert!(!s.skip_workout_step());

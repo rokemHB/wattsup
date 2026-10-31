@@ -239,6 +239,19 @@ mixed after the colour space conversion as three applies fog (`skyBox`); past th
 far plane the scattering sky's grey made a band. The HUD shows distance flown and
 altitude on a flight; the lap counter hides on free rides and flights.
 
+## FTP ramp test
+
+The "FTP ramp test" preset (`workouts.ts`, also on the Trainer screen) is a workout marked
+`ramp`: 5 min at 100 W, then from 120 W up by 20 W a minute (30 steps). The engine
+watches it (`ramp.rs`, `RideSession::ramp_step`): 10 s in a row below 85 % of the target
+(or not pedalling) ends it, the workout reports done and `SessionSnapshot.ramp_result`
+holds FTP = 75 % of the best 60 s power (none from under a minute of ramp), the best
+minute, the highest step held for 15 s and the ramp time. Stopping it by hand gives a
+result too. The finish screen and the Trainer's done view show it and save the FTP
+(`rampOutcome`). Dev check: start a shortened ramp from `WATTSUP_DEV_JS` with
+`wattsup.api.startWorkout({ name, ramp: true, steps })` and a last step the simulator
+cannot hold. It saves the FTP in the dev app's storage: set it back after.
+
 ## Route planner (map screen)
 
 `ui/src/map.ts` is the map screen (view, click menu, waypoints, side panel,

@@ -8,6 +8,7 @@ pub mod gearing;
 pub mod network;
 pub mod physics;
 pub mod protocol;
+pub mod ramp;
 pub mod resistance;
 pub mod route;
 pub mod session;
