@@ -203,17 +203,27 @@ not freed otherwise.
 
 ## Electric plane (flights)
 
-Two built-in routes, `tramuntana-flight` and `tramuntana-flight-back` (98.7 km, Port
-d'Andratx to Cap de Formentor and back), are flown by an electric plane instead of
-ridden: `tools/build_flight.py` splines them through waypoints along the range, in the
-island network's frame, with each point's height the plane's altitude (highest ground
-within 350 m plus 170 m, smoothed, at most 9 % up or down) and `"flight": true`. The
+Two built-in routes, `tramuntana-flight` and `tramuntana-flight-back` (87.5 km along the
+Ma-10, harbour to harbour, Port d'Andratx to Port de Pollença), are flown by an electric
+plane instead of ridden: `tools/build_flight.py` takes the Ma-10 from the network (the
+roads down to the sea at its ends; the network has none for the last 3.4 km to Port
+d'Andratx), smooths it into long sweeps but pulls it back to within 150 m of the road
+each pass, so the road stays in view, with each point's height the plane's altitude
+(highest ground within 150 m plus 80 m, smoothed, at most 9 % up or down) and `"flight": true`. The
 engine flies a flight level (`Route::grade_at` is 0, so the trainer feels a flat road)
 and `FLIGHT_SPEED_FACTOR` (3) times as fast as the bike physics says, distance and
 speed alike; with no pedalling the plane comes to a stop where it is. The front end
 streams the island around it as on a free ride (`world: "mallorca"`), swaps the rider
 for `Plane` (`plane.ts`: propeller turning with the cadence, a bob when standing
-still), banks it 2.5 times as hard as a bike leans and follows it 22 m behind.
+still), banks it 2.5 times as hard as a bike leans and follows it 22 m behind, looking
+down past it so the road below stays in the picture.
+The sense of speed (`World.frame`): acceleration, from the speed smoothed over the
+engine's 250 ms steps, widens the view (up to +7°, −3° easing off) and drops the chase
+camera back (up to 2.5 m, three times that behind the plane); speed itself widens it a
+little. Measured: 5 → 12 m/s in 3 s gave 60.6 → 68° and 2 m back.
+Menus work from the keyboard (`menuKey` in `main.ts`): arrows move through the visible
+buttons and route cards of the main, pause and finish screens, Enter opens a card, and
+a menu opens with its first button focused; the main menu's route column scrolls.
 
 Seen from the air the island showed seams a rider never sees, fixed 2026-10-31:
 terrain tiles and mid blocks hang skirts from their edges (`addSkirt`, deeper than the

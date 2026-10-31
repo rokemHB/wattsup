@@ -106,6 +106,11 @@ export class World {
   private camLook = new THREE.Vector3();
   private heading = new THREE.Vector3(1, 0, 0);
   private lean = 0;
+  /** Speed smoothed over the engine's 250 ms steps, and the acceleration taken from it (m/s²), for the sense of speed. */
+  private smoothSpeed = 0;
+  private accel = 0;
+  /** How far the chase camera has dropped back (+) or closed in (−) with the acceleration, in metres. */
+  private pullBack = 0;
   /** How far right of the centre line the rider rides. */
   private laneOffset: number;
   /** Render scale, tuned at runtime to hold the frame rate on weak GPUs. */
@@ -475,6 +480,21 @@ export class World {
     this.tiles?.update(g.position.x, g.position.z, this.camPos);
     this.bucket[0] += performance.now() - tUpd0;
 
+    // The sense of speed. Speeding up, the view widens and the camera drops back as if
+    // left behind; easing off, it narrows and closes in. Racing games' oldest trick: the
+    // numbers alone say little about a harder effort, a wider, receding view says it at once.
+    const prevSmooth = this.smoothSpeed;
+    this.smoothSpeed += (this.speed - this.smoothSpeed) * Math.min(1, dt * 3);
+    const rawAccel = dt > 0 ? (this.smoothSpeed - prevSmooth) / dt : 0;
+    this.accel += (rawAccel - this.accel) * Math.min(1, dt * 4);
+    const kick = Math.max(-3, Math.min(7, this.accel * (this.flight ? 2.2 : 4.5)));
+    const fov = 60 + kick + Math.min(5, this.smoothSpeed * (this.flight ? 0.08 : 0.12));
+    if (Math.abs(fov - this.camera.fov) > 0.02) {
+      this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 4);
+      this.camera.updateProjectionMatrix();
+    }
+    this.pullBack += (Math.max(-1, Math.min(2.5, this.accel * 0.9)) - this.pullBack) * Math.min(1, dt * 3);
+
     // Camera.
     const rider = g.position;
     let wantPos: THREE.Vector3;
@@ -507,14 +527,15 @@ export class World {
       default: {
         if (this.flight) {
           // Behind and a little above the plane, looking past it along the flight.
-          wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-22)).add(up.clone().multiplyScalar(6));
-          wantLook = rider.clone().add(this.heading.clone().multiplyScalar(40)).add(up.clone().multiplyScalar(-4));
+          // Looking down past it a little more than ahead, so the road below stays in the picture.
+          wantPos = rider.clone().add(this.heading.clone().multiplyScalar(-22 - 3 * this.pullBack)).add(up.clone().multiplyScalar(6));
+          wantLook = rider.clone().add(this.heading.clone().multiplyScalar(40)).add(up.clone().multiplyScalar(-14));
           break;
         }
         // Follow the road itself, not the rider's heading: the camera sits on
         // the road behind and looks along it ahead, so in a hairpin it stays
         // on the tarmac and looks round the bend instead of into the bank.
-        const back = this.sampler.pose(this.distance - 8.5);
+        const back = this.sampler.pose(this.distance - 8.5 - this.pullBack);
         const ahead = this.sampler.pose(this.distance + 7);
         const backRight = new THREE.Vector3(-back.dz, 0, back.dx).multiplyScalar(this.laneOffset * 0.6);
         wantPos = new THREE.Vector3(back.x, Math.max(back.y, rider.y - 1) + 2.7, back.z).add(backRight);
