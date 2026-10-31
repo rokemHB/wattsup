@@ -623,11 +623,20 @@ export function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amou
   // Scrub only on the ground plane: steep faces show rock anyway, and it saves a texture fetch per pixel.
   vec3 scrub = texture2D(scrubMap, vGroundPos.xz / scrubScale).rgb * (0.5 / max(scrubMean, vec3(0.05)));
   float steep = smoothstep(0.18, 0.5, 1.0 - n.y);
+  if (steep > 0.01) {
+    // Close up, a 110 m photo patch on a 20 m road cut is a smear: the same rock again at
+    // about 9 m and 2.5 m, and limestone beds laid across the face, give it a grain.
+    vec3 fine = texture2D(rockMap, vertical / (rockScale * 0.08)).rgb * (0.5 / max(rockMean, vec3(0.05)));
+    vec3 finer = texture2D(rockMap, vertical / (rockScale * 0.023)).rgb * (0.5 / max(rockMean, vec3(0.05)));
+    float beds = 0.72 + 0.28 * smoothstep(-0.3, 0.7, sin(vGroundPos.y * 2.6 + fine.r * 5.0));
+    rock *= mix(vec3(1.0), (fine * 0.6 + finer * 0.4) * 2.0 * beds, steep);
+  }
   vec3 det = mix(scrub, rock, steep);
   diffuseColor.rgb = diffuseColor.rgb * mix(vec3(1.0), det * 2.0, detailAmount * mix(0.5, 0.8, steep));
   // A photo taken from above says little about a cliff face: there, show the rock itself.
   vec3 rockFace = rock * rockMean * 2.0 * vec3(0.9, 0.88, 0.84);
-  diffuseColor.rgb = mix(diffuseColor.rgb, rockFace * 0.8, detailAmount * steep * 0.75);
+  // (Almost wholly on a steep face: the photo stretched down it is only streaks.)
+  diffuseColor.rgb = mix(diffuseColor.rgb, rockFace * 0.92, detailAmount * steep * 0.9);
 }`,
       );
   };
@@ -749,6 +758,51 @@ function portalPatch(
   return mesh;
 }
 
+/**
+ * Hangs a skirt from a grid geometry's border (`cols` by `rows` vertices, row-major): each
+ * edge vertex again, `depth` metres lower, with the same normal and texture coordinate, and
+ * a strip of quads between. Where a fine tile meets a coarser layer their edges differ by a
+ * little and the gap showed what lies below (the sea, as thin blue lines seen from the
+ * plane); the skirt fills it with ground of the right colour.
+ */
+function addSkirt(geo: THREE.BufferGeometry, cols: number, rows: number, depth: number) {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const nor = geo.attributes.normal as THREE.BufferAttribute;
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  const ring: number[] = [];
+  for (let c = 0; c < cols; c++) ring.push(c);
+  for (let r = 1; r < rows; r++) ring.push(r * cols + cols - 1);
+  for (let c = cols - 2; c >= 0; c--) ring.push((rows - 1) * cols + c);
+  for (let r = rows - 2; r > 0; r--) ring.push(r * cols);
+  ring.push(0);
+  const n = pos.count;
+  const p = new Float32Array((n + ring.length) * 3);
+  const nn = new Float32Array((n + ring.length) * 3);
+  const t = new Float32Array((n + ring.length) * 2);
+  p.set(pos.array as Float32Array);
+  nn.set(nor.array as Float32Array);
+  t.set(uv.array as Float32Array);
+  ring.forEach((v, k) => {
+    const o = n + k;
+    p.set([pos.getX(v), pos.getY(v) - depth, pos.getZ(v)], o * 3);
+    nn.set([nor.getX(v), nor.getY(v), nor.getZ(v)], o * 3);
+    t.set([uv.getX(v), uv.getY(v)], o * 2);
+  });
+  const idx = Array.from(geo.index!.array);
+  for (let k = 0; k + 1 < ring.length; k++) {
+    const a = ring[k];
+    const b = ring[k + 1];
+    const a2 = n + k;
+    const b2 = n + k + 1;
+    // Both windings: the strip is seen from outside the block whichever way the ring turns.
+    idx.push(a, a2, b, b, a2, b2, a, b, a2, b, b2, a2);
+  }
+  geo.setAttribute("position", new THREE.BufferAttribute(p, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(nn, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(t, 2));
+  geo.setIndex(idx);
+}
+
 export function gridBlockMesh(
   g: Grid,
   heightAt: (x: number, z: number) => number,
@@ -762,6 +816,8 @@ export function gridBlockMesh(
   /** The row and column range the photo spans, when this block is only part of it. */
   uvRows: [number, number] = rows,
   uvCols: [number, number] = cols,
+  /** Metres of skirt hanging from the block's edges, hiding cracks where it meets a coarser layer. */
+  skirt = 0,
 ): THREE.Mesh {
   const [r0, r1] = rows;
   const [c0, c1] = cols;
@@ -792,6 +848,7 @@ export function gridBlockMesh(
     geo.setIndex(kept);
   }
   geo.computeVertexNormals();
+  if (skirt > 0) addSkirt(geo, c1 - c0 + 1, r1 - r0 + 1, skirt);
   // The photo already carries the sun's shading; lit again it blows out, so reflect less.
   const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.95, metalness: 0, color: new THREE.Color().setScalar(PHOTO_REFLECTANCE) });
   // No bump map: its tangents come from the photo's uv, which stretches into streaks on steep faces.

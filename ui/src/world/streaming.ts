@@ -32,6 +32,23 @@ import { confirmationPost, faceCamera, signPost, type SignPost } from "./signs";
 import { buildCell, cellsIn, type ForestCell, type TreeData, updateCell } from "./forest";
 
 const cls_width = (kind: number) => ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, kind)].width;
+
+/**
+ * Ground at sea level is dropped a few metres so the sea surface draws over the photo's
+ * water, but only where the low ground is open water: at least half of eight points 40 m
+ * around it are low too. A narrow torrent bed running down to the coast at 0 m (Port
+ * d'Andratx, Sóller) is land; dropped, the sea showed through it as a thin blue river.
+ */
+function seaDrop(h: number, x: number, z: number, sample: (x: number, z: number) => number | null): number {
+  if (h > SEA_LEVEL + 0.3) return h;
+  let low = 0;
+  for (let k = 0; k < 8; k++) {
+    const a = (k * Math.PI) / 4;
+    const s = sample(x + Math.cos(a) * 40, z + Math.sin(a) * 40);
+    if (s === null || s <= SEA_LEVEL + 0.3) low++;
+  }
+  return low >= 4 ? SEA_LEVEL - 4 : Math.max(h, SEA_LEVEL + 0.4);
+}
 /** Roundabouts smaller than this get no raised island (a mini-roundabout is paint on the junction). */
 const ISLAND_MIN_R = 8;
 /** How far along the ring either side of an entry its outer edge line is left out. */
@@ -238,6 +255,9 @@ const MID_DROP_M = 9500;
 /** The far layer is lowered this much under a mid block, and both under a loaded tile. */
 const SINK_UNDER_MID = 30;
 const SINK_UNDER_TILE = 80;
+/** Skirts under the edges of terrain tiles and mid blocks (see addSkirt in scene.ts), deeper than the coarser layer is sunk under them: a shallower one still let the sea show past its foot at a grazing angle. */
+const TILE_SKIRT_M = SINK_UNDER_TILE + 10;
+const MID_SKIRT_M = SINK_UNDER_MID + 10;
 /** How far inside a finer layer's edge coarse ground counts as covered and is not drawn. */
 const COVER_INSET_M = 10;
 
@@ -324,12 +344,13 @@ export class TileManager {
   private rawAt(x: number, z: number): number {
     for (const t of this.tiles.values()) {
       if (t.grid && x >= t.x0 && x < t.x1 && z >= t.z0 && z < t.z1) {
-        const h = gridSample(t.grid, x, z);
-        if (h !== null) return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
+        const g = t.grid;
+        const h = gridSample(g, x, z);
+        if (h !== null) return seaDrop(h, x, z, (sx, sz) => gridSample(g, sx, sz));
       }
     }
-    const h = (this.mid && gridSample(this.mid, x, z)) ?? gridSample(this.far, x, z) ?? SEA_LEVEL - 10;
-    return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
+    const sample = (sx: number, sz: number) => (this.mid && gridSample(this.mid, sx, sz)) ?? gridSample(this.far, sx, sz);
+    return seaDrop(sample(x, z) ?? SEA_LEVEL - 10, x, z, sample);
   }
 
   private corridor(x: number, z: number, h: number): number {
@@ -416,7 +437,7 @@ export class TileManager {
         }
         t.ground = meshes;
         t.coarse = false;
-        t.group.add(...meshes);
+        if (meshes.length) t.group.add(...meshes);
         this.plant(t);
       })
       .catch((e) => console.warn(`tile ${t.key} refine: ${e}`))
@@ -489,7 +510,7 @@ export class TileManager {
     const meshes: THREE.Mesh[] = [];
     for (const rr of [[-1, midR] as [number, number], [midR, rows] as [number, number]]) {
       for (const cc of [[-1, midC] as [number, number], [midC, cols] as [number, number]]) {
-        meshes.push(gridBlockMesh(g, lookup, rr, cc, tex, this.detail, 1, overTunnel, [-1, rows], [-1, cols]));
+        meshes.push(gridBlockMesh(g, lookup, rr, cc, tex, this.detail, 1, overTunnel, [-1, rows], [-1, cols], TILE_SKIRT_M));
       }
     }
     return meshes;
@@ -616,7 +637,10 @@ export class TileManager {
       for (let i = 0; i < pos.count; i++) {
         const x = base[i * 3];
         const z = base[i * 3 + 2];
-        pos.setY(i, base[i * 3 + 1] - depth(x, z, margin, underMid));
+        // Sunk land stays above the sea: a sunk sample just outside a tile left a trench that,
+        // on low ground, dipped below sea level and showed the sea as a straight blue line.
+        const y = base[i * 3 + 1];
+        pos.setY(i, y > SEA_LEVEL + 0.2 ? Math.max(y - depth(x, z, margin, underMid), SEA_LEVEL + 0.2) : y - depth(x, z, margin, underMid));
         hidden[i] = covered(x, z, underMid) ? 1 : 0;
       }
       pos.needsUpdate = true;
@@ -725,10 +749,7 @@ export class TileManager {
       b.state = "failed";
       return;
     }
-    const height = (x: number, z: number) => {
-      const h = gridSample(g, x, z) ?? SEA_LEVEL - 10;
-      return h <= SEA_LEVEL + 0.3 ? SEA_LEVEL - 4 : h;
-    };
+    const height = (x: number, z: number) => seaDrop(gridSample(g, x, z) ?? SEA_LEVEL - 10, x, z, (sx, sz) => gridSample(g, sx, sz));
     const tex = imageTexture(photo.bitmap);
     this.prepare?.(tex);
     await nextFrame();
@@ -736,7 +757,7 @@ export class TileManager {
       tex.dispose();
       return;
     }
-    const mesh = gridBlockMesh(g, height, [r0, r1], [c0, c1], tex, this.detail, 0.7, undefined, [fr0, fr1], [fc0, fc1]);
+    const mesh = gridBlockMesh(g, height, [r0, r1], [c0, c1], tex, this.detail, 0.7, undefined, [fr0, fr1], [fc0, fc1], MID_SKIRT_M);
     mesh.geometry.computeBoundingBox();
     b.mesh = mesh;
     b.base = Float32Array.from((mesh.geometry.attributes.position as THREE.BufferAttribute).array);
@@ -794,7 +815,7 @@ export class TileManager {
     const ground = await this.buildGround(t, t.coarse ? 4 : 2);
     if (!ground) return;
     t.ground = ground;
-    group.add(...ground);
+    if (ground.length) group.add(...ground);
     await nextFrame();
     if (!this.tiles.has(t.key)) return;
 
@@ -875,7 +896,10 @@ export class TileManager {
       const width = cls_width(this.index.edge(ei).kind);
       pieces.push(...roundaboutIsland(cx, cz, r, width, (a) => this.index.nearest(cx + Math.cos(a) * r, cz + Math.sin(a) * r, 12).y, photo.colorAt, this.detail));
     }
-    group.add(...mergeByKind(pieces));
+    // A tile with no road in it (out over the hills, as a flight goes) has nothing to merge, and
+    // add() with no argument logs "object not an instance of THREE.Object3D. undefined".
+    const merged = mergeByKind(pieces);
+    if (merged.length) group.add(...merged);
     await nextFrame();
     if (!this.tiles.has(t.key)) return;
 

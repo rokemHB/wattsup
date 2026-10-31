@@ -34,14 +34,25 @@ const MIN_PIXEL_RATIO = 0.6;
 /** Half the arc (m) over which the road's curvature is measured for the lean. */
 const CURVE_HALF_M = 3;
 
-/** The baked sky as a box drawn at the far plane after the opaque scene (three's background cube shader, depth-tested). */
-function skyBox(texture: THREE.Texture): THREE.Mesh {
+/**
+ * The baked sky as a box drawn at the far plane after the opaque scene (three's background
+ * cube shader, depth-tested). Below the horizon it turns to the fog's colour: there the box
+ * only shows past the far plane, beyond the fogged sea and land, and the scattering sky's
+ * own grey under the horizon made a flat band there, wide when seen from the plane.
+ */
+function skyBox(texture: THREE.Texture, fog: THREE.Color): THREE.Mesh {
   const lib = THREE.ShaderLib.backgroundCube;
+  const uniforms = THREE.UniformsUtils.clone(lib.uniforms);
+  // In the output's colour space, as the fogged scene ends up (the mix comes after the colour space conversion).
+  uniforms.fogTone = { value: fog.clone().convertLinearToSRGB() };
   const material = new THREE.ShaderMaterial({
     name: "SkyBox",
-    uniforms: THREE.UniformsUtils.clone(lib.uniforms),
+    uniforms,
     vertexShader: lib.vertexShader,
-    fragmentShader: lib.fragmentShader,
+    fragmentShader: lib.fragmentShader
+      .replace("uniform float backgroundBlurriness;", "uniform vec3 fogTone;\nuniform float backgroundBlurriness;")
+      // After tone mapping and colour space, where three applies fog to everything else.
+      .replace("#include <colorspace_fragment>", "#include <colorspace_fragment>\n\tgl_FragColor.rgb = mix(gl_FragColor.rgb, fogTone, smoothstep(0.04, 0.0, normalize(vWorldDirection).y));"),
     side: THREE.BackSide,
     depthTest: true,
     depthFunc: THREE.LessEqualDepth,
@@ -150,7 +161,8 @@ export class World {
     // The sky is drawn last, not first (three draws scene.background before everything):
     // a box at the far plane with a depth test, so it shades only the pixels nothing else
     // covered instead of the whole screen.
-    this.scene.add(skyBox(skyTarget.texture));
+    const fog = new THREE.Fog("#bccfe4", 900, 10000);
+    this.scene.add(skyBox(skyTarget.texture, fog.color));
     // The blurred sky lights only the few shiny things (chrome, water): as a
     // scene-wide environment map it cost a fifth of every frame on terrain
     // that a hemisphere light lights just as well.
@@ -158,7 +170,7 @@ export class World {
     this.envTex = pmrem.fromScene(envScene, 0.02).texture;
     envScene.clear();
     pmrem.dispose();
-    this.scene.fog = new THREE.Fog("#bccfe4", 900, 10000);
+    this.scene.fog = fog;
 
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 30000);
     this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 1.25));

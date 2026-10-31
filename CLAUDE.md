@@ -178,7 +178,10 @@ Single routes have tunnels and bridges (`tools/route_tunnels.py` writes `tunnels
 their road (`RouteIndex` skip), a tunnel gets the island's tube and a fine 2 m patch
 of ground at each portal (`portalPatch`, the 20 m grid holed under it and met exactly
 at its edge), a bridge a stone deck with parapets. `WATTSUP_DEV_JS` has the app's
-three.js as `wattsup.three`.
+three.js as `wattsup.three`. Steep faces get the rock detail again at 9 m and 2.5 m and
+limestone beds (`withDetail`): the 110 m photo patch alone was a smear on a road cut.
+Never `group.add(...list)` an empty list: three logs "object not an instance of
+THREE.Object3D. undefined" (a tile with no road in it did, on every flight).
 Houses (`buildings.ts`) are laid out bay by bay on a painted atlas per plaster colour
 (window, balcony, door, shopfront, garage, plain): a stone plinth from below the lowest
 corner to the street, a ground floor of doors and shops, a cornice, flat or tiled roofs,
@@ -211,6 +214,15 @@ speed alike; with no pedalling the plane comes to a stop where it is. The front 
 streams the island around it as on a free ride (`world: "mallorca"`), swaps the rider
 for `Plane` (`plane.ts`: propeller turning with the cadence, a bob when standing
 still), banks it 2.5 times as hard as a bike leans and follows it 22 m behind.
+
+Seen from the air the island showed seams a rider never sees, fixed 2026-10-31:
+terrain tiles and mid blocks hang skirts from their edges (`addSkirt`, deeper than the
+coarser layer is sunk under them), sunk land never goes below sea level (`resink`), and
+ground at sea level is only dropped for the sea where it is open water (`seaDrop`: a
+torrent bed at 0 m stays land). The sky box turns to the fog's colour below the horizon,
+mixed after the colour space conversion as three applies fog (`skyBox`); past the 30 km
+far plane the scattering sky's grey made a band. The HUD shows distance flown and
+altitude on a flight; the lap counter hides on free rides and flights.
 
 ## Route planner (map screen)
 
