@@ -22,6 +22,24 @@
     2,
     4
    ]
+  },
+  {
+   "from": 34540.0,
+   "to": 36340.0,
+   "floors": [
+    1,
+    3
+   ],
+   "style": "village"
+  },
+  {
+   "from": 42440.0,
+   "to": 43160.0,
+   "floors": [
+    1,
+    3
+   ],
+   "style": "village"
   }
  ],
  "origin": {
@@ -140,5 +158,7 @@
   "spacing": 10.0
  },
  "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0). Trees: Meta and World Resources Institute, High Resolution Canopy Height Maps (CC BY 4.0).",
- "trees": "/worlds/malaga-colmenar-trees.bin.gz"
+ "trees": "/worlds/malaga-colmenar-trees.bin.gz",
+ "tunnels": [[14542.5, 14617.5], [15272.5, 15287.5]],
+ "bridges": [[7237.5, 7297.5], [42357.5, 42402.5], [42907.5, 42917.5]]
 }

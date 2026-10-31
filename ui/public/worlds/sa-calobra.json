@@ -94,5 +94,7 @@
   "spacing": 5.0
  },
  "attribution": "Road data \u00a9 OpenStreetMap contributors (ODbL). Elevation: IGN Espa\u00f1a MDT05 (CC BY 4.0) and Copernicus DEM GLO-30 \u00a9 ESA. Aerial imagery: PNOA \u00a9 IGN Espa\u00f1a (CC BY 4.0). Trees: Meta and World Resources Institute, High Resolution Canopy Height Maps (CC BY 4.0).",
- "trees": "/worlds/sa-calobra-trees.bin.gz"
+ "trees": "/worlds/sa-calobra-trees.bin.gz",
+ "tunnels": [[2547.5, 2577.5]],
+ "bridges": [[97.5, 107.5], [1972.5, 1982.5], [3042.5, 3052.5], [9667.5, 9682.5]]
 }
