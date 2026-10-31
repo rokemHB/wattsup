@@ -197,6 +197,52 @@ def arc(xz, centre, r, spacing):
     return np.column_stack([centre[0] + r * np.cos(t), centre[1] + r * np.sin(t)])
 
 
+def grade_limited(y, step):
+    """`y` with no rise or fall of more than `step` a point, staying centred on it; its two
+    ends stay where they are.
+
+    Clipped steps used to be summed from the start: where the ground fell faster than the
+    cap (the cliff below the Mirador on the Formentor road), and wherever the 5 m model's
+    samples on a cliff road jumped more than it, the deficit was carried on along the edge
+    and the road floated up to 80 m above the ground for 10 km. Now: the mean of the lowest
+    profile within the cap that stays above `y` and the highest that stays below it (each
+    within the cap, so their mean is too, and it runs through the middle of the ground's
+    bumps), then the ends set back and the steps next to them evened out."""
+    y = np.array(y, dtype=float)
+    ends = (y[0], y[-1])
+    up = y.copy()
+    lo = y.copy()
+    for i in range(1, len(y)):
+        up[i] = min(up[i], up[i - 1] + step)
+        lo[i] = max(lo[i], lo[i - 1] - step)
+    for i in range(len(y) - 2, -1, -1):
+        up[i] = min(up[i], up[i + 1] + step)
+        lo[i] = max(lo[i], lo[i + 1] - step)
+    # up is the highest profile within the cap below y, lo the lowest above it.
+    y = (up + lo) / 2
+    y[0], y[-1] = ends
+
+    def settle(seg, fix_first, fix_last):
+        # Relaxation near a pinned end: each too-steep step shares out its excess, the pin holds.
+        a, b = seg[0], seg[-1]
+        for _ in range(20000):
+            d = np.diff(seg)
+            excess = np.sign(d) * np.maximum(np.abs(d) - step, 0.0)
+            if np.abs(excess).max() < 1e-3:
+                break
+            seg[:-1] += excess * 0.5
+            seg[1:] -= excess * 0.5
+            if fix_first:
+                seg[0] = a
+            if fix_last:
+                seg[-1] = b
+        return seg
+
+    k = min(300, len(y))
+    y[:k] = settle(y[:k].copy(), True, False)
+    y[-k:] = settle(y[-k:].copy(), False, True)
+    return y
+
 def resample(xz, spacing):
     """Points every `spacing` metres along the splined polyline, keeping the end."""
     xz = spline(xz)
@@ -494,9 +540,11 @@ def main():
         if tunnel or ring is not None or len(y) < 3:
             y = np.linspace(ya, yb, len(y))
         else:
-            step = np.clip(np.diff(y), -MAX_GRADE * SPACING, MAX_GRADE * SPACING)
-            y = np.concatenate([[y[0]], y[0] + np.cumsum(step)])
-            y += np.linspace(ya - y[0], yb - y[-1], len(y))
+            # The ends pinned to the junctions first, then the grade evened out between them: a
+            # correction spread linearly over the edge afterwards lifted 10 km of the Formentor
+            # road 30 m into the air for a fix needed at one end.
+            y[0], y[-1] = ya, yb
+            y = grade_limited(y, MAX_GRADE * SPACING)
         start = len(points)
         for (x, z), h in zip(pts, y):
             points.append((float(x), float(h), float(z)))
