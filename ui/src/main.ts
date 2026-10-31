@@ -876,8 +876,9 @@ async function start() {
     if (startup.island_at?.includes(";")) mapScreen.planThrough(startup.island_at.split(";").map((p) => p.split(",").map(Number) as [number, number]));
   }
   if (startup.dev_js) {
-    // Test driving: WATTSUP_DEV_JS runs with `wattsup.map` (the map screen), `wattsup.api` and `wattsup.screen()` in scope.
-    Object.assign(window, { wattsup: { map: mapScreen, api, screen: () => screen, world: () => world } });
+    // Test driving: WATTSUP_DEV_JS runs with `wattsup.map` (the map screen), `wattsup.api`, `wattsup.screen()`,
+    // `wattsup.world()` and `wattsup.three` (the app's own three.js, for probes such as tools/dev/clipcheck.js) in scope.
+    Object.assign(window, { wattsup: { map: mapScreen, api, screen: () => screen, world: () => world, three: await import("three") } });
     new Function(startup.dev_js)();
   }
   if (startup.screen === "workout-ride") {
