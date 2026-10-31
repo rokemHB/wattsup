@@ -21,6 +21,9 @@ pub(crate) struct Ctx {
     pub kind: DeviceKind,
     pub events: EventSender,
     pub log_raw: bool,
+    /// Report connection state changes. Off for a device that rides along with another
+    /// (the second puck of a Click v2), whose short drop-outs are not the user's business.
+    pub report_status: bool,
 }
 
 impl Ctx {
@@ -28,6 +31,9 @@ impl Ctx {
         let _ = self.events.send(event);
     }
     pub fn status(&self, state: ConnectionState) {
+        if !self.report_status {
+            return;
+        }
         self.emit(DeviceEvent::Status {
             kind: self.kind,
             id: self.id.clone(),
@@ -69,6 +75,14 @@ pub(crate) trait Protocol: Send + 'static {
     /// Reconnect if nothing arrives for this long.
     fn watchdog(&self) -> Option<Duration> {
         None
+    }
+    /// After this long without a packet, [`Protocol::on_idle`] runs (again every such
+    /// stretch of silence), before the watchdog gives up on the link.
+    fn idle_after(&self) -> Option<Duration> {
+        None
+    }
+    async fn on_idle(&mut self, _p: &Peripheral, _ctx: &Ctx) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -133,10 +147,13 @@ async fn session<P: Protocol>(
     ctx.status(ConnectionState::Connected);
 
     let watchdog = proto.watchdog();
+    let idle_after = proto.idle_after();
     let mut last_packet = Instant::now();
+    let mut last_idle = Instant::now();
     let mut link_check = tokio::time::interval(LINK_CHECK);
     loop {
         let deadline = last_packet + watchdog.unwrap_or(Duration::from_secs(3600));
+        let idle_at = last_packet.max(last_idle) + idle_after.unwrap_or(Duration::from_secs(3600));
         tokio::select! {
             _ = shutdown.changed() => return Ok(None),
             n = notifications.next() => match n {
@@ -159,6 +176,12 @@ async fn session<P: Protocol>(
             _ = link_check.tick() => {
                 if !p.is_connected().await.unwrap_or(false) {
                     return Ok(Some("link lost".into()));
+                }
+            }
+            _ = tokio::time::sleep_until(idle_at), if idle_after.is_some() => {
+                last_idle = Instant::now();
+                if let Err(e) = proto.on_idle(p, ctx).await {
+                    ctx.log(format!("idle write failed: {e}"));
                 }
             }
             _ = tokio::time::sleep_until(deadline), if watchdog.is_some() => {

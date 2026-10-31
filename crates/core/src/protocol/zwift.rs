@@ -11,10 +11,17 @@
 //! 3. Every notification is `[message type][protobuf body]`. Button bits are
 //!    inverted: a cleared bit means "pressed".
 //!
-//! Click v2 caveat (from BikeControl's troubleshooting guide): unless the
-//! official Zwift app connected to it recently, it stops sending buttons
-//! about a minute after connecting, and must be reconnected. It then sends
-//! `FF 05 00 EA 05` or `FF 05 00 FA 05`, decoded here as [`ZwiftMessage::Stopped`].
+//! Click v2 caveat: its two pucks advertise and connect separately, and the left one,
+//! unless the official Zwift app unlocked it in the last ~24 h, stops sending buttons
+//! about a minute after connecting, announcing it with `FF 05 00 EA 05` or
+//! `FF 05 00 FA 05` (decoded here as [`ZwiftMessage::Stopped`]). The unlock is a
+//! challenge (`FF 03 00 ...` from the puck) answered through Zwift's servers
+//! (`FF 04 00 0A 15 ...`), different on every connection: nobody outside Zwift can
+//! compute it (BikeControl issue #68; Makinolo). What works without it (BikeControl
+//! 2.6-6.x, MaximumTrainer PR #307, tested by their users): the right puck needs no
+//! unlock, so both pucks are connected; the locked left puck is sent RESET (`18`) and
+//! reconnected (gone ~3 s a minute); and RideOn is written again after a few seconds
+//! of silence.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,8 +38,12 @@ pub const SYNC_TX_UUID: &str = "00000004-19ca-4651-86e5-fa29dcdd09d1";
 pub const MANUFACTURER_ID: u16 = 0x094A;
 
 pub const RIDE_ON: [u8; 6] = *b"RideOn";
-/// Extra start command BikeControl sends to a Click v2 after the handshake.
+/// Extra start command BikeControl sends to a Click v2 after the handshake (an empty
+/// unlock answer; the left puck only).
 pub const CLICK_V2_START: [u8; 3] = [0xFF, 0x04, 0x00];
+/// Command opcode RESET: the puck restarts (and drops the link for 2-3 s). Sent to a left
+/// Click v2 puck that has stopped, so it comes back and sends buttons for another minute.
+pub const RESET: [u8; 1] = [0x18];
 
 mod msg {
     pub const EMPTY: u8 = 0x15;
@@ -73,16 +84,43 @@ impl ZwiftDeviceType {
     pub fn is_click_v2(&self) -> bool {
         matches!(self, Self::ClickV2Left | Self::ClickV2Right)
     }
+
+    /// The other half of a two-part controller (Click v2, Play, Ride), whose puck advertises
+    /// and connects on its own.
+    pub fn sibling(&self) -> Option<Self> {
+        Some(match self {
+            Self::Click => return None,
+            Self::ClickV2Right => Self::ClickV2Left,
+            Self::ClickV2Left => Self::ClickV2Right,
+            Self::PlayLeft => Self::PlayRight,
+            Self::PlayRight => Self::PlayLeft,
+            Self::RideLeft => Self::RideRight,
+            Self::RideRight => Self::RideLeft,
+        })
+    }
+
+    /// The puck that locks after a minute without a Zwift unlock.
+    pub fn is_left(&self) -> bool {
+        matches!(self, Self::ClickV2Left | Self::PlayLeft | Self::RideLeft)
+    }
 }
 
 /// Writes that start a session, in order, for the given device type.
 pub fn handshake(device: Option<ZwiftDeviceType>) -> Vec<Vec<u8>> {
     let mut writes = vec![RIDE_ON.to_vec()];
-    if device.is_some_and(|d| d.is_click_v2()) {
+    if device.is_some_and(|d| d.is_click_v2() && d.is_left()) {
         writes.push(CLICK_V2_START.to_vec());
     }
     writes
 }
+
+/// Seconds without a packet before RideOn is written again (pucks send an idle frame
+/// every second or so; silence means the session lapsed).
+pub const RESEND_AFTER_S: f64 = 2.5;
+/// Seconds between those resends at most.
+pub const RESEND_EVERY_S: f64 = 3.0;
+/// Seconds without a packet before the puck is reconnected.
+pub const RECONNECT_AFTER_S: f64 = 20.0;
 
 /// Controller buttons, named after the Zwift Ride layout (Click v2 reuses it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -415,6 +453,23 @@ mod tests {
             handshake(Some(ZwiftDeviceType::ClickV2Left)),
             vec![from_hex("52 69 64 65 4f 6e"), from_hex("ff 04 00")]
         );
+        // The right puck needs no unlock: RideOn only.
+        assert_eq!(
+            handshake(Some(ZwiftDeviceType::ClickV2Right)),
+            vec![from_hex("52 69 64 65 4f 6e")]
+        );
+    }
+
+    #[test]
+    fn pucks_pair_up_left_and_right() {
+        assert_eq!(
+            ZwiftDeviceType::ClickV2Right.sibling(),
+            Some(ZwiftDeviceType::ClickV2Left)
+        );
+        assert_eq!(ZwiftDeviceType::RideLeft.sibling(), Some(ZwiftDeviceType::RideRight));
+        assert_eq!(ZwiftDeviceType::Click.sibling(), None);
+        assert!(ZwiftDeviceType::ClickV2Left.is_left() && !ZwiftDeviceType::ClickV2Right.is_left());
+        assert_eq!(RESET, [0x18]);
     }
 
     #[test]

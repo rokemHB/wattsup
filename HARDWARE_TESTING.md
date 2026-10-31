@@ -299,21 +299,27 @@ wattsup-cli ride --raw --hr $HR
 
 ## 5. Controller: Zwift Click v2
 
-### 5.1 The Click v2 caveat
+### 5.1 The Click v2 caveat, and what WattsUp does about it
 
-The Click v2 only talks freely to apps for a while after the official Zwift
-app connected to it. Unless Zwift connected to it recently, it stops sending
-button presses about a minute after WattsUp connects, and announces that with
-`FF 05 00 EA 05` or `FF 05 00 FA 05` on the async characteristic. (Found and
-documented by the BikeControl project in its troubleshooting guide; our
-decoder reports that packet as `Stopped`.)
+A Click v2 is two pucks, each its own Bluetooth device (manufacturer data starts
+`0x0A` right, `0x0B` left; Zwift company id 0x094A). The **left** puck, unless the
+official Zwift app unlocked it in the last ~24 h, stops sending buttons about a minute
+after connecting and says so with `FF 05 00 EA 05` / `FF 05 00 FA 05`. Zwift's unlock is
+a challenge from the puck (`FF 03 00 ...`) answered through Zwift's servers, new on every
+connection: no other app can compute it (BikeControl issue #68). The **right** puck
+needs no unlock (BikeControl 6.x, MaximumTrainer: tested by their users).
 
-WattsUp reconnects when it sees that packet. The log then says
-`Click v2 stopped sending buttons (connect it in the Zwift app once to unlock it)`
-and the controller goes `retry` → `ok`.
+So WattsUp, since 2026-10-31:
+- connects the other puck too when you connect one (it must be advertising: press a
+  button on both before connecting), and takes shifts from both;
+- writes RESET (`18`) to a left puck that locks and reconnects it: it is gone ~3 s,
+  then sends buttons for another minute (log: `Click v2 left puck locked: restarting it`);
+- writes RideOn again after 2.5 s without any packet (log: `quiet: RideOn again`) and
+  reconnects after 20 s.
 
-Workaround before a ride: open Zwift (on any device), let it connect to the
-Click once, close Zwift completely, then start WattsUp.
+To stop the minute-by-minute restarts of the left puck: open the Zwift app (not
+Companion; no subscription needed), connect a trainer and the Click, wait 30 s or
+more, quit Zwift completely, then start WattsUp. That lasts about a day.
 
 Keyboard shifting (↑ / ] harder, ↓ / [ easier in the app; `u` / `d` in the
 CLI) works regardless, so a misbehaving Click never blocks a ride.
@@ -340,6 +346,13 @@ wattsup-cli ride --raw --controller $CLICK
       a button every 20 s. Note when presses stop arriving and whether the
       `Stopped` reconnect kicks in. Send the raw log of this run, it tells
       us what your firmware does.
+- [ ] Without a Zwift unlock: both pucks connect (two `handshake sent` lines, one
+      `ClickV2Right`, one `ClickV2Left`); after about a minute the log shows
+      `left puck locked: restarting it`, presses on the **right** puck keep shifting
+      throughout, the left one again after ~3 s.
+- [ ] Ten minutes of riding: the right puck never stops (no `quiet: RideOn again`
+      followed by a reconnect). If it does, send the raw log: the right puck's own
+      keep-awake (BikeControl 6.5) is not public yet.
 - [ ] Repeat after connecting the Click in Zwift once. Presses should keep
       working for the whole 3 minutes.
 

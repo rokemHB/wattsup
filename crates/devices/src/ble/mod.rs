@@ -33,8 +33,8 @@ pub const PROVIDER: &str = "ble";
 pub struct BleConfig {
     /// Log every received packet as hex (for HARDWARE_TESTING.md and bug reports).
     pub log_raw: bool,
-    /// Reconnect a Zwift controller after this long without any packet.
-    /// Off by default: it is not known yet whether every model sends keep-alives.
+    /// Reconnect a Zwift controller after this long without any packet; by default
+    /// `zwift::RECONNECT_AFTER_S` (pucks send an idle frame about every second).
     pub controller_watchdog: Option<Duration>,
 }
 
@@ -202,11 +202,34 @@ impl DeviceProvider for BleProvider {
                 .and_then(|d| zp::ZwiftDeviceType::from_manufacturer_data(d)),
             _ => None,
         };
+        // The other puck of a two-part controller, if it is advertising: any Zwift device of the
+        // opposite side (one rider's pair in range is the usual case).
+        let mut sibling = None;
+        if let Some(want) = device_type.and_then(|d| d.sibling()) {
+            let adapter = self.adapter().await?;
+            for other in adapter.peripherals().await.map_err(ble_err)? {
+                if other.id() == p.id() {
+                    continue;
+                }
+                let Ok(Some(props)) = other.properties().await else {
+                    continue;
+                };
+                let side = props
+                    .manufacturer_data
+                    .get(&zp::MANUFACTURER_ID)
+                    .and_then(|d| zp::ZwiftDeviceType::from_manufacturer_data(d));
+                if side == Some(want) {
+                    sibling = Some((other, want));
+                    break;
+                }
+            }
+        }
         Ok(Arc::new(zwift::BleZwiftController::start(
             id.clone(),
             name,
             p,
             device_type,
+            sibling,
             events,
             self.config.clone(),
         )))

@@ -10,11 +10,14 @@ use super::runner::{require, write, Ctx, Flow, Protocol, TaskHandle};
 use super::{ble_err, BleConfig};
 use crate::{Controller, Device, DeviceError, DeviceEvent, DeviceId, DeviceKind, EventSender, Result};
 
-/// A Zwift Click, Click v2, Play or Ride controller.
+/// A Zwift Click, Click v2, Play or Ride controller. A two-part one (Click v2: a puck per
+/// hand, each its own BLE device) runs the other puck alongside when it is in range: the
+/// right Click v2 puck keeps sending buttons without a Zwift unlock, the left one does not.
 pub struct BleZwiftController {
     id: DeviceId,
     name: String,
     handle: TaskHandle<()>,
+    sibling: Option<TaskHandle<()>>,
 }
 
 impl BleZwiftController {
@@ -23,24 +26,37 @@ impl BleZwiftController {
         name: String,
         p: Peripheral,
         device_type: Option<ZwiftDeviceType>,
+        sibling: Option<(Peripheral, ZwiftDeviceType)>,
         events: EventSender,
         config: BleConfig,
     ) -> Self {
-        let ctx = Ctx {
-            id: id.clone(),
-            name: name.clone(),
-            kind: DeviceKind::Controller,
-            events,
-            log_raw: config.log_raw,
+        let spawn = |p: Peripheral, device_type: Option<ZwiftDeviceType>, report_status: bool, events: EventSender| {
+            let ctx = Ctx {
+                id: id.clone(),
+                name: name.clone(),
+                kind: DeviceKind::Controller,
+                events,
+                log_raw: config.log_raw,
+                report_status,
+            };
+            let proto = Zap {
+                device_type,
+                edges: ButtonEdges::default(),
+                watchdog: config
+                    .controller_watchdog
+                    .or(Some(Duration::from_secs_f64(zp::RECONNECT_AFTER_S))),
+                sync_rx: None,
+            };
+            TaskHandle::spawn(p, proto, ctx)
         };
-        let proto = Zap {
-            device_type,
-            edges: ButtonEdges::default(),
-            watchdog: config.controller_watchdog,
-            sync_rx: None,
-        };
-        let handle = TaskHandle::spawn(p, proto, ctx);
-        Self { id, name, handle }
+        let sibling = sibling.map(|(sp, st)| spawn(sp, Some(st), false, events.clone()));
+        let handle = spawn(p, device_type, true, events);
+        Self {
+            id,
+            name,
+            handle,
+            sibling,
+        }
     }
 }
 
@@ -56,6 +72,9 @@ impl Device for BleZwiftController {
         DeviceKind::Controller
     }
     async fn disconnect(&self) -> Result<()> {
+        if let Some(s) = &self.sibling {
+            s.stop().await;
+        }
         self.handle.stop().await;
         Ok(())
     }
@@ -68,6 +87,15 @@ struct Zap {
     edges: ButtonEdges,
     watchdog: Option<Duration>,
     sync_rx: Option<Characteristic>,
+}
+
+impl Zap {
+    async fn ride_on(&self, p: &Peripheral) -> Result<()> {
+        if let Some(rx) = &self.sync_rx {
+            write(p, rx, &zp::RIDE_ON, false).await?;
+        }
+        Ok(())
+    }
 }
 
 fn uuid(s: &str) -> Uuid {
@@ -94,10 +122,15 @@ impl Protocol for Zap {
         }
         ctx.log(format!("handshake sent ({:?})", self.device_type));
         self.sync_rx = Some(sync_rx);
+        // RideOn twice more over the next second: a puck just woken sometimes misses the first.
+        for wait in [400, 700] {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+            self.ride_on(p).await?;
+        }
         Ok(())
     }
 
-    async fn on_notification(&mut self, _p: &Peripheral, n: ValueNotification, ctx: &Ctx) -> Result<Flow> {
+    async fn on_notification(&mut self, p: &Peripheral, n: ValueNotification, ctx: &Ctx) -> Result<Flow> {
         ctx.raw(
             if n.uuid == uuid(zp::ASYNC_UUID) {
                 "async"
@@ -121,9 +154,14 @@ impl Protocol for Zap {
             }),
             ZwiftMessage::Handshake { variant, .. } => ctx.log(format!("handshake answered ({variant:?})")),
             ZwiftMessage::Stopped => {
+                // Locked (no Zwift unlock in the last day): restart the puck, which comes back
+                // and sends buttons for another minute, and reconnect to it.
+                if let Some(rx) = &self.sync_rx {
+                    let _ = write(p, rx, &zp::RESET, false).await;
+                }
                 return Ok(Flow::Reconnect(
-                    "Click v2 stopped sending buttons (connect it in the Zwift app once to unlock it)".into(),
-                ))
+                    "Click v2 left puck locked: restarting it (unlock it in the Zwift app to stop this)".into(),
+                ));
             }
             ZwiftMessage::Empty | ZwiftMessage::Other { .. } => {}
         }
@@ -132,5 +170,16 @@ impl Protocol for Zap {
 
     fn watchdog(&self) -> Option<Duration> {
         self.watchdog
+    }
+
+    fn idle_after(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(zp::RESEND_AFTER_S))
+    }
+
+    /// Quiet for a few seconds (pucks send an idle frame about every second): the session
+    /// may have lapsed, so RideOn again; the runner waits as long again before the next.
+    async fn on_idle(&mut self, p: &Peripheral, ctx: &Ctx) -> Result<()> {
+        ctx.log("quiet: RideOn again");
+        self.ride_on(p).await
     }
 }

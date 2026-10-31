@@ -378,5 +378,9 @@ at 36.7337,-4.4158 with only A-7000/A-7204 ways as input.
 ## Hardware (unverified assumptions, see HARDWARE_TESTING.md)
 
 Wahoo KICKR CORE 2 with Zwift Cog, Zwift Click v2 (keyboard shifting stays as
-fallback), a Bluetooth HR strap. Virtual gearing uses FTMS SIM mode with a
+fallback), a Bluetooth HR strap. The Click v2's left puck locks after a minute without
+a Zwift unlock (a server-backed challenge nobody else can answer): WattsUp connects
+both pucks (the right needs no unlock), RESETs (`18`) and reconnects a locked left
+puck, and writes RideOn again after 2.5 s of silence (`ble/zwift.rs`,
+`protocol/zwift.rs`, HARDWARE_TESTING.md 5.1). Virtual gearing uses FTMS SIM mode with a
 computed grade; ERG mode for workouts.

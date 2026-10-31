@@ -25,6 +25,7 @@ impl BleTrainer {
             kind: DeviceKind::Trainer,
             events,
             log_raw: config.log_raw,
+            report_status: true,
         };
         let handle = TaskHandle::spawn(p, Ftms::default(), ctx);
         Self { id, name, handle }
