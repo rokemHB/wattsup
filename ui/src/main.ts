@@ -127,6 +127,8 @@ function show(next: Screen) {
   if (next === "rider") fillRiderScreen();
   world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? (startupCamera ?? remembered(CAMERA_KEY) ?? "chase") : "orbit");
   world?.setIdle(next !== "ride");
+  // A menu opened from the keyboard (Esc) can be worked from it straight away.
+  if (MENU_SCREENS.has(next)) requestAnimationFrame(() => menuTargets()[0]?.focus({ preventScroll: true }));
 }
 
 function back() {
@@ -198,7 +200,7 @@ function fillWorkoutList() {
   const card = (w: Workout, onEdit: () => void, saved: boolean) => {
     const c = el(
       "div",
-      { className: "route-card" },
+      { className: "route-card", tabIndex: 0 },
       el("b", {}, w.name),
       el("button", { className: "primary", textContent: saved ? "Edit" : "Open" }),
       el("span", { className: "meta" }, describe(w)),
@@ -527,7 +529,7 @@ function turnKey(dir: -1 | 1) {
 function fillRouteList() {
   const island = el(
     "div",
-    { className: "route-card" },
+    { className: "route-card", tabIndex: 0 },
     el("b", {}, "Mallorca · Serra de Tramuntana"),
     el("button", { className: "primary", textContent: "Map" }),
     el("span", { className: "meta" }, "plan a route on the map or ride free · every road of the range, the Ma-10 included"),
@@ -536,7 +538,7 @@ function fillRouteList() {
   const plans = loadPlans()
     .filter((p) => p.world === NETWORK_WORLD)
     .map((p) => {
-      const card = el("div", { className: "route-card" }, el("b", {}, p.name), el("button", { className: "primary", textContent: "Map" }), el("span", { className: "meta" }, `${(p.length_m / 1000).toFixed(1)} km · planned on the map`));
+      const card = el("div", { className: "route-card", tabIndex: 0 }, el("b", {}, p.name), el("button", { className: "primary", textContent: "Map" }), el("span", { className: "meta" }, `${(p.length_m / 1000).toFixed(1)} km · planned on the map`));
       card.onclick = () => openMap(p).catch(showError);
       return card;
     });
@@ -547,7 +549,7 @@ function fillRouteList() {
       const km = (r.length_m / 1000).toFixed(1);
       const card = el(
         "div",
-        { className: `route-card${r.id === selectedRoute ? " selected" : ""}` },
+        { className: `route-card${r.id === selectedRoute ? " selected" : ""}`, tabIndex: 0 },
         el("b", {}, r.name),
         el("button", { className: "primary", textContent: "Ride" }),
         el("span", { className: "meta" }, r.flight ? `${km} km · electric plane over the Serra de Tramuntana · your watts fly it` : `${km} km · ${Math.round(r.climb_m)} m climbing · ${r.closed ? "loop" : "climb"}${r.world ? " · real terrain" : ""}`),
@@ -785,6 +787,7 @@ function wire() {
       show("menu");
       return;
     }
+    if (menuKey(e)) return;
     if (e.repeat) return;
     if (screen === "ride" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       e.preventDefault();
@@ -809,6 +812,39 @@ function wire() {
     else if ((e.key === "c" || e.key === "C") && world && screen === "ride") remember(CAMERA_KEY, world.cycleCamera());
     else if (e.key === "a" || e.key === "A") api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
   });
+}
+
+/** Screens worked with the keyboard: arrow keys move between their buttons and cards. */
+const MENU_SCREENS = new Set(["menu", "pause", "finish"]);
+
+/** What the arrow keys can reach on the screen showing: its visible buttons and route cards, in order. */
+function menuTargets(): HTMLElement[] {
+  const section = $(`screen-${screen}`);
+  return [...section.querySelectorAll<HTMLElement>("button, .route-card")].filter(
+    (el) => el.offsetParent !== null && !(el as HTMLButtonElement).disabled && !(el.tagName === "BUTTON" && el.closest(".route-card")),
+  );
+}
+
+/** Up and down (and left and right) through a menu, Enter on a card; true when the key was used. */
+function menuKey(e: KeyboardEvent): boolean {
+  if (!MENU_SCREENS.has(screen)) return false;
+  const targets = menuTargets();
+  if (!targets.length) return false;
+  const at = targets.indexOf(document.activeElement as HTMLElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
+    const next = targets[at < 0 ? (step > 0 ? 0 : targets.length - 1) : (at + step + targets.length) % targets.length];
+    next.focus();
+    next.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+  if (e.key === "Enter" && at >= 0 && targets[at].classList.contains("route-card")) {
+    e.preventDefault();
+    targets[at].click();
+    return true;
+  }
+  return false;
 }
 
 function toggleDebug() {
