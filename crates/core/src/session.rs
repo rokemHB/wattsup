@@ -14,7 +14,7 @@ use crate::gearing::{implied_ratio, GearSet, Gearbox, ShiftDirection};
 use crate::physics::{kmh_to_mps, mps_to_kmh, step_speed, RiderParams};
 use crate::protocol::ftms::ControlRequest;
 use crate::resistance::{virtual_gear_power, virtual_gear_sim, SimTarget, TrainerProfile};
-use crate::route::Route;
+use crate::route::{Route, FLIGHT_SPEED_FACTOR};
 
 /// How the trainer's resistance is controlled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,14 +420,24 @@ impl RideSession {
         }
     }
 
+    /// How much farther than the bike physics says the rider goes: [`FLIGHT_SPEED_FACTOR`] on a flight.
+    fn speed_factor(&self) -> f64 {
+        if self.config.route.as_ref().is_some_and(|r| r.flight) {
+            FLIGHT_SPEED_FACTOR
+        } else {
+            1.0
+        }
+    }
+
     /// Adds this tick to the ride totals and takes the one-second sample when due.
     fn account(&mut self, dt: f64, power: f64) {
         let now = self.clock_s;
         let timeout = self.config.data_timeout_s;
         let elapsed = now - self.ride_start_s - self.held_s;
+        let k = self.speed_factor();
         let t = &mut self.totals;
         let s = &mut self.stats;
-        s.distance_m += self.virtual_speed_mps * dt;
+        s.distance_m += self.virtual_speed_mps * k * dt;
         if self.virtual_speed_mps > 0.5 {
             s.moving_s += dt;
         }
@@ -817,7 +827,7 @@ impl RideSession {
                 self.road_grade_pct,
                 dt,
             );
-            self.distance_m += self.virtual_speed_mps * dt;
+            self.distance_m += self.virtual_speed_mps * self.speed_factor() * dt;
         } else {
             // A foot on the ground: a standing bike waits for the first pedal stroke
             // instead of rolling off down the hill by itself.
@@ -936,7 +946,7 @@ impl RideSession {
             cadence_rpm: self.cadence.fresh(now, t),
             trainer_speed_kmh: self.trainer_speed.fresh(now, t),
             heart_rate_bpm: self.heart_rate.fresh(now, t),
-            virtual_speed_kmh: mps_to_kmh(self.virtual_speed_mps),
+            virtual_speed_kmh: mps_to_kmh(self.virtual_speed_mps * self.speed_factor()),
             distance_m: self.distance_m,
             route_position_m,
             lap,
@@ -1087,6 +1097,40 @@ mod tests {
             hill.tick(0.25);
         }
         assert!(hill.snapshot().virtual_speed_kmh < flat.snapshot().virtual_speed_kmh * 0.6);
+    }
+
+    #[test]
+    fn a_flight_goes_three_times_as_far_and_stops_in_place() {
+        let mut bike = RideSession::default();
+        let mut plane = RideSession::default();
+        bike.set_route(Some(Route::flat()));
+        plane.set_route(Some(Route::builtin("tramuntana-flight").unwrap()));
+        for _ in 0..(60 * 4) {
+            riding(&mut bike, 200.0, 90.0);
+            riding(&mut plane, 200.0, 90.0);
+            bike.tick(0.25);
+            plane.tick(0.25);
+        }
+        let (b, p) = (bike.snapshot(), plane.snapshot());
+        assert!(
+            (p.distance_m / b.distance_m - FLIGHT_SPEED_FACTOR).abs() < 0.05,
+            "{} vs {}",
+            p.distance_m,
+            b.distance_m
+        );
+        assert!((p.virtual_speed_kmh / b.virtual_speed_kmh - FLIGHT_SPEED_FACTOR).abs() < 0.05);
+        assert_eq!(p.road_grade_pct, 0.0, "flown level, whatever the altitude does");
+        // Pedalling stops: the plane comes to a halt and stays there.
+        for _ in 0..(120 * 4) {
+            riding(&mut plane, 0.0, 0.0);
+            plane.tick(0.25);
+        }
+        let stopped = plane.snapshot().distance_m;
+        for _ in 0..(10 * 4) {
+            riding(&mut plane, 0.0, 0.0);
+            plane.tick(0.25);
+        }
+        assert!(plane.snapshot().distance_m - stopped < 0.5);
     }
 
     #[test]

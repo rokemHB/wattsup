@@ -812,6 +812,7 @@ impl Route {
                 points,
                 closed: false,
                 world,
+                flight: false,
             };
         }
         points.push(RoutePoint {
@@ -842,6 +843,7 @@ impl Route {
             points,
             closed: false,
             world,
+            flight: false,
         }
     }
 }

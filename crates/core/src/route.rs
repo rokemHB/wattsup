@@ -29,10 +29,25 @@ pub struct Route {
     /// or `None` for a procedural world.
     #[serde(default)]
     pub world: Option<String>,
+    /// Flown, not ridden (the electric plane over the Tramuntana): the points' heights are the
+    /// plane's altitude, the engine flies it level ([`Route::grade_at`] is 0) and
+    /// [`FLIGHT_SPEED_FACTOR`] times as fast as a bike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flight: bool,
 }
 
+/// How much faster than a bike the plane goes for the same watts.
+pub const FLIGHT_SPEED_FACTOR: f64 = 3.0;
+
 /// Ids accepted by [`Route::builtin`].
-pub const BUILTIN_ROUTES: [&str; 4] = ["sa-calobra", "malaga-colmenar", "lakeside", "flat"];
+pub const BUILTIN_ROUTES: [&str; 6] = [
+    "sa-calobra",
+    "malaga-colmenar",
+    "lakeside",
+    "flat",
+    "tramuntana-flight",
+    "tramuntana-flight-back",
+];
 
 /// What a route chooser needs to know, without the points.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -44,6 +59,9 @@ pub struct RouteInfo {
     pub climb_m: f64,
     pub closed: bool,
     pub world: Option<String>,
+    /// Flown by the electric plane, not ridden.
+    #[serde(default)]
+    pub flight: bool,
 }
 
 /// A hand-placed control point: ground position and elevation, in metres.
@@ -121,6 +139,7 @@ impl Route {
             points,
             closed,
             world: None,
+            flight: false,
         }
     }
 
@@ -137,6 +156,7 @@ impl Route {
             climb_m: self.climb_m(),
             closed: self.closed,
             world: self.world.clone(),
+            flight: self.flight,
         }
     }
 
@@ -158,6 +178,13 @@ impl Route {
             }
             "malaga-colmenar" => Some(
                 serde_json::from_str(include_str!("../routes/malaga-colmenar.json")).expect("valid built-in route"),
+            ),
+            "tramuntana-flight" => Some(
+                serde_json::from_str(include_str!("../routes/tramuntana-flight.json")).expect("valid built-in route"),
+            ),
+            "tramuntana-flight-back" => Some(
+                serde_json::from_str(include_str!("../routes/tramuntana-flight-back.json"))
+                    .expect("valid built-in route"),
             ),
             _ => None,
         }
@@ -204,7 +231,7 @@ impl Route {
 
     /// Road grade in percent at a distance, averaged over a short window.
     pub fn grade_at(&self, distance_m: f64) -> f64 {
-        if self.points.len() < 2 {
+        if self.points.len() < 2 || self.flight {
             return 0.0;
         }
         let len = self.length_m();
@@ -359,7 +386,7 @@ mod tests {
             assert!(Route::builtin(id).is_some(), "{id}");
         }
         let list = Route::builtin_list();
-        assert_eq!(list.len(), 4);
+        assert_eq!(list.len(), 6);
         assert!(list[3].climb_m < 1.0 && list[3].closed, "{:?}", list[3]);
         assert_eq!(list[0].id, "sa-calobra");
         assert!(
@@ -369,6 +396,27 @@ mod tests {
         );
         assert!(!list[1].closed && list[1].id == "malaga-colmenar");
         assert!(list[2].closed);
+        assert!(list[4].flight && list[5].flight && !list[0].flight);
+    }
+
+    #[test]
+    fn flights_are_level_and_go_both_ways() {
+        let there = Route::builtin("tramuntana-flight").unwrap();
+        let back = Route::builtin("tramuntana-flight-back").unwrap();
+        assert!(there.flight && there.world.as_deref() == Some("mallorca"));
+        assert!((there.length_m() - back.length_m()).abs() < 1.0);
+        let (a, b) = (there.points.first().unwrap(), back.points.last().unwrap());
+        assert!(
+            (a.x - b.x).abs() < 0.1 && (a.z - b.z).abs() < 0.1,
+            "the way back ends where the way there starts"
+        );
+        // Climbing 1 km of altitude on the way, yet flown level.
+        assert!(there.climb_m() > 1000.0);
+        let mut d = 0.0;
+        while d < there.length_m() {
+            assert_eq!(there.grade_at(d), 0.0);
+            d += 500.0;
+        }
     }
 
     #[test]
