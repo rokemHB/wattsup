@@ -44,8 +44,13 @@ export interface RoadIndex {
 export class RouteIndex implements RoadIndex {
   private cells = new Map<string, number[]>();
   private cell = 60;
-  constructor(private pts: Route["points"]) {
+  /** `skip(i)` leaves points out of every lookup (a tunnel's road: the ground above it is not shaped to it). */
+  constructor(
+    private pts: Route["points"],
+    skip?: (i: number) => boolean,
+  ) {
     pts.forEach((p, i) => {
+      if (skip?.(i)) return;
       const key = this.key(p.x, p.z);
       const list = this.cells.get(key);
       if (list) list.push(i);
@@ -79,6 +84,24 @@ export class RouteIndex implements RoadIndex {
     }
     return { d: best, y, i: bi };
   }
+  /** The lowest road height within `radius` of (x, z), or Infinity where there is no road. */
+  lowest(x: number, z: number, radius: number): number {
+    const r = Math.ceil(radius / this.cell);
+    const cx = Math.floor(x / this.cell);
+    const cz = Math.floor(z / this.cell);
+    let low = Infinity;
+    for (let i = -r; i <= r; i++) {
+      for (let k = -r; k <= r; k++) {
+        const list = this.cells.get(`${cx + i},${cz + k}`);
+        if (!list) continue;
+        for (const idx of list) {
+          const p = this.pts[idx];
+          if (p.y < low && Math.hypot(p.x - x, p.z - z) < radius) low = p.y;
+        }
+      }
+    }
+    return low;
+  }
 }
 
 export const smoothstep = (a: number, b: number, t: number) => {
@@ -105,9 +128,33 @@ export function buildWorld(route: Route, world?: WorldData): WorldStatics {
 function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   const sampler = new RouteSampler(route);
   const pts = route.points;
-  const index = new RouteIndex(pts);
-  const group = new THREE.Group();
   const { near, far, band } = world;
+  // Tunnels: their road is left out of the index the ground is shaped by, so the hill above
+  // stays whole (a fine patch of ground at each portal cuts the slope open to it, see
+  // portalPatch). `allIndex` still knows them (the camera stays in the tube).
+  const tunnels = world.tunnels ?? [];
+  // Bridges likewise: the ground under one is left to the road below it or to itself.
+  const bridges = world.bridges ?? [];
+  const inTunnel = (d: number) => tunnels.some(([a, b]) => d >= a && d <= b);
+  const onBridge = (d: number) => bridges.some(([a, b]) => d >= a && d <= b);
+  const index = new RouteIndex(pts, (i) => inTunnel(pts[i].distance_m) || onBridge(pts[i].distance_m));
+  const allIndex = tunnels.length || bridges.length ? new RouteIndex(pts) : index;
+  // The route in runs, open, in a tunnel or on a bridge, each with the point it starts at.
+  type RunKind = "open" | "tunnel" | "bridge";
+  const runs: { from: number; pts: Route["points"]; kind: RunKind }[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const d = pts[i].distance_m;
+    const k: RunKind = inTunnel(d) ? "tunnel" : onBridge(d) ? "bridge" : "open";
+    const last = runs[runs.length - 1];
+    if (last && last.kind === k) last.pts.push(pts[i]);
+    else {
+      // Runs share their boundary point, so road and strip meet.
+      if (last) last.pts.push(pts[i]);
+      runs.push({ from: i, pts: [pts[i]], kind: k });
+    }
+  }
+  const open = runs.filter((r) => r.kind === "open" && r.pts.length >= 2);
+  const group = new THREE.Group();
 
   // Where the elevation model says sea, drop the ground a few metres so the
   // sea surface draws above it instead of fighting with the photo's water.
@@ -139,15 +186,62 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     // Deeper on steep ground: a 10 m grid and the fine strip disagree by metres there.
     const depth = 1.2 + 3.5 * Math.min(1.5, gridSlope(near, x, z));
     const lowered = h - depth * (1 - smoothstep(CORRIDOR_REACH - 15, CORRIDOR_REACH, n.d));
-    // A vertex this close has triangles that span the road: kept below it. In a deep cut
-    // on Málaga's 20 m grid the vertices either side stood 20 m up the cut slope and the
-    // triangle between them roofed the road over.
-    return n.d < 1.5 * near.spacing ? Math.min(lowered, n.y - 1.5) : lowered;
+    // A vertex this close has triangles that span the road: kept below it, and below the
+    // lowest road its triangles reach. In a deep cut on Málaga's 20 m grid the vertices
+    // either side stood 20 m up the cut slope and the triangle between them roofed the road
+    // over; between the legs of a switchback a vertex below the upper leg still roofed the
+    // lower one.
+    return Math.min(lowered, index.lowest(x, z, 1.5 * near.spacing + REAL_ROAD_WIDTH / 2) - 1.5);
   };
   const land: Land = {
     height: heightAt,
     water: (x, z) => raw(x, z) < SEA_LEVEL + 1.5,
     slope: (x, z) => gridSlope(band && gridSample(band, x, z) !== null ? band : near, x, z),
+  };
+
+  // Portal patches: squares of fine ground where a tunnel opens, centred on each portal
+  // (one for both ends of a short tunnel). The near grid leaves a hole under each.
+  const patches: { x: number; z: number; half: number }[] = [];
+  for (const [a, b] of tunnels) {
+    const at = (d: number) => sampler.pose(d);
+    if (b - a < 40) {
+      const p = at((a + b) / 2);
+      patches.push({ x: p.x, z: p.z, half: PATCH_HALF_M + (b - a) / 2 });
+    } else {
+      for (const d of [a, b]) {
+        const p = at(d);
+        patches.push({ x: p.x, z: p.z, half: PATCH_HALF_M });
+      }
+    }
+  }
+  // Grid vertices this far inside a patch are left out; the triangles around them go too,
+  // one grid cell further, which stays inside the patch.
+  const holed = (x: number, z: number) => patches.some((q) => Math.max(Math.abs(x - q.x), Math.abs(z - q.z)) < q.half - near.spacing * 1.05);
+  // The near grid's own surface (its vertices and its triangles), for the patch to meet at its edge without a crack.
+  const nearSurface = (x: number, z: number) => {
+    const sz = near.spacingZ ?? near.spacing;
+    const fx = (x - near.x0) / near.spacing;
+    const fz = (z - near.z0) / sz;
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    const u = fx - ix;
+    const v = fz - iz;
+    const h = (cx: number, cz: number) => tucked(near.x0 + cx * near.spacing, near.z0 + cz * sz);
+    // PlaneGeometry's split: (ix,iz)-(ix,iz+1)-(ix+1,iz) below the diagonal, (ix,iz+1)-(ix+1,iz+1)-(ix+1,iz) above.
+    if (u + v <= 1) return h(ix, iz) + (h(ix + 1, iz) - h(ix, iz)) * u + (h(ix, iz + 1) - h(ix, iz)) * v;
+    return h(ix + 1, iz + 1) + (h(ix, iz + 1) - h(ix + 1, iz + 1)) * (1 - u) + (h(ix + 1, iz) - h(ix + 1, iz + 1)) * (1 - v);
+  };
+  // Inside a patch: over the tube the hill stays a metre above its roof, elsewhere the
+  // ground is the corridor's; toward the edge it eases into the near grid's surface.
+  const patchHeight = (q: { x: number; z: number; half: number }, x: number, z: number) => {
+    const n = allIndex.nearest(x, z, 30);
+    // The corridor's height is the nearest road's; where a road runs under another (an
+    // underpass) the lower one must still have its bed, so no open road within its shoulder
+    // has ground above it.
+    let fine = Math.min(heightAt(x, z), index.lowest(x, z, SHOULDER) - 0.35);
+    if (n.i >= 0 && n.d < TUNNEL_HALF + 2 && inTunnel(pts[n.i].distance_m)) fine = Math.max(fine, n.y + TUNNEL_TOP_M + 1);
+    const edge = q.half - Math.max(Math.abs(x - q.x), Math.abs(z - q.z));
+    return lerp(nearSurface(x, z), fine, smoothstep(0, PATCH_BLEND_M, edge));
   };
 
   const grass = grassTexture();
@@ -166,8 +260,11 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     : { grain: detailTexture(), rock: rockDetailTexture(), scrub: scrubDetailTexture(), normal: rockNormalTexture(), rockScale: 3.2, scrubScale: 2.6, rockMean: [0.5, 0.5, 0.5], scrubMean: [0.5, 0.5, 0.5] };
   let photo: ((x: number, z: number) => [number, number, number] | null) | null = null;
   const inNear = (x: number, z: number) => gridSample(near, x, z) !== null;
-  // Inside the near grid the far mesh only has to stay hidden; on cliffs the two differ by tens of metres.
-  const farHeight = (x: number, z: number) => (inNear(x, z) ? raw(x, z) - 60 : raw(x, z));
+  // Inside the near grid the far mesh only has to stay hidden; on cliffs the two differ by tens
+  // of metres. Its 150 m triangles also span gorges: in Sa Calobra's one at km 7.8 a triangle
+  // from rim to rim stood over the road even 60 m down, so it keeps below the lowest road its
+  // triangles reach too.
+  const farHeight = (x: number, z: number) => (inNear(x, z) ? Math.min(raw(x, z) - 60, allIndex.lowest(x, z, 1.5 * far.spacing) - 10) : raw(x, z));
   if (near.ortho) {
     // Aerial imagery: one textured mesh per block of the near grid, photo on the far grid.
     const { rowEdges, colEdges, images } = near.ortho;
@@ -188,12 +285,13 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
         const g = k === 1 ? near : halves;
         const rr: [number, number] = [Math.round(rowEdges[br] / k), Math.min(g.rows - 1, Math.round(rowEdges[br + 1] / k))];
         const cc: [number, number] = [Math.round(colEdges[bc] / k), Math.min(g.cols - 1, Math.round(colEdges[bc + 1] / k))];
-        group.add(gridBlockMesh(g, tucked, rr, cc, tex, detail));
+        group.add(gridBlockMesh(g, tucked, rr, cc, tex, detail, 1, patches.length ? holed : undefined));
       }
     }
     const sampler = new OrthoSampler(near, near.ortho);
     photo = (x, z) => sampler.colorAt(x, z);
-    group.add(corridorMesh(pts, index, heightAt, near, detail.grain, photo, detail));
+    for (const r of open) group.add(corridorMesh(r.pts, index, heightAt, near, detail.grain, photo, detail, -1, r.from));
+    for (const q of patches) group.add(portalPatch(q, (x, z) => patchHeight(q, x, z), photo, detail));
     if (far.ortho) {
       group.add(gridBlockMesh(far, farHeight, [0, far.rows - 1], [0, far.cols - 1], imageTexture(far.ortho.images[0][0]), detail, 0));
     } else {
@@ -201,14 +299,38 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
     }
   } else {
     group.add(gridMesh(near, tucked, grass, 18));
-    group.add(corridorMesh(pts, index, heightAt, near, grass, null, null));
+    for (const r of open) group.add(corridorMesh(r.pts, index, heightAt, near, grass, null, null, -1, r.from));
     group.add(gridMesh(far, farHeight, rockTex, 520));
   }
 
   const sea = seaMesh(FAR_SIZE * 2, (near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
   group.add(sea.mesh);
-  group.add(...roadMeshes(pts, route.closed, REAL_ROAD_WIDTH, true));
-  group.add(parapets(pts, heightAt, REAL_ROAD_WIDTH, detail.rock));
+  if (!tunnels.length && !bridges.length) {
+    group.add(...roadMeshes(pts, route.closed, REAL_ROAD_WIDTH, true));
+    group.add(parapets(pts, heightAt, REAL_ROAD_WIDTH, detail.rock));
+  } else {
+    for (const r of runs) {
+      if (r.pts.length < 2) continue;
+      const road = roadMeshes(r.pts, false, REAL_ROAD_WIDTH, true);
+      if (r.kind === "bridge") {
+        group.add(bridgeDeck(r.pts, REAL_ROAD_WIDTH, detail.rock));
+      } else if (r.kind === "tunnel") {
+        // Out of the sun, lit by the lamps' pools only, as on the island.
+        for (const m of road) {
+          m.userData.kind += "-tunnel";
+          (m.material as THREE.MeshStandardMaterial).color.multiplyScalar(0.3);
+        }
+        const tube = tunnelMesh(r.pts, detail.rock);
+        tube.traverse((o) => {
+          if (o instanceof THREE.Mesh && !o.userData.kind) o.userData.kind = "tunnel";
+        });
+        group.add(tube);
+      } else {
+        group.add(parapets(r.pts, heightAt, REAL_ROAD_WIDTH, detail.rock));
+      }
+      group.add(...road);
+    }
+  }
   const clouds = cloudLayers((near.x0 + (near.cols * near.spacing) / 2), (near.z0 + (near.rows * near.spacing) / 2));
   group.add(...clouds.meshes);
   const region = { x0: near.x0, z0: near.z0, w: near.cols * near.spacing, h: near.rows * near.spacing };
@@ -228,14 +350,20 @@ function buildRealWorld(route: Route, world: WorldData): WorldStatics {
   }
   // The scatter's counts were set for Sa Calobra's 10 km: a longer route gets more, or Málaga's 43 km came out bare.
   group.add(vegetation(index, heightAt, land, region, sampler, true, photo, Math.max(1, sampler.length / 10000), !forest));
-  if (world.urban?.length) group.add(buildings(route, world.urban, heightAt, REAL_ROAD_WIDTH));
+  if (world.urban?.length) group.add(buildings(route, world.urban, heightAt, REAL_ROAD_WIDTH, (x, z) => allIndex.nearest(x, z, 40).d));
 
   const animate = (dt: number) => {
     sea.animate(dt);
     clouds.animate(dt);
   };
   const update = forest ? (x: number, z: number) => forest.update(x, z) : undefined;
-  return { group, heightAt, animate, update };
+  const tube = tunnels.length
+    ? (x: number, z: number) => {
+        const n = allIndex.nearest(x, z, 30);
+        return n.i >= 0 && n.d < TUNNEL_HALF && inTunnel(pts[n.i].distance_m);
+      }
+    : undefined;
+  return { group, heightAt, animate, update, inTunnel: tube };
 }
 
 /** How much of the aerial photo's brightness the terrain reflects under the scene's own sun. */
@@ -314,9 +442,11 @@ export function corridorMesh(
   const tmp = new THREE.Color();
   // Cross-section frames, and how far out each section owns the ground on
   // each side before another part of the road is closer (hairpins). "Another
-  // part" means at least 50 m further along the road, whatever the spacing.
+  // part" means at least 25 m further along the road, whatever the spacing: at
+  // 50 m the legs either side of a tight hairpin's apex never counted, and the
+  // strip of one ran over the road of the other (Málaga km 35.7).
   const spacing = n > 1 ? Math.max(1, pts[1].distance_m - pts[0].distance_m) : 5;
-  const apart = Math.max(3, Math.round(50 / spacing));
+  const apart = Math.max(3, Math.round(25 / spacing));
   const frames = pts.map((p, i) => {
     const a = pts[Math.max(i - 1, 0)];
     const b = pts[Math.min(i + 1, n - 1)];
@@ -324,11 +454,19 @@ export function corridorMesh(
     const nx = -(b.z - a.z) / l;
     const nz = (b.x - a.x) / l;
     const reach = [-1, 1].map((side) => {
+      const isOther = (q: { i: number; edge?: number }) =>
+        q.i >= 0 && (q.edge !== undefined && edgeId >= 0 ? q.edge !== edgeId || Math.abs(q.i - (startIndex + i)) > apart : Math.abs(q.i - (startIndex + i)) > apart);
+      // Another leg's asphalt this close (two legs of a switchback side by side at
+      // different heights): the strip stops short of it, inside the shoulder if need be,
+      // or it slopes from this road's height across the other road, above it.
+      for (let o = 1; o <= 10; o++) {
+        const q = index.nearest(p.x + nx * o * side, p.z + nz * o * side, 12);
+        if (isOther(q) && q.d < REAL_ROAD_WIDTH / 2 + 1) return Math.max(REAL_ROAD_WIDTH / 2 + 0.2, o - 1);
+      }
       let r = CORRIDOR_REACH;
       for (const o of CORRIDOR_OFFSETS) {
         const q = index.nearest(p.x + nx * o * side, p.z + nz * o * side, CORRIDOR_REACH);
-        const other = q.edge !== undefined && edgeId >= 0 ? q.edge !== edgeId || Math.abs(q.i - (startIndex + i)) > apart : Math.abs(q.i - i) > apart;
-        if (q.i >= 0 && other && q.d < o * 0.95) {
+        if (isOther(q) && q.d < o * 0.95) {
           r = Math.max(SHOULDER, o - 0.5 * (o - q.d));
           break;
         }
@@ -498,6 +636,118 @@ export function withDetail(mat: THREE.MeshStandardMaterial, detail: Detail, amou
 /** A rectangular block of a heightmap grid with one photo stretched over it. */
 /** Half the inner width of a tunnel tube. */
 export const TUNNEL_HALF = REAL_ROAD_WIDTH / 2 + 1.2;
+/**
+ * The deck under a bridge's road: a stone slab a metre deep, half a metre wider than the
+ * road each side, its parapets on top (the road ribbon lies on it).
+ */
+function bridgeDeck(pts: Route["points"], width: number, stone: THREE.Texture): THREE.Mesh {
+  const half = width / 2 + 0.5;
+  // Cross-section, outside round: deck top under the asphalt, parapet up and back, deck bottom.
+  const section: [number, number][] = [
+    [-half + 0.35, 0.03],
+    [-half + 0.35, 0.75],
+    [-half, 0.75],
+    [-half, -1.0],
+    [half, -1.0],
+    [half, 0.75],
+    [half - 0.35, 0.75],
+    [half - 0.35, 0.03],
+  ];
+  const verts: number[] = [];
+  const uvs: number[] = [];
+  const idx: number[] = [];
+  const m = section.length;
+  pts.forEach((p, i) => {
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(pts.length - 1, i + 1)];
+    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    const nx = -(b.z - a.z) / l;
+    const nz = (b.x - a.x) / l;
+    section.forEach(([o, h], k) => {
+      verts.push(p.x + nx * o, p.y + h, p.z + nz * o);
+      uvs.push(p.distance_m / 3, (k / m) * 4);
+    });
+  });
+  for (let i = 0; i < pts.length - 1; i++) {
+    for (let k = 0; k < m - 1; k++) {
+      const a = i * m + k;
+      const b = (i + 1) * m + k;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  // End caps: the slab's cut faces.
+  for (const i of [0, pts.length - 1]) {
+    const o = i * m;
+    for (let k = 1; k < m - 1; k++) idx.push(o, o + k, o + k + 1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: "#a39a8b", map: stone, roughness: 1, side: THREE.DoubleSide }));
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.kind = "bridge";
+  return mesh;
+}
+
+/** Height of a tunnel's arched roof above the road (tunnelMesh: walls 4.4 m, arch 1.4 m). */
+const TUNNEL_TOP_M = 5.8;
+/** Half the side of the fine ground patch around a single route's tunnel portal. */
+const PATCH_HALF_M = 46;
+/** Metres over which a portal patch eases into the near grid at its edge. */
+const PATCH_BLEND_M = 14;
+
+/**
+ * Fine ground (2 m) around a tunnel portal on a single route: the 20 m near grid could not
+ * cut the slope open to the portal without its triangles slanting through the tube, nor
+ * carry the cut of a road running under another. Coloured from the photo like the corridor.
+ */
+function portalPatch(
+  q: { x: number; z: number; half: number },
+  height: (x: number, z: number) => number,
+  photo: ((x: number, z: number) => [number, number, number] | null) | null,
+  detail: Detail,
+): THREE.Mesh {
+  const step = 2;
+  const n = Math.ceil((2 * q.half) / step);
+  const verts: number[] = [];
+  const colors: number[] = [];
+  const uvs: number[] = [];
+  const idx: number[] = [];
+  const tmp = new THREE.Color();
+  for (let r = 0; r <= n; r++) {
+    for (let c = 0; c <= n; c++) {
+      const x = q.x - q.half + (c * 2 * q.half) / n;
+      const z = q.z - q.half + (r * 2 * q.half) / n;
+      verts.push(x, height(x, z) + 0.01, z);
+      uvs.push(x / 18, z / 18);
+      const rgb = photo?.(x, z);
+      if (rgb) tmp.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
+      else tmp.set("#8a8070");
+      colors.push(tmp.r, tmp.g, tmp.b);
+    }
+  }
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const a = r * (n + 1) + c;
+      idx.push(a, a + n + 1, a + 1, a + 1, a + n + 1, a + n + 2);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+  if (photo) mat.color.setScalar(PHOTO_REFLECTANCE);
+  withDetail(mat, detail);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  return mesh;
+}
 
 export function gridBlockMesh(
   g: Grid,

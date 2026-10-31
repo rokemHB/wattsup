@@ -159,6 +159,26 @@ round crown below) plus infill near the rider, two-card models beyond 320 m,
 nothing beyond 1 km, shadows within 260 m; scattered pines and oaks are then
 left out of `vegetation()` (`trees = false`). Foliage tints are multiplied by
 `CANOPY_SHADE` (a canopy reflects 8-10 %; matched to photos of the Ma-10).
+Ground through the road: `tools/dev/clipcheck.js` (run it as `WATTSUP_DEV_JS` on a
+single route) renders every 80 m of the route from above twice, asphalt alone and
+asphalt with the ground, and logs each window where ground wins, with the mesh to
+blame. Run it after touching terrain, corridor or road code; on 2026-10-31 it found
+the near and far grids roofing over roads in cuts, gorges and switchbacks (fixed by
+keeping their vertices below the lowest road their triangles reach: `RouteIndex.lowest`),
+the corridor strip of one leg running over the next (it now stops short of any other
+leg's asphalt, inside the shoulder if need be) and roads crossing themselves.
+Single routes have tunnels and bridges (`tools/route_tunnels.py` writes `tunnels` and
+`bridges` from the route's OSM ways into the world json): the ground is not shaped to
+their road (`RouteIndex` skip), a tunnel gets the island's tube and a fine 2 m patch
+of ground at each portal (`portalPatch`, the 20 m grid holed under it and met exactly
+at its edge), a bridge a stone deck with parapets. `WATTSUP_DEV_JS` has the app's
+three.js as `wattsup.three`.
+Houses (`buildings.ts`) are laid out bay by bay on a painted atlas per plaster colour
+(window, balcony, door, shopfront, garage, plain): a stone plinth from below the lowest
+corner to the street, a ground floor of doors and shops, a cornice, flat or tiled roofs,
+a kerbed pavement; an urban range with `"style": "village"` is whitewashed with tiled
+roofs (Colmenar and Riogordo). No house or pavement goes within reach of any part of
+the road (`roadDistance`): village streets bend hard.
 The single routes have real trees too (`<id>-trees.bin.gz`, `build_trees.py
 --route`; Sa Calobra 15 000, Málaga 193 000): `RouteForest` in `forest.ts` builds
 the cells near the rider a few a frame and drops those far behind, driven by

@@ -33,11 +33,15 @@ export interface WorldData {
   /** Close-up surface patches cut from the imagery at its highest zoom, `metres` wide. */
   details?: { rock: ImageBitmap; scrub: ImageBitmap; metres: number };
   /** Stretches of the route with houses along it (metres along the route, storeys). */
-  urban?: { from: number; to: number; floors: [number, number] }[];
+  urban?: { from: number; to: number; floors: [number, number]; style?: "city" | "village" }[];
   /** Where the local frame's origin lies, for the sun's position. */
   origin?: { lat: number; lon: number };
   /** Real tree positions and heights from a canopy height model (tools/build_trees.py --route). */
   trees?: TreeData | null;
+  /** Stretches of the route in a tunnel, metres along it (tools/route_tunnels.py). */
+  tunnels?: [number, number][];
+  /** Stretches of the route on a bridge, metres along it (tools/route_tunnels.py). */
+  bridges?: [number, number][];
 }
 
 interface GridMeta {
@@ -199,6 +203,8 @@ export async function loadWorld(id: string): Promise<WorldData> {
     urban?: WorldData["urban"];
     origin?: { lat: number; lon: number };
     trees?: string;
+    tunnels?: [number, number][];
+    bridges?: [number, number][];
   };
   const [near, far, band, rock, scrub, trees] = await Promise.all([
     loadGrid(meta.near),
@@ -209,7 +215,7 @@ export async function loadWorld(id: string): Promise<WorldData> {
     meta.trees ? loadTrees(meta.trees).catch((e) => (console.warn(`trees: ${e}`), null)) : Promise.resolve(null),
   ]);
   const details = meta.details && rock && scrub ? { rock, scrub, metres: meta.details.metres } : undefined;
-  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details, urban: meta.urban, origin: meta.origin, trees };
+  return { id: meta.id, name: meta.name, attribution: meta.attribution, near, far, band, details, urban: meta.urban, origin: meta.origin, trees, tunnels: meta.tunnels, bridges: meta.bridges };
 }
 
 /** Bilinear height, or null outside the grid. */
