@@ -38,13 +38,14 @@ TO = (39.9610, 3.2122)  # the lighthouse
 SEA_START = (39.5395, 2.3790)  # just out over the harbour
 SEA_END = (39.9628, 3.2168)  # just past the lighthouse, over the cliff edge
 SPACING_M = 5.0
-MAX_OFF_ROAD_M = 150.0
-SMOOTH_HALF_M = 600.0
-SMOOTH_PASSES = 30
-CLEAR_RADIUS_M = 150.0
-CLEARANCE_M = 80.0
+# The flight path is the road's centre line averaged over this wide a window, so the plane
+# rides long sweeps roughly above the road instead of turning with every bend. Half-width,
+# metres: a ~5 km window. No pull-back toward the road, which is what used to make it wiggle.
+SMOOTH_HALF_M = 1400.0
+CLEAR_RADIUS_M = 300.0
+CLEARANCE_M = 90.0
 MAX_GRADE = 0.09
-ALT_SMOOTH_M = 1200.0
+ALT_SMOOTH_M = 1500.0
 
 
 def road_polyline(net, xyz, to_xz):
@@ -112,26 +113,23 @@ def main():
 
     road = road_polyline(net, xyz, to_xz)
     tree = cKDTree(road)
-    # Sea, road, sea: the lead-in and -out run straight to the road's ends, then everything is evened out.
+    # Sea, road, sea: a lead-in and -out straight to the road's ends.
     raw = np.vstack([np.array([to_xz(*SEA_START)]), road, np.array([to_xz(*SEA_END)])])
     path = resample(raw, 20.0)
-    on_road = tree.query(path)[0] < 30.0
-    # Smooth into long sweeps, pulled back each pass to within MAX_OFF_ROAD_M of the road
-    # (except over the sea, before and after it). The ends stay put.
+    # One wide moving average (a ~5 km window) gives the median line: it drifts across the
+    # road's sweeps without turning with them. A triangular kernel (the average applied twice)
+    # leaves no corners. The ends are pulled back to the sea points so it starts and finishes
+    # over the water.
     n = int(SMOOTH_HALF_M / 20.0)
-    for _ in range(SMOOTH_PASSES):
+    ends = (path[0].copy(), path[-1].copy())
+    kernel = np.ones(2 * n + 1) / (2 * n + 1)
+    for _ in range(2):
         padded = np.pad(path, ((n, n), (0, 0)), mode="edge")
-        kernel = np.ones(2 * n + 1) / (2 * n + 1)
-        smooth = np.column_stack([np.convolve(padded[:, k], kernel, mode="valid") for k in range(2)])
-        smooth[0], smooth[-1] = path[0], path[-1]
-        d, i = tree.query(smooth)
-        far = (d > MAX_OFF_ROAD_M) & on_road
-        pull = road[i[far]]
-        smooth[far] = pull + (smooth[far] - pull) * (MAX_OFF_ROAD_M / d[far])[:, None]
-        path = smooth
+        path = np.column_stack([np.convolve(padded[:, k], kernel, mode="valid") for k in range(2)])
+        path[0], path[-1] = ends
     pts = resample(path, SPACING_M)
     off = tree.query(pts)[0]
-    print(f"path {len(pts) * SPACING_M / 1000:.1f} km, at most {off[off < 400].max():.0f} m off the road ({(off >= 400).sum() * SPACING_M:.0f} m over the sea at the ends)", file=sys.stderr)
+    print(f"path {len(pts) * SPACING_M / 1000:.1f} km, median line {off[off < 2000].mean():.0f} m off the road on average, at most {off[off < 2000].max():.0f} m", file=sys.stderr)
 
     dem = DemStack(a.dem)
     lats = lat0 - pts[:, 1] / EARTH_LAT_M
