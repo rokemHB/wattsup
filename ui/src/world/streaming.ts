@@ -32,6 +32,10 @@ import { confirmationPost, faceCamera, signPost, type SignPost } from "./signs";
 import { buildCell, cellsIn, type ForestCell, type TreeData, updateCell } from "./forest";
 
 const cls_width = (kind: number) => ROAD_CLASS[Math.min(ROAD_CLASS.length - 1, kind)].width;
+/** Metres of terrain above the road a tunnel needs to be drawn as one (tube roof 5.8 m, plus some). */
+const TUNNEL_COVER_M = 8;
+/** Shorter tunnels always keep their tube (underpasses). */
+const TUNNEL_OPEN_MIN_M = 80;
 
 /**
  * Ground at sea level is dropped a few metres so the sea surface draws over the photo's
@@ -291,6 +295,12 @@ export class TileManager {
   private tubeZone: Uint8Array;
   /** The roundabout each ring node belongs to: centre x, z and radius. */
   private ringOf = new Map<number, [number, number, number]>();
+  /**
+   * Tunnel edges drawn as open road: no mountain above them in the terrain we have (a thin
+   * blade of rock the 45 m grid flattens, as at the Formentor lighthouse). Drawn as a tube,
+   * its outer skin stood out of the hillside, seen from the plane.
+   */
+  private openTunnels = new Set<number>();
 
   constructor(
     private scene: THREE.Group,
@@ -314,8 +324,13 @@ export class TileManager {
       this.ringOf.set(e.a, e.ring);
       this.ringOf.set(e.b, e.ring);
     }
-    for (const e of net.edges) {
-      if (!e.tunnel) continue;
+    net.edges.forEach((e, ei) => {
+      // Only long ones: a short tunnel is an underpass under another road (the Sa Calobra
+      // knot), covered by that road, not by mountain, and right as a tube.
+      if (e.tunnel && e.length_m > TUNNEL_OPEN_MIN_M && !this.covered(net, e)) this.openTunnels.add(ei);
+    });
+    for (const [ei, e] of net.edges.entries()) {
+      if (!e.tunnel || this.openTunnels.has(ei)) continue;
       this.inTunnel.fill(1, e.start, e.start + e.count);
       this.tubeZone.fill(1, e.start, e.start + e.count);
       if (e.count > 4) this.uncut.fill(1, e.start + 2, e.start + e.count - 2);
@@ -828,6 +843,8 @@ export class TileManager {
     for (const ei of edges) {
       const pts = this.index.polyline(ei);
       const e = this.index.edge(ei);
+      // A tunnel with no mountain above it is drawn as open road (see openTunnels).
+      const tunnel = e.tunnel && !this.openTunnels.has(ei);
       let run: typeof pts = [];
       let runStart = 0;
       const build = (part: typeof pts, partStart: number) => {
@@ -835,7 +852,7 @@ export class TileManager {
         // Numbered tertiary roads (the Ma-10 itself, Sa Calobra) are marked like main roads.
         const lines = e.ring ? "edge" : e.kind === 2 && e.ref ? "centre" : cls.lines;
         const road = roadMeshes(part, false, cls.width, true, this.asphalt, lines, this.ringMarks(e, part));
-        if (e.tunnel) {
+        if (tunnel) {
           // Out of the sun, lit by the lamps' pools only: a road of its own kind, so it merges apart from the sunlit ones.
           for (const m of road) {
             m.userData.kind += "-tunnel";
@@ -843,7 +860,7 @@ export class TileManager {
           }
         }
         pieces.push(...road);
-        if (e.tunnel) {
+        if (tunnel) {
           // Headwalls only where the tunnel really opens: at the edge's own end, on a node with an open road.
           const portals: [boolean, boolean] = [partStart === 0 && this.isPortal(e.a), partStart + part.length >= pts.length && this.isPortal(e.b)];
           group.add(tunnelMesh(part, this.detail.rock, portals));
@@ -856,7 +873,7 @@ export class TileManager {
         // Long runs go in pieces of 60 points (300 m), with a frame between, so no single piece stalls the picture.
         // A tunnel goes in one piece: cut into pieces, everything past the first 60 points
         // had neither tube nor road (the Ma-10's Monnàber tunnel is 81 points).
-        if (e.tunnel) {
+        if (tunnel) {
           if (run.length >= 2) build(run, runStart);
           run = [];
           return;
@@ -990,6 +1007,27 @@ export class TileManager {
     const rings = [this.ringOf.get(e.a), this.ringOf.get(e.b)].filter((r) => r !== undefined);
     if (!rings.length) return undefined;
     return (i) => rings.every(([cx, cz, r]) => Math.hypot(part[i].x - cx, part[i].z - cz) > r + cls_width(e.kind) / 2 + 0.5);
+  }
+
+  /**
+   * Is there mountain above this tunnel? The median, over its middle 70 %, of how far the
+   * coarse terrain (mid grid, else far) rises above the road, against the tube's height
+   * plus a little: where the terrain is no higher, there is nothing to tunnel through.
+   */
+  private covered(net: RoadNetwork, e: { start: number; count: number }): boolean {
+    const xyz = net.xyz;
+    const a = e.start + Math.floor(e.count * 0.15);
+    const b = e.start + Math.ceil(e.count * 0.85);
+    const rise: number[] = [];
+    for (let i = a; i < Math.max(a + 1, b); i++) {
+      const x = xyz[i * 3];
+      const z = xyz[i * 3 + 2];
+      const g = (this.mid && gridSample(this.mid, x, z)) ?? gridSample(this.far, x, z);
+      if (g !== null) rise.push(g - xyz[i * 3 + 1]);
+    }
+    if (!rise.length) return true;
+    rise.sort((p, q) => p - q);
+    return rise[Math.floor(rise.length / 2)] > TUNNEL_COVER_M;
   }
 
   private isPortal(node: number): boolean {
