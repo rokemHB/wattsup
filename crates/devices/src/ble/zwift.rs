@@ -46,6 +46,7 @@ impl BleZwiftController {
                     .controller_watchdog
                     .or(Some(Duration::from_secs_f64(zp::RECONNECT_AFTER_S))),
                 sync_rx: None,
+                last_button: std::time::Instant::now(),
             };
             TaskHandle::spawn(p, proto, ctx)
         };
@@ -87,9 +88,16 @@ struct Zap {
     edges: ButtonEdges,
     watchdog: Option<Duration>,
     sync_rx: Option<Characteristic>,
+    /// When a button last changed (or the session began): a left Click v2 puck is restarted
+    /// after [`zp::LEFT_RESET_IDLE_S`] of this, while the rider is not pressing.
+    last_button: std::time::Instant,
 }
 
 impl Zap {
+    fn is_left_click_v2(&self) -> bool {
+        self.device_type.is_some_and(|d| d.is_click_v2() && d.is_left())
+    }
+
     async fn ride_on(&self, p: &Peripheral) -> Result<()> {
         if let Some(rx) = &self.sync_rx {
             write(p, rx, &zp::RIDE_ON, false).await?;
@@ -122,11 +130,7 @@ impl Protocol for Zap {
         }
         ctx.log(format!("handshake sent ({:?})", self.device_type));
         self.sync_rx = Some(sync_rx);
-        // RideOn twice more over the next second: a puck just woken sometimes misses the first.
-        for wait in [400, 700] {
-            tokio::time::sleep(Duration::from_millis(wait)).await;
-            self.ride_on(p).await?;
-        }
+        self.last_button = std::time::Instant::now();
         Ok(())
     }
 
@@ -141,7 +145,11 @@ impl Protocol for Zap {
         );
         match zp::parse_message(&n.value).map_err(|e| DeviceError::Bluetooth(e.to_string()))? {
             ZwiftMessage::Buttons(b) => {
-                for button in self.edges.update(b) {
+                let changed = self.edges.update(b);
+                if !changed.is_empty() {
+                    self.last_button = std::time::Instant::now();
+                }
+                for button in changed {
                     ctx.emit(DeviceEvent::Button(button));
                     if let Some(dir) = zp::shift_for(button) {
                         ctx.emit(DeviceEvent::Shift(dir));
@@ -153,6 +161,12 @@ impl Protocol for Zap {
                 percent,
             }),
             ZwiftMessage::Handshake { variant, .. } => ctx.log(format!("handshake answered ({variant:?})")),
+            ZwiftMessage::Challenge => {
+                // A locked puck's unlock challenge: acknowledged, which keeps it going.
+                if let Some(rx) = &self.sync_rx {
+                    write(p, rx, &zp::CHALLENGE_ACK, false).await?;
+                }
+            }
             ZwiftMessage::Stopped => {
                 // Locked (no Zwift unlock in the last day): restart the puck, which comes back
                 // and sends buttons for another minute, and reconnect to it.
@@ -172,14 +186,22 @@ impl Protocol for Zap {
         self.watchdog
     }
 
-    fn idle_after(&self) -> Option<Duration> {
-        Some(Duration::from_secs_f64(zp::RESEND_AFTER_S))
+    fn tick_every(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(zp::KEEPALIVE_S))
     }
 
-    /// Quiet for a few seconds (pucks send an idle frame about every second): the session
-    /// may have lapsed, so RideOn again; the runner waits as long again before the next.
-    async fn on_idle(&mut self, p: &Peripheral, ctx: &Ctx) -> Result<()> {
-        ctx.log("quiet: RideOn again");
-        self.ride_on(p).await
+    /// Every few seconds: RideOn, which keeps the puck sending (zwiftboard). A left Click v2
+    /// puck that has gone a while without a press is restarted now, while the rider is not
+    /// pressing, rather than when its own watchdog cuts it off.
+    async fn on_tick(&mut self, p: &Peripheral, ctx: &Ctx) -> Result<Flow> {
+        if self.is_left_click_v2() && self.last_button.elapsed().as_secs_f64() >= zp::LEFT_RESET_IDLE_S {
+            if let Some(rx) = &self.sync_rx {
+                let _ = write(p, rx, &zp::RESET, false).await;
+            }
+            ctx.log("left puck idle: restarting it before it locks");
+            return Ok(Flow::Reconnect("left puck restarted on schedule".into()));
+        }
+        self.ride_on(p).await?;
+        Ok(Flow::Continue)
     }
 }

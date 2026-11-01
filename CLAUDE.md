@@ -206,9 +206,10 @@ not freed otherwise.
 Two built-in routes, `tramuntana-flight` and `tramuntana-flight-back` (99.6 km: Port
 d'Andratx along the Ma-10 and the Formentor road, Ma-2210, to the lighthouse on Cap de
 Formentor), are flown by an electric plane instead of ridden: `tools/build_flight.py`
-takes those roads from the network (none for the first 3.4 km from the harbour to
-Andratx), smooths them into long sweeps but pulls the path back to within 150 m of the
-road each pass, so the road stays in view, with each point's height the plane's altitude
+takes those roads from the network and flies their median line: one wide moving
+average (a ~2.8 km window, applied twice), with no pull-back toward the road (that
+made it wiggle), so it drifts across the road's sweeps (~130 m off on average) without
+turning with them, with each point's height the plane's altitude
 (highest ground within 150 m plus 80 m, smoothed, at most 9 % up or down) and `"flight": true`. The
 engine flies a flight level (`Route::grade_at` is 0, so the trainer feels a flat road)
 at the plane's own speed (`flight_speed_mps`: the cube root of the power, 100 km/h at
@@ -378,9 +379,18 @@ at 36.7337,-4.4158 with only A-7000/A-7204 ways as input.
 ## Hardware (unverified assumptions, see HARDWARE_TESTING.md)
 
 Wahoo KICKR CORE 2 with Zwift Cog, Zwift Click v2 (keyboard shifting stays as
-fallback), a Bluetooth HR strap. The Click v2's left puck locks after a minute without
-a Zwift unlock (a server-backed challenge nobody else can answer): WattsUp connects
-both pucks (the right needs no unlock), RESETs (`18`) and reconnects a locked left
-puck, and writes RideOn again after 2.5 s of silence (`ble/zwift.rs`,
-`protocol/zwift.rs`, HARDWARE_TESTING.md 5.1). Virtual gearing uses FTMS SIM mode with a
+fallback), a Bluetooth HR strap. The Click v2's left puck stops sending buttons without
+a Zwift unlock (a challenge answered by Zwift's servers; nobody outside Zwift can compute
+it). WattsUp does what zwiftboard (github.com/thomaschampagne/zwiftboard) does: connects
+both pucks (the left holds the pair's radio link), wakes each with `RideOn 02 03`,
+`00 08 00`, `00 08 10`, answers an `FF 03` challenge with `FF 04 00`, writes RideOn every
+3 s, and restarts the left puck (`18`) after 55 s without a press, before its own ~65 s
+watchdog (`ble/zwift.rs`, `protocol/zwift.rs`). Only the shift buttons shift by themselves;
+the face and nav buttons are UI actions the rider assigns in Settings (`controls.ts`,
+`EngineSnapshot.buttons`, a numbered list so several windows can read it): by default the
+right puck, which needs no unlock, shifts both ways (paddle harder, Z easier) and carries
+the turns (Y, A) and auto-shift (B).
+Island tunnels longer than 80 m with under 8 m of terrain above them in the 45 m grid are
+drawn as open road (`openTunnels` in `streaming.ts`): the Formentor lighthouse tunnel goes
+through a blade of rock the grid flattens, and its tube stood out of the hillside. Virtual gearing uses FTMS SIM mode with a
 computed grade; ERG mode for workouts.

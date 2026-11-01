@@ -165,6 +165,8 @@ export interface EngineSnapshot {
   route_version: number;
   junction: Junction | null;
   navigation: Navigation | null;
+  /** Recent controller button presses, newest last, numbered (engine `ButtonPress`). */
+  buttons?: { seq: number; button: string }[];
 }
 
 export interface Sign {

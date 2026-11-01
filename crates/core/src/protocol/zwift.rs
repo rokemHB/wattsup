@@ -44,6 +44,12 @@ pub const CLICK_V2_START: [u8; 3] = [0xFF, 0x04, 0x00];
 /// Command opcode RESET: the puck restarts (and drops the link for 2-3 s). Sent to a left
 /// Click v2 puck that has stopped, so it comes back and sends buttons for another minute.
 pub const RESET: [u8; 1] = [0x18];
+/// The answer to a Click v2's `FF 03` challenge that keeps it going (zwiftboard): a fixed
+/// acknowledgement, not Zwift's computed unlock, which no app outside Zwift can produce.
+pub const CHALLENGE_ACK: [u8; 3] = [0xFF, 0x04, 0x00];
+/// What wakes a Click v2 puck (zwiftboard, tested on the hardware by its users): RideOn
+/// with the Click v2 suffix, then two GET requests, 100 ms apart.
+pub const CLICK_V2_WAKE: [&[u8]; 3] = [b"RideOn\x02\x03", &[0x00, 0x08, 0x00], &[0x00, 0x08, 0x10]];
 
 mod msg {
     pub const EMPTY: u8 = 0x15;
@@ -107,18 +113,17 @@ impl ZwiftDeviceType {
 
 /// Writes that start a session, in order, for the given device type.
 pub fn handshake(device: Option<ZwiftDeviceType>) -> Vec<Vec<u8>> {
-    let mut writes = vec![RIDE_ON.to_vec()];
-    if device.is_some_and(|d| d.is_click_v2() && d.is_left()) {
-        writes.push(CLICK_V2_START.to_vec());
+    if device.is_some_and(|d| d.is_click_v2()) {
+        return CLICK_V2_WAKE.iter().map(|w| w.to_vec()).collect();
     }
-    writes
+    vec![RIDE_ON.to_vec()]
 }
 
-/// Seconds without a packet before RideOn is written again (pucks send an idle frame
-/// every second or so; silence means the session lapsed).
-pub const RESEND_AFTER_S: f64 = 2.5;
-/// Seconds between those resends at most.
-pub const RESEND_EVERY_S: f64 = 3.0;
+/// Seconds between RideOn keep-alives, written whatever the puck does (zwiftboard).
+pub const KEEPALIVE_S: f64 = 3.0;
+/// Seconds without a button press after which a left Click v2 puck is restarted, on our
+/// schedule and while the rider is not pressing, before its own ~65 s watchdog strands it.
+pub const LEFT_RESET_IDLE_S: f64 = 55.0;
 /// Seconds without a packet before the puck is reconnected.
 pub const RECONNECT_AFTER_S: f64 = 20.0;
 
@@ -213,6 +218,8 @@ pub enum ZwiftMessage {
     Empty,
     /// Click v2 stopped sending buttons (it was not unlocked by the Zwift app).
     Stopped,
+    /// Click v2 unlock challenge (`FF 03 ...`): acknowledged with [`CHALLENGE_ACK`].
+    Challenge,
     Other {
         kind: u8,
         body: Vec<u8>,
@@ -244,7 +251,9 @@ pub fn parse_message(bytes: &[u8]) -> Result<ZwiftMessage, ParseError> {
         }
         msg::CLICK_NOTIFICATION => ZwiftMessage::Buttons(parse_click_buttons(body)?),
         msg::RIDE_NOTIFICATION => ZwiftMessage::Buttons(parse_ride_buttons(body)?),
-        msg::STATUS if matches!(body, [0x05, 0x00, 0xEA | 0xFA, 0x05]) => ZwiftMessage::Stopped,
+        // Status frames carry a protobuf tail (the puck's address among it): match the head.
+        msg::STATUS if matches!(body, [0x05, 0x00, 0xEA | 0xFA, 0x05, ..]) => ZwiftMessage::Stopped,
+        msg::STATUS if matches!(body, [0x03, ..]) => ZwiftMessage::Challenge,
         _ => ZwiftMessage::Other {
             kind,
             body: body.to_vec(),
@@ -294,18 +303,15 @@ fn parse_ride_buttons(body: &[u8]) -> Result<Buttons, ParseError> {
     Ok(b)
 }
 
-/// What a button press means for gearing. Right side and "+" shift harder.
-/// The shift a button makes. The right hand alone can shift both ways: on a Click v2 only
-/// the right puck keeps sending without a Zwift unlock (the left one locks after a minute),
-/// so its face buttons shift too, Y and A harder, B and Z easier, besides its paddle.
+/// The shift a button makes by itself: the shift buttons and paddles, right harder, left
+/// easier, as in Zwift. The face buttons (Y, A, B, Z) and the left puck's nav buttons are
+/// left to the app, which maps them to actions the rider picks (Settings): by default the
+/// right puck's Z shifts easier, so the right puck alone, which needs no Zwift unlock,
+/// shifts both ways.
 pub fn shift_for(button: Button) -> Option<ShiftDirection> {
     match button {
-        Button::ShiftUpRight | Button::ShiftDownRight | Button::PaddleRight | Button::Plus | Button::Y | Button::A => {
-            Some(ShiftDirection::Up)
-        }
-        Button::ShiftUpLeft | Button::ShiftDownLeft | Button::PaddleLeft | Button::Minus | Button::B | Button::Z => {
-            Some(ShiftDirection::Down)
-        }
+        Button::ShiftUpRight | Button::ShiftDownRight | Button::PaddleRight | Button::Plus => Some(ShiftDirection::Up),
+        Button::ShiftUpLeft | Button::ShiftDownLeft | Button::PaddleLeft | Button::Minus => Some(ShiftDirection::Down),
         _ => None,
     }
 }
@@ -456,24 +462,46 @@ mod tests {
             handshake(Some(ZwiftDeviceType::Click)),
             vec![from_hex("52 69 64 65 4f 6e")]
         );
-        assert_eq!(
-            handshake(Some(ZwiftDeviceType::ClickV2Left)),
-            vec![from_hex("52 69 64 65 4f 6e"), from_hex("ff 04 00")]
-        );
-        // The right puck needs no unlock: RideOn only.
-        assert_eq!(
-            handshake(Some(ZwiftDeviceType::ClickV2Right)),
-            vec![from_hex("52 69 64 65 4f 6e")]
-        );
+        // Click v2, either puck: RideOn with its suffix, then two GETs (zwiftboard).
+        let wake = vec![
+            from_hex("52 69 64 65 4f 6e 02 03"),
+            from_hex("00 08 00"),
+            from_hex("00 08 10"),
+        ];
+        assert_eq!(handshake(Some(ZwiftDeviceType::ClickV2Left)), wake);
+        assert_eq!(handshake(Some(ZwiftDeviceType::ClickV2Right)), wake);
     }
 
     #[test]
-    fn the_right_puck_alone_shifts_both_ways() {
-        let right = [Button::ShiftUpRight, Button::Y, Button::A, Button::B, Button::Z];
-        let dirs: Vec<_> = right.iter().filter_map(|b| shift_for(*b)).collect();
-        assert!(dirs.contains(&ShiftDirection::Up) && dirs.contains(&ShiftDirection::Down));
-        assert_eq!(shift_for(Button::B), Some(ShiftDirection::Down));
-        assert_eq!(shift_for(Button::Y), Some(ShiftDirection::Up));
+    fn challenge_and_stop_frames_with_their_tails() {
+        // The status frames carry a protobuf tail (the puck's address): match on the head.
+        assert_eq!(
+            parse_message(&from_hex("ff 05 00 ea 05 0a 11 41 42")).unwrap(),
+            ZwiftMessage::Stopped
+        );
+        assert_eq!(
+            parse_message(&from_hex("ff 05 00 fa 05")).unwrap(),
+            ZwiftMessage::Stopped
+        );
+        assert_eq!(
+            parse_message(&from_hex("ff 03 00 0a 15 01 02 03")).unwrap(),
+            ZwiftMessage::Challenge
+        );
+        assert_eq!(CHALLENGE_ACK, [0xff, 0x04, 0x00]);
+    }
+
+    #[test]
+    fn face_buttons_are_left_to_the_app() {
+        for b in [
+            Button::Y,
+            Button::A,
+            Button::B,
+            Button::Z,
+            Button::NavLeft,
+            Button::NavRight,
+        ] {
+            assert_eq!(shift_for(b), None, "{b:?}");
+        }
     }
 
     #[test]

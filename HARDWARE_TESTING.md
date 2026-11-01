@@ -309,13 +309,16 @@ a challenge from the puck (`FF 03 00 ...`) answered through Zwift's servers, new
 connection: no other app can compute it (BikeControl issue #68). The **right** puck
 needs no unlock (BikeControl 6.x, MaximumTrainer: tested by their users).
 
-So WattsUp, since 2026-10-31:
+So WattsUp, since 2026-11-01 (the zwiftboard approach, github.com/thomaschampagne/zwiftboard):
 - connects the other puck too when you connect one (it must be advertising: press a
-  button on both before connecting), and takes shifts from both;
-- writes RESET (`18`) to a left puck that locks and reconnects it: it is gone ~3 s,
-  then sends buttons for another minute (log: `Click v2 left puck locked: restarting it`);
-- writes RideOn again after 2.5 s without any packet (log: `quiet: RideOn again`) and
-  reconnects after 20 s.
+  button on both before connecting); the left puck holds the pair's radio link;
+- wakes each puck with `RideOn 02 03`, `00 08 00`, `00 08 10`, answers an `FF 03`
+  challenge with `FF 04 00`, and writes RideOn every 3 s;
+- restarts the left puck (`18`) after 55 s without a button press, so it happens while
+  you are not pressing (log: `left puck idle: restarting it before it locks`);
+- shifts with the right puck alone by default (paddle harder, Z easier); Y and A turn,
+  B toggles auto-shift. Settings → Controller buttons reassigns them and shows the
+  last button pressed.
 
 To stop the minute-by-minute restarts of the left puck: open the Zwift app (not
 Companion; no subscription needed), connect a trainer and the Click, wait 30 s or

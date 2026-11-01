@@ -206,6 +206,9 @@
         <label class="check"><input type="checkbox" id="settings-auto-shift" /> Automatic shifting toward a target cadence</label>
         <label class="field">Target cadence <input id="settings-target-cadence" type="number" min="50" max="130" step="1" value="88" /> rpm</label>
         <p class="hint">Keyboard: ↑ / ] harder · ↓ / [ easier · A toggles automatic shifting. The Click or any connected controller shifts too.</p>
+        <h3>Controller buttons</h3>
+        <p class="hint">The shift buttons shift by themselves (right harder, left easier). The other buttons do what you pick. A Click v2's right puck keeps working without the Zwift app, so it carries the essentials by default. Last pressed: <b id="controls-last">–</b></p>
+        <div id="controls-mapping" class="controls-mapping"></div>
         <h3>Trainer</h3>
         <p class="hint">Virtual gearing uses the trainer's simulation mode. See HARDWARE_TESTING.md for the calibration steps; the debug drawer (D while riding) shows what is sent.</p>
       </div>

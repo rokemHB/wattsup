@@ -84,6 +84,13 @@ pub(crate) trait Protocol: Send + 'static {
     async fn on_idle(&mut self, _p: &Peripheral, _ctx: &Ctx) -> Result<()> {
         Ok(())
     }
+    /// [`Protocol::on_tick`] runs this often while connected, whatever arrives.
+    fn tick_every(&self) -> Option<Duration> {
+        None
+    }
+    async fn on_tick(&mut self, _p: &Peripheral, _ctx: &Ctx) -> Result<Flow> {
+        Ok(Flow::Continue)
+    }
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -148,6 +155,9 @@ async fn session<P: Protocol>(
 
     let watchdog = proto.watchdog();
     let idle_after = proto.idle_after();
+    let mut ticker = tokio::time::interval(proto.tick_every().unwrap_or(Duration::from_secs(3600)));
+    ticker.tick().await;
+    let ticking = proto.tick_every().is_some();
     let mut last_packet = Instant::now();
     let mut last_idle = Instant::now();
     let mut link_check = tokio::time::interval(LINK_CHECK);
@@ -176,6 +186,13 @@ async fn session<P: Protocol>(
             _ = link_check.tick() => {
                 if !p.is_connected().await.unwrap_or(false) {
                     return Ok(Some("link lost".into()));
+                }
+            }
+            _ = ticker.tick(), if ticking => {
+                match proto.on_tick(p, ctx).await {
+                    Ok(Flow::Continue) => {}
+                    Ok(Flow::Reconnect(why)) => return Ok(Some(why)),
+                    Err(e) => ctx.log(format!("tick failed: {e}")),
                 }
             }
             _ = tokio::time::sleep_until(idle_at), if idle_after.is_some() => {

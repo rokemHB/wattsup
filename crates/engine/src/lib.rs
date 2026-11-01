@@ -85,6 +85,17 @@ pub struct EngineSnapshot {
     pub junction: Option<Junction>,
     /// Where the ride is going, when riding a road network.
     pub navigation: Option<Navigation>,
+    /// Recent controller button presses, newest last, numbered: a UI acts on those with a
+    /// `seq` above the last it handled (several windows may read the same snapshot).
+    #[serde(default)]
+    pub buttons: Vec<ButtonPress>,
+}
+
+/// One controller button press, for the UI's own actions (turns, auto-shift, ...).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ButtonPress {
+    pub seq: u64,
+    pub button: Button,
 }
 
 /// Navigation values for the HUD of a network ride.
@@ -148,9 +159,12 @@ struct Inner {
     route_version: AtomicU64,
     /// The rider's FTP in watts, for the time estimate of a planned ride.
     ftp_w: Mutex<f64>,
+    /// Recent button presses with their sequence numbers (see `EngineSnapshot::buttons`).
+    buttons: Mutex<(u64, VecDeque<ButtonPress>)>,
 }
 
 const LOG_LINES: usize = 60;
+const BUTTON_PRESSES: usize = 16;
 const KINDS: [DeviceKind; 3] = [DeviceKind::Trainer, DeviceKind::HeartRate, DeviceKind::Controller];
 
 /// Cheap to clone; all clones drive the same ride.
@@ -201,6 +215,7 @@ impl Engine {
             route_version: 0,
             junction: None,
             navigation: None,
+            buttons: vec![],
         };
         let inner = Arc::new(Inner {
             providers,
@@ -215,6 +230,7 @@ impl Engine {
             navigation: Mutex::new(None),
             route_version: AtomicU64::new(0),
             ftp_w: Mutex::new(200.0),
+            buttons: Mutex::new((0, VecDeque::new())),
         });
         tokio::spawn(event_loop(inner.clone(), rx));
         tokio::spawn(tick_loop(inner.clone(), tick));
@@ -657,7 +673,9 @@ impl Inner {
         let junction = self.junction.lock().unwrap().clone();
         let navigation = self.navigation.lock().unwrap().clone();
         let route_version = self.route_version.load(Ordering::Relaxed);
+        let buttons = self.buttons.lock().unwrap().1.iter().cloned().collect();
         self.snapshots.send_modify(|s| {
+            s.buttons = buttons;
             s.session = session;
             s.devices = devices;
             s.log = log;
@@ -729,7 +747,17 @@ async fn event_loop(inner: Arc<Inner>, mut rx: EventReceiver) {
             DeviceEvent::Trainer(sample) => inner.session.lock().unwrap().on_trainer_sample(sample),
             DeviceEvent::HeartRate { bpm, .. } => inner.session.lock().unwrap().on_heart_rate(bpm),
             DeviceEvent::Shift(dir) => inner.shift(dir).await,
-            DeviceEvent::Button(_) => {}
+            DeviceEvent::Button(button) => {
+                let mut b = inner.buttons.lock().unwrap();
+                b.0 += 1;
+                let seq = b.0;
+                b.1.push_back(ButtonPress { seq, button });
+                while b.1.len() > BUTTON_PRESSES {
+                    b.1.pop_front();
+                }
+                drop(b);
+                inner.publish();
+            }
             DeviceEvent::Battery { kind, percent } => {
                 inner
                     .statuses

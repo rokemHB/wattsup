@@ -18,6 +18,7 @@ import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
+import { type Action, loadMapping, mappingRows } from "./controls";
 
 type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "trainer" | "ride" | "pause" | "finish";
 
@@ -616,8 +617,54 @@ async function startRide(id: string) {
   show("ride");
 }
 
+/** Controller button actions (see controls.ts), and the last press handled. */
+let buttonMap: Record<string, Action> = loadMapping();
+let lastButtonSeq = -1;
+
+/** Acts on the presses this window has not handled yet. */
+function handleButtons(snap: EngineSnapshot) {
+  const presses = snap.buttons ?? [];
+  const newest = presses.length ? presses[presses.length - 1].seq : 0;
+  // The first snapshot: what happened before this window was there is not ours to replay.
+  if (lastButtonSeq < 0) {
+    lastButtonSeq = newest;
+    return;
+  }
+  for (const p of presses) {
+    if (p.seq <= lastButtonSeq) continue;
+    lastButtonSeq = p.seq;
+    const last = document.getElementById("controls-last");
+    if (last) last.textContent = p.button;
+    if (screen !== "ride") continue;
+    switch (buttonMap[p.button] ?? "none") {
+      case "shift_up":
+        api.shift("up");
+        break;
+      case "shift_down":
+        api.shift("down");
+        break;
+      case "turn_left":
+        turnKey(-1);
+        break;
+      case "turn_right":
+        turnKey(1);
+        break;
+      case "u_turn":
+        api.turnAround().catch(showError);
+        break;
+      case "auto_shift":
+        api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
+        break;
+      case "camera":
+        if (world) remember(CAMERA_KEY, world.cycleCamera());
+        break;
+    }
+  }
+}
+
 function onSnapshot(snap: EngineSnapshot) {
   renderDebug(snap);
+  handleButtons(snap);
   world?.update(snap);
   if (world && snap.route_version !== routeVersion && routeVersion >= 0) {
     // The navigator extended or re-planned the road ahead.
@@ -694,6 +741,7 @@ function showFinish(snap: EngineSnapshot) {
 // --- wiring --------------------------------------------------------------------
 
 function wire() {
+  $("controls-mapping").replaceChildren(...mappingRows((m) => (buttonMap = m)));
   wireDebug();
   $("start-go").onclick = () => show("menu");
   $("menu-ride").onclick = () => startRide(selectedRoute || routes[0]?.id).catch(showError);
