@@ -350,6 +350,10 @@ wattsup-cli ride --raw --controller $CLICK
       `ClickV2Right`, one `ClickV2Left`); after about a minute the log shows
       `left puck locked: restarting it`, presses on the **right** puck keep shifting
       throughout, the left one again after ~3 s.
+- [ ] The right puck shifts both ways on its own: its paddle, Y and A harder, B and Z
+      easier (so the left puck's restarts never cost a shift). Note which physical
+      button is which (raw log: `async << 23 ...`); the mapping is a guess from the
+      Ride layout.
 - [ ] Ten minutes of riding: the right puck never stops (no `quiet: RideOn again`
       followed by a reconnect). If it does, send the raw log: the right puck's own
       keep-awake (BikeControl 6.5) is not public yet.

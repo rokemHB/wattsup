@@ -295,10 +295,17 @@ fn parse_ride_buttons(body: &[u8]) -> Result<Buttons, ParseError> {
 }
 
 /// What a button press means for gearing. Right side and "+" shift harder.
+/// The shift a button makes. The right hand alone can shift both ways: on a Click v2 only
+/// the right puck keeps sending without a Zwift unlock (the left one locks after a minute),
+/// so its face buttons shift too, Y and A harder, B and Z easier, besides its paddle.
 pub fn shift_for(button: Button) -> Option<ShiftDirection> {
     match button {
-        Button::ShiftUpRight | Button::ShiftDownRight | Button::PaddleRight | Button::Plus => Some(ShiftDirection::Up),
-        Button::ShiftUpLeft | Button::ShiftDownLeft | Button::PaddleLeft | Button::Minus => Some(ShiftDirection::Down),
+        Button::ShiftUpRight | Button::ShiftDownRight | Button::PaddleRight | Button::Plus | Button::Y | Button::A => {
+            Some(ShiftDirection::Up)
+        }
+        Button::ShiftUpLeft | Button::ShiftDownLeft | Button::PaddleLeft | Button::Minus | Button::B | Button::Z => {
+            Some(ShiftDirection::Down)
+        }
         _ => None,
     }
 }
@@ -461,6 +468,15 @@ mod tests {
     }
 
     #[test]
+    fn the_right_puck_alone_shifts_both_ways() {
+        let right = [Button::ShiftUpRight, Button::Y, Button::A, Button::B, Button::Z];
+        let dirs: Vec<_> = right.iter().filter_map(|b| shift_for(*b)).collect();
+        assert!(dirs.contains(&ShiftDirection::Up) && dirs.contains(&ShiftDirection::Down));
+        assert_eq!(shift_for(Button::B), Some(ShiftDirection::Down));
+        assert_eq!(shift_for(Button::Y), Some(ShiftDirection::Up));
+    }
+
+    #[test]
     fn pucks_pair_up_left_and_right() {
         assert_eq!(
             ZwiftDeviceType::ClickV2Right.sibling(),
@@ -574,6 +590,6 @@ mod tests {
         assert_eq!(shift_for(Button::Plus), Some(ShiftDirection::Up));
         assert_eq!(shift_for(Button::ShiftUpLeft), Some(ShiftDirection::Down));
         assert_eq!(shift_for(Button::Minus), Some(ShiftDirection::Down));
-        assert_eq!(shift_for(Button::A), None);
+        assert_eq!(shift_for(Button::NavUp), None);
     }
 }
