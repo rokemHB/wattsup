@@ -623,6 +623,10 @@ async function startRide(id: string) {
   show("ride");
 }
 
+/** Buttons that shift harder / easier, which on the Trainer screen add / take watts. */
+const ERG_UP = new Set(["shift_up_right", "shift_down_right", "paddle_right", "plus"]);
+const ERG_DOWN = new Set(["shift_up_left", "shift_down_left", "paddle_left", "minus"]);
+
 /** Controller button actions (see controls.ts), and the last press handled. */
 let buttonMap: Record<string, Action> = loadMapping();
 let lastButtonSeq = -1;
@@ -641,6 +645,13 @@ function handleButtons(snap: EngineSnapshot) {
     lastButtonSeq = p.seq;
     const last = document.getElementById("controls-last");
     if (last) last.textContent = p.button;
+    if (screen === "trainer") {
+      // ERG ignores gears: the shift buttons (and buttons set to shift) change the watts.
+      const action = buttonMap[p.button];
+      if (ERG_UP.has(p.button) || action === "shift_up") trainerScreen.adjust(1);
+      else if (ERG_DOWN.has(p.button) || action === "shift_down") trainerScreen.adjust(-1);
+      continue;
+    }
     if (screen !== "ride") continue;
     switch (buttonMap[p.button] ?? "none") {
       case "shift_up":

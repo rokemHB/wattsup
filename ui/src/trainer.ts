@@ -59,8 +59,8 @@ export class TrainerScreen {
       this.renderSetup();
     };
     $("trainer-free").onclick = () => this.beginFree(Math.max(0, Number($<HTMLInputElement>("trainer-free-watts").value) || 0));
-    $("trainer-minus").onclick = () => this.bias(-5);
-    $("trainer-plus").onclick = () => this.bias(5);
+    $("trainer-minus").onclick = () => this.adjust(-1);
+    $("trainer-plus").onclick = () => this.adjust(1);
     $("trainer-skip").onclick = () => api.skipWorkoutStep().catch(console.error);
     $("trainer-end").onclick = () => this.finish();
     $("trainer-done-ok").onclick = () => this.showSetup();
@@ -74,11 +74,23 @@ export class TrainerScreen {
     if (this.phase === "setup") this.showSetup();
   }
 
+  /** Watts one + or − changes: 10 on a free target, 5 on a workout's steps. */
+  private get step() {
+    return this.free ? 10 : 5;
+  }
+
+  /** One + (1) or − (−1): from the keyboard, the buttons or a controller. True when live. */
+  adjust(dir: 1 | -1): boolean {
+    if (this.phase !== "live") return false;
+    this.bias(dir * this.step);
+    return true;
+  }
+
   /** Keyboard: + / − change the watts, S skips a step. True when handled. */
   key(k: string): boolean {
     if (this.phase !== "live") return false;
-    if (k === "+" || k === "=" || k === "ArrowUp") this.bias(5);
-    else if (k === "-" || k === "ArrowDown") this.bias(-5);
+    if (k === "+" || k === "=" || k === "ArrowUp") this.adjust(1);
+    else if (k === "-" || k === "ArrowDown") this.adjust(-1);
     else if (k === "s" || k === "S") api.skipWorkoutStep().catch(console.error);
     else return false;
     return true;
@@ -127,7 +139,9 @@ export class TrainerScreen {
 
   private bias(delta: number) {
     if (this.free) {
-      api.setErgTarget(Math.max(0, this.lastTarget + delta)).catch(console.error);
+      // Counted here at once, so quick presses add up before the engine reports back.
+      this.lastTarget = Math.max(0, this.lastTarget + delta);
+      api.setErgTarget(this.lastTarget).catch(console.error);
       return;
     }
     const current = this.lastBias;
@@ -148,6 +162,8 @@ export class TrainerScreen {
     $("trainer-setup").hidden = view !== "setup";
     $("trainer-live").hidden = view !== "live";
     $("trainer-live").classList.toggle("free", this.free);
+    $("trainer-minus").textContent = `− ${this.step} W`;
+    $("trainer-plus").textContent = `+ ${this.step} W`;
     $("trainer-done").hidden = view !== "done";
   }
 
