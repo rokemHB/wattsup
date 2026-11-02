@@ -19,6 +19,7 @@ import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, save
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 import { type Action, loadMapping, mappingRows } from "./controls";
+import { MenuMusic, musicVolume } from "./music";
 
 type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "trainer" | "ride" | "pause" | "finish";
 
@@ -52,6 +53,9 @@ let rideOpen = false;
 const ridesScreen = new RidesScreen();
 /** This page is the trainer's small window: no world, no scan, the trainer screen only. */
 const compactWindow = api.isCompactWindow();
+/** Music on the menus (music.ts), not while riding and not in the small window. */
+const music = new MenuMusic();
+const MUSIC_SCREENS = new Set<Screen>(["start", "menu", "rider", "settings", "workout", "map", "rides"]);
 
 const trainerScreen = new TrainerScreen({
   start: (w) => startTrainerWorkout(w),
@@ -107,6 +111,8 @@ function show(next: Screen) {
   if (next === "settings" || next === "rider" || next === "workout" || next === "map" || next === "rides") cameFrom = screen === "pause" || screen === "trainer" ? screen : "menu";
   if (next === "rider") draft = { ...profile };
   screen = next;
+  // Settings opened from a paused ride or the trainer stay quiet.
+  music.setPlaying(!compactWindow && MUSIC_SCREENS.has(next) && (next !== "settings" || cameFrom === "menu"));
   for (const s of ["start", "menu", "rider", "settings", "workout", "map", "rides", "trainer", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
   if (next === "map") mapScreen.scheduleDraw();
   if (next === "rides") ridesScreen.open().catch(showError);
@@ -741,6 +747,15 @@ function showFinish(snap: EngineSnapshot) {
 // --- wiring --------------------------------------------------------------------
 
 function wire() {
+  const volume = $<HTMLInputElement>("settings-music");
+  const volumeText = () => ($("settings-music-value").textContent = `${volume.value} %`);
+  volume.value = String(musicVolume());
+  volumeText();
+  volume.oninput = () => {
+    music.setVolume(Number(volume.value));
+    volumeText();
+  };
+  for (const ev of ["pointerdown", "keydown"]) window.addEventListener(ev, () => music.unlock());
   $("controls-mapping").replaceChildren(...mappingRows((m) => (buttonMap = m)));
   wireDebug();
   $("start-go").onclick = () => show("menu");
