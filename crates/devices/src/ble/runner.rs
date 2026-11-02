@@ -15,6 +15,9 @@ use super::ble_err;
 use crate::{ConnectionState, DeviceError, DeviceEvent, DeviceId, DeviceKind, EventSender, Result};
 
 /// What a running device task can use.
+/// A command write slower than this is logged (the device confirms each one).
+const SLOW_COMMAND: Duration = Duration::from_millis(300);
+
 pub(crate) struct Ctx {
     pub id: DeviceId,
     pub name: String,
@@ -189,9 +192,24 @@ async fn session<P: Protocol>(
                 None => return Ok(Some("notification stream ended".into())),
             },
             cmd = commands.recv() => match cmd {
-                Some(cmd) => if let Err(e) = proto.on_command(p, cmd, ctx).await {
-                    ctx.log(format!("command failed: {e}"));
-                },
+                Some(mut cmd) => {
+                    // Each command is a whole target, so only the newest counts: a device slower
+                    // to confirm writes than commands come never works through a backlog of
+                    // stale ones (resistance seconds behind every shift and every climb).
+                    let mut superseded = 0;
+                    while let Ok(newer) = commands.try_recv() {
+                        cmd = newer;
+                        superseded += 1;
+                    }
+                    let started = Instant::now();
+                    if let Err(e) = proto.on_command(p, cmd, ctx).await {
+                        ctx.log(format!("command failed: {e}"));
+                    }
+                    let took = started.elapsed();
+                    if took > SLOW_COMMAND || superseded > 0 {
+                        ctx.log(format!("command written in {} ms ({superseded} older ones skipped)", took.as_millis()));
+                    }
+                }
                 None => return Ok(None),
             },
             _ = link_check.tick() => {
