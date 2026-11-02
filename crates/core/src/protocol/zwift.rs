@@ -316,6 +316,39 @@ pub fn shift_for(button: Button) -> Option<ShiftDirection> {
     }
 }
 
+/// Two reports of one press closer together than this are one press.
+pub const REPEAT_WINDOW_S: f64 = 0.15;
+
+/// Keeps one press one press across a pair of pucks: a Click v2 press can arrive twice, as
+/// a shift bit and an analog paddle in the same frame, or from both pucks (the left one
+/// carries the pair's radio link). Each shifted two gears. Shared by both pucks.
+#[derive(Debug, Default)]
+pub struct PressFilter {
+    buttons: std::collections::HashMap<Button, f64>,
+    shifts: [Option<f64>; 2],
+}
+
+impl PressFilter {
+    /// A newly pressed `button` at `now_s` (any steady clock): whether it is a press of its
+    /// own (not a repeat of one just seen), and the shift it makes, at most one a direction.
+    pub fn press(&mut self, button: Button, now_s: f64) -> (bool, Option<ShiftDirection>) {
+        let recent = |t: Option<f64>| t.is_some_and(|t| now_s - t < REPEAT_WINDOW_S);
+        if recent(self.buttons.get(&button).copied()) {
+            return (false, None);
+        }
+        self.buttons.insert(button, now_s);
+        let shift = shift_for(button).filter(|dir| {
+            let slot = &mut self.shifts[matches!(dir, ShiftDirection::Down) as usize];
+            let again = recent(*slot);
+            if !again {
+                *slot = Some(now_s);
+            }
+            !again
+        });
+        (true, shift)
+    }
+}
+
 /// Turns the stream of "buttons held" frames into one event per new press.
 ///
 /// Controllers repeat the same frame while a button is held and send an
@@ -619,5 +652,19 @@ mod tests {
         assert_eq!(shift_for(Button::ShiftUpLeft), Some(ShiftDirection::Down));
         assert_eq!(shift_for(Button::Minus), Some(ShiftDirection::Down));
         assert_eq!(shift_for(Button::NavUp), None);
+    }
+
+    #[test]
+    fn one_press_shifts_once() {
+        let mut f = PressFilter::default();
+        // Shift bit and analog paddle in one frame: one shift.
+        assert_eq!(f.press(Button::ShiftUpRight, 0.0), (true, Some(ShiftDirection::Up)));
+        assert_eq!(f.press(Button::PaddleRight, 0.0), (true, None));
+        // The same press relayed by the other puck 40 ms later: dropped.
+        assert_eq!(f.press(Button::ShiftUpRight, 0.04), (false, None));
+        // The next real press, and the other direction straight away.
+        assert_eq!(f.press(Button::ShiftUpRight, 0.4), (true, Some(ShiftDirection::Up)));
+        assert_eq!(f.press(Button::Z, 0.41), (true, None));
+        assert_eq!(f.press(Button::ShiftDownLeft, 0.42), (true, Some(ShiftDirection::Down)));
     }
 }

@@ -3,8 +3,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use btleplug::api::{Characteristic, Peripheral as _, ValueNotification};
 use btleplug::platform::Peripheral;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use wattsup_core::protocol::zwift::{self as zp, ButtonEdges, ZwiftDeviceType, ZwiftMessage};
+
+use wattsup_core::protocol::zwift::{self as zp, ButtonEdges, PressFilter, ZwiftDeviceType, ZwiftMessage};
 
 use super::runner::{require, write, Ctx, Flow, Protocol, TaskHandle};
 use super::{ble_err, BleConfig};
@@ -30,6 +32,8 @@ impl BleZwiftController {
         events: EventSender,
         config: BleConfig,
     ) -> Self {
+        let presses = Arc::new(Mutex::new(PressFilter::default()));
+        let epoch = std::time::Instant::now();
         let spawn = |p: Peripheral, device_type: Option<ZwiftDeviceType>, report_status: bool, events: EventSender| {
             let ctx = Ctx {
                 id: id.clone(),
@@ -50,6 +54,8 @@ impl BleZwiftController {
                     .or(Some(Duration::from_secs_f64(zp::RECONNECT_AFTER_S))),
                 sync_rx: None,
                 last_button: std::time::Instant::now(),
+                presses: presses.clone(),
+                epoch,
             };
             TaskHandle::spawn(p, proto, ctx)
         };
@@ -94,6 +100,9 @@ struct Zap {
     /// When a button last changed (or the session began): a left Click v2 puck is restarted
     /// after [`zp::LEFT_RESET_IDLE_S`] of this, while the rider is not pressing.
     last_button: std::time::Instant,
+    /// Shared by both pucks of a pair, so one press makes one event.
+    presses: Arc<Mutex<PressFilter>>,
+    epoch: std::time::Instant,
 }
 
 impl Zap {
@@ -153,8 +162,21 @@ impl Protocol for Zap {
                     self.last_button = std::time::Instant::now();
                 }
                 for button in changed {
+                    let now = self.epoch.elapsed().as_secs_f64();
+                    let (fresh, shift) = self.presses.lock().unwrap().press(button, now);
+                    let side = ctx.part.unwrap_or("");
+                    if !fresh {
+                        ctx.log(format!(
+                            "{button:?} again from the {side} puck: the same press, ignored"
+                        ));
+                        continue;
+                    }
+                    ctx.log(format!(
+                        "{button:?} pressed ({side} puck){}",
+                        if shift.is_some() { ": shift" } else { "" }
+                    ));
                     ctx.emit(DeviceEvent::Button(button));
-                    if let Some(dir) = zp::shift_for(button) {
+                    if let Some(dir) = shift {
                         ctx.emit(DeviceEvent::Shift(dir));
                     }
                 }
