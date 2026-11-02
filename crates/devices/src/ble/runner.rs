@@ -24,6 +24,9 @@ pub(crate) struct Ctx {
     /// Report connection state changes. Off for a device that rides along with another
     /// (the second puck of a Click v2), whose short drop-outs are not the user's business.
     pub report_status: bool,
+    /// Which part of a several-part device this is ("left", "right"): its states are also
+    /// reported as `PartStatus`, so the UI can show each puck of a pair.
+    pub part: Option<&'static str>,
 }
 
 impl Ctx {
@@ -31,6 +34,14 @@ impl Ctx {
         let _ = self.events.send(event);
     }
     pub fn status(&self, state: ConnectionState) {
+        if let Some(part) = self.part {
+            self.emit(DeviceEvent::PartStatus {
+                kind: self.kind,
+                id: self.id.clone(),
+                part,
+                state: state.clone(),
+            });
+        }
         if !self.report_status {
             return;
         }

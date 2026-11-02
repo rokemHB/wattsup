@@ -81,6 +81,20 @@ pub enum DeviceEvent {
         name: String,
         state: ConnectionState,
     },
+    /// One part of a device made of several (a Click v2's left or right puck): its own
+    /// connection state, `part` "left" or "right".
+    PartStatus {
+        kind: DeviceKind,
+        id: DeviceId,
+        part: &'static str,
+        state: ConnectionState,
+    },
+    /// The battery of one such part.
+    PartBattery {
+        kind: DeviceKind,
+        part: &'static str,
+        percent: u8,
+    },
     Trainer(TrainerSample),
     HeartRate {
         bpm: f64,

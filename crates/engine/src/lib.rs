@@ -62,6 +62,17 @@ pub struct DeviceStatus {
     pub name: Option<String>,
     pub state: ConnectionState,
     pub battery_percent: Option<u8>,
+    /// The parts of a device made of several, each with its own state (a Click v2's
+    /// "left" and "right" puck); empty otherwise.
+    #[serde(default)]
+    pub parts: Vec<PartStatus>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartStatus {
+    pub part: String,
+    pub state: ConnectionState,
+    pub battery_percent: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -203,6 +214,7 @@ impl Engine {
                         name: None,
                         state: ConnectionState::Disconnected,
                         battery_percent: None,
+                        parts: vec![],
                     },
                 )
             })
@@ -587,6 +599,7 @@ impl Inner {
         if id.is_some() || matches!(state, ConnectionState::Disconnected) {
             if s.id != id {
                 s.battery_percent = None;
+                s.parts.clear();
             }
             s.id = id;
         }
@@ -742,6 +755,35 @@ async fn event_loop(inner: Arc<Inner>, mut rx: EventReceiver) {
                         inner.session.lock().unwrap().set_trainer_offline(offline);
                     }
                     inner.set_status(kind, Some(id), Some(name), state);
+                }
+            }
+            DeviceEvent::PartStatus { kind, id, part, state } => {
+                let mut statuses = inner.statuses.lock().unwrap();
+                let s = statuses.get_mut(&kind).expect("kind");
+                if s.id.as_ref() == Some(&id) {
+                    match s.parts.iter_mut().find(|p| p.part == part) {
+                        Some(p) => p.state = state,
+                        None => {
+                            s.parts.push(PartStatus {
+                                part: part.to_string(),
+                                state,
+                                battery_percent: None,
+                            });
+                            s.parts.sort_by(|a, b| a.part.cmp(&b.part));
+                        }
+                    }
+                }
+            }
+            DeviceEvent::PartBattery { kind, part, percent } => {
+                let mut statuses = inner.statuses.lock().unwrap();
+                if let Some(p) = statuses
+                    .get_mut(&kind)
+                    .expect("kind")
+                    .parts
+                    .iter_mut()
+                    .find(|p| p.part == part)
+                {
+                    p.battery_percent = Some(percent);
                 }
             }
             DeviceEvent::Trainer(sample) => inner.session.lock().unwrap().on_trainer_sample(sample),

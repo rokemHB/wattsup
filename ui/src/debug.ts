@@ -3,7 +3,7 @@
 import { api } from "./api";
 import { $, el } from "./dom";
 import { describeCommand, distance, duration, KIND_LABEL, num, stateLabel } from "./format";
-import type { ControllerButton, DeviceKind, DeviceStatus, DiscoveredDevice, EngineSnapshot, ScanResult } from "./types";
+import type { ConnectionState, ControllerButton, DeviceKind, DeviceStatus, DiscoveredDevice, EngineSnapshot, ScanResult } from "./types";
 
 const COG_TEETH = 14;
 
@@ -156,28 +156,58 @@ function renderSlots(devices: DeviceStatus[]) {
   if (json === lastSlotsJson) return;
   lastSlotsJson = json;
   $("device-slots").replaceChildren(
-    ...devices.map((d) => {
-      const st = stateLabel(d.state);
-      const battery = d.battery_percent === null ? "" : ` · battery ${d.battery_percent} %`;
-      const action =
+    ...devices.flatMap((d) => {
+      const action = () =>
         d.state.state === "disconnected"
           ? el("span")
           : el("button", { className: "small", textContent: "Disconnect", onclick: () => api.disconnect(d.kind).catch(showError) });
-      return el(
-        "div",
-        { className: "slot" },
-        el("span", { className: "role" }, KIND_LABEL[d.kind]),
-        el("span", { className: "name" }, (d.name ?? d.id ?? "–") + battery),
-        el("span", { className: `state tone-${st.tone}` }, st.label),
-        action,
+      const slot = (role: string, name: string, state: ConnectionState, battery: number | null, button: HTMLElement) => {
+        const st = stateLabel(state);
+        return el(
+          "div",
+          { className: "slot" },
+          el("span", { className: "role" }, role),
+          el("span", { className: "name" }, name + (battery === null ? "" : ` · battery ${battery} %`)),
+          el("span", { className: `state tone-${st.tone}` }, st.label),
+          button,
+        );
+      };
+      const parts = puckParts(d);
+      if (!parts.length) return [slot(KIND_LABEL[d.kind], d.name ?? d.id ?? "–", d.state, d.battery_percent, action())];
+      // A pair of pucks: one row each, so you can see which one is connected.
+      return parts.map((p, i) =>
+        slot(
+          `${KIND_LABEL[d.kind]} · ${p.part === "left" ? "left" : "right"} puck`,
+          p.found ? (d.name ?? "–") : "not found: press one of its buttons, then connect again",
+          p.state,
+          p.battery_percent,
+          i === 0 ? action() : el("span"),
+        ),
       );
     }),
   );
   const controller = devices.find((d) => d.kind === "controller");
   $("sim-click-row").hidden = !(controller?.id?.startsWith("sim:") && controller.state.state === "connected");
   // The menu shows a one-line summary.
-  const connected = devices.filter((d) => d.state.state === "connected").map((d) => KIND_LABEL[d.kind].toLowerCase());
+  const connected = devices
+    .filter((d) => d.state.state === "connected")
+    .map((d) => {
+      const pucks = puckParts(d).filter((p) => p.state.state === "connected");
+      const label = KIND_LABEL[d.kind].toLowerCase();
+      return pucks.length ? `${label} (${pucks.map((p) => p.part).join(" + ")} puck)` : label;
+    });
   $("menu-devices").textContent = connected.length ? `Connected: ${connected.join(", ")}` : "No devices connected";
+}
+
+/** The pucks of a pair, both of them, a puck that never answered marked not found. */
+function puckParts(d: DeviceStatus): { part: string; state: ConnectionState; battery_percent: number | null; found: boolean }[] {
+  const parts = (d.parts ?? []).map((p) => ({ ...p, found: true }));
+  if (parts.length === 1) {
+    const other = parts[0].part === "left" ? "right" : "left";
+    parts.push({ part: other, state: { state: "disconnected" }, battery_percent: null, found: false });
+    parts.sort((a, b) => a.part.localeCompare(b.part));
+  }
+  return parts;
 }
 
 function renderLog(snap: EngineSnapshot) {

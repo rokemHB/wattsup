@@ -390,6 +390,10 @@ the face and nav buttons are UI actions the rider assigns in Settings (`controls
 `EngineSnapshot.buttons`, a numbered list so several windows can read it): by default the
 right puck, which needs no unlock, shifts both ways (paddle harder, Z easier) and carries
 the turns (Y, A) and auto-shift (B).
+Each puck of a pair reports its own state (`Ctx.part`, `DeviceEvent::PartStatus`/`PartBattery`,
+`DeviceStatus.parts`): Devices shows a row per puck, the missing one as "not found".
+Menu music (`music.ts`) is generated with Web Audio (no files): it plays on the menu
+screens, fades out for a ride, volume in Settings (`wattsup.musicVolume`).
 Island tunnels longer than 80 m with under 8 m of terrain above them in the 45 m grid are
 drawn as open road (`openTunnels` in `streaming.ts`): the Formentor lighthouse tunnel goes
 through a blade of rock the grid flattens, and its tube stood out of the hillside. Virtual gearing uses FTMS SIM mode with a

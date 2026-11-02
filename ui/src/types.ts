@@ -110,6 +110,14 @@ export interface DeviceStatus {
   name: string | null;
   state: ConnectionState;
   battery_percent: number | null;
+  /** A Click v2's "left" and "right" puck, each with its own state; empty otherwise. */
+  parts?: PartStatus[];
+}
+
+export interface PartStatus {
+  part: string;
+  state: ConnectionState;
+  battery_percent: number | null;
 }
 
 export interface LogLine {

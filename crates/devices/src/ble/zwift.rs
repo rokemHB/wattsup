@@ -38,6 +38,9 @@ impl BleZwiftController {
                 events,
                 log_raw: config.log_raw,
                 report_status,
+                part: device_type
+                    .filter(|d| d.sibling().is_some())
+                    .map(|d| if d.is_left() { "left" } else { "right" }),
             };
             let proto = Zap {
                 device_type,
@@ -156,10 +159,19 @@ impl Protocol for Zap {
                     }
                 }
             }
-            ZwiftMessage::Battery(percent) => ctx.emit(DeviceEvent::Battery {
-                kind: DeviceKind::Controller,
-                percent,
-            }),
+            ZwiftMessage::Battery(percent) => {
+                ctx.emit(DeviceEvent::Battery {
+                    kind: DeviceKind::Controller,
+                    percent,
+                });
+                if let Some(part) = ctx.part {
+                    ctx.emit(DeviceEvent::PartBattery {
+                        kind: DeviceKind::Controller,
+                        part,
+                        percent,
+                    });
+                }
+            }
             ZwiftMessage::Handshake { variant, .. } => ctx.log(format!("handshake answered ({variant:?})")),
             ZwiftMessage::Challenge => {
                 // A locked puck's unlock challenge: acknowledged, which keeps it going.

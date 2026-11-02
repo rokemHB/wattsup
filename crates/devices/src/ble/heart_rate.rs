@@ -26,6 +26,7 @@ impl BleHeartRate {
             events,
             log_raw: config.log_raw,
             report_status: true,
+            part: None,
         };
         let handle = TaskHandle::spawn(p, Hrs, ctx);
         Self { id, name, handle }
