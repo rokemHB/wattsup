@@ -145,6 +145,8 @@ mod tests {
                 power_w: Some(200.0),
                 cadence_rpm: None,
                 heart_rate_bpm: None,
+                gear: None,
+                sent_grade_pct: None,
                 xz: None,
             }],
         }

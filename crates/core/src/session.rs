@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
-use crate::gearing::{implied_ratio, GearSet, Gearbox, ShiftDirection};
+use crate::gearing::{implied_ratio, wheel_speed_mps, GearSet, Gearbox, ShiftDirection};
 use crate::physics::{kmh_to_mps, mps_to_kmh, step_speed, RiderParams};
 use crate::protocol::ftms::ControlRequest;
 use crate::ramp::{RampResult, RampTracker};
@@ -241,6 +241,12 @@ pub struct RideSample {
     /// Where on the world the sample was taken (route x, z), for exports with positions.
     #[serde(default)]
     pub xz: Option<[f64; 2]>,
+    /// Virtual gear (1 = easiest) and the grade last sent to the trainer, to see afterwards
+    /// how a shift or a climb reached the trainer.
+    #[serde(default)]
+    pub gear: Option<usize>,
+    #[serde(default)]
+    pub sent_grade_pct: Option<f64>,
 }
 
 /// A finished (or abandoned) ride as the session knows it; the engine adds the clock time and stores it.
@@ -262,6 +268,8 @@ const NP_WINDOW_S: usize = 30;
 const STANDSTILL_MPS: f64 = 0.5;
 /// Seconds the plane takes to close most of the gap to a new cruising speed.
 const FLIGHT_LAG_S: f64 = 3.0;
+/// Seconds a geared bike takes to close most of the gap to its cadence's speed.
+const GEARED_LAG_S: f64 = 0.8;
 /// Cadence that counts as pedalling.
 const PEDALLING_RPM: f64 = 20.0;
 /// Power that counts as pedalling when the trainer reports no cadence.
@@ -509,6 +517,11 @@ impl RideSession {
                     let (x, _, z) = r.position_at(self.distance_m);
                     [x, z]
                 }),
+                gear: self.virtual_gearing.then(|| self.gearbox.gear_number()),
+                sent_grade_pct: match self.last_command {
+                    Some(TrainerCommand::Simulation(t)) => Some(t.grade_pct),
+                    _ => None,
+                },
             });
         }
     }
@@ -823,6 +836,17 @@ impl RideSession {
         workout.steps.len() - 1
     }
 
+    /// The speed the cadence turns the virtual gear at, when virtual gears drive the trainer
+    /// and the rider is pedalling with a cadence the trainer reports.
+    fn geared_speed(&self, now: f64) -> Option<f64> {
+        if !self.virtual_gearing || self.mode != ControlMode::Sim || self.trainer_offline {
+            return None;
+        }
+        let cadence = self.cadence.fresh(now, self.config.data_timeout_s)?;
+        (cadence >= PEDALLING_RPM)
+            .then(|| wheel_speed_mps(cadence, self.gearbox.ratio(), self.config.rider.wheel_circumference_m))
+    }
+
     /// The rider is turning the pedals: fresh cadence, or power from a trainer that
     /// reports none. A hand on the flywheel (a few watts, no cadence) does not count.
     fn pedalling(&self, now: f64) -> bool {
@@ -863,13 +887,19 @@ impl RideSession {
             }
             self.distance_m += self.virtual_speed_mps * dt;
         } else if self.virtual_speed_mps >= STANDSTILL_MPS || pedalling {
-            self.virtual_speed_mps = step_speed(
-                &self.config.rider,
-                self.virtual_speed_mps,
-                power,
-                self.road_grade_pct,
-                dt,
-            );
+            let rider = &self.config.rider;
+            let v = self.virtual_speed_mps;
+            self.virtual_speed_mps = match self.geared_speed(now) {
+                // Virtual gears: the trainer resists as the road would at the speed the cadence
+                // and gear make, so the bike goes that speed, as a chain drives a wheel. Speed
+                // from power and mass alone trailed it by seconds: a slow start, every shift
+                // felt late. The chain only pushes: never slower than coasting.
+                Some(geared) => {
+                    let coasting = step_speed(rider, v, 0.0, self.road_grade_pct, dt);
+                    (v + (geared - v) * (dt / GEARED_LAG_S).min(1.0)).max(coasting)
+                }
+                None => step_speed(rider, v, power, self.road_grade_pct, dt),
+            };
             self.distance_m += self.virtual_speed_mps * dt;
         } else {
             // A foot on the ground: a standing bike waits for the first pedal stroke
@@ -1108,7 +1138,9 @@ mod tests {
 
     #[test]
     fn virtual_bike_moves_with_power_and_stops_without_data() {
+        // Power and mass move the bike when no virtual gear sets its speed (a real drivetrain).
         let mut s = RideSession::default();
+        s.set_virtual_gearing(false);
         for _ in 0..(60 * 4) {
             riding(&mut s, 200.0, 90.0);
             s.tick(0.25);
@@ -1131,9 +1163,49 @@ mod tests {
     }
 
     #[test]
+    fn virtual_gears_set_the_speed_from_cadence_at_once() {
+        let mut s = RideSession::default();
+        let speed = |s: &RideSession| kmh_to_mps(s.snapshot().virtual_speed_kmh);
+        let geared = |s: &RideSession| wheel_speed_mps(90.0, s.gearbox.ratio(), 2.105);
+        // From a standstill to the gear's speed within a few seconds, not tens of them.
+        for _ in 0..(3 * 4) {
+            riding(&mut s, 150.0, 90.0);
+            s.tick(0.25);
+        }
+        assert!(
+            (speed(&s) - geared(&s)).abs() < 0.1 * geared(&s),
+            "{} vs {}",
+            speed(&s),
+            geared(&s)
+        );
+        // A shift up at the same cadence: faster within about a second.
+        s.shift(ShiftDirection::Up);
+        for _ in 0..(2 * 4) {
+            riding(&mut s, 150.0, 90.0);
+            s.tick(0.25);
+        }
+        assert!(
+            (speed(&s) - geared(&s)).abs() < 0.1 * geared(&s),
+            "{} vs {}",
+            speed(&s),
+            geared(&s)
+        );
+        // Spinning slowly down a steep hill: the bike coasts faster than the chain turns.
+        s.set_road_grade(-8.0);
+        for _ in 0..(20 * 4) {
+            riding(&mut s, 30.0, 40.0);
+            s.tick(0.25);
+        }
+        let slow_chain = wheel_speed_mps(40.0, s.gearbox.ratio(), 2.105);
+        assert!(speed(&s) > slow_chain * 1.5, "{} vs {}", speed(&s), slow_chain);
+    }
+
+    #[test]
     fn climbing_road_slows_the_bike() {
         let mut flat = RideSession::default();
         let mut hill = RideSession::default();
+        flat.set_virtual_gearing(false);
+        hill.set_virtual_gearing(false);
         hill.set_road_grade(6.0);
         for _ in 0..(90 * 4) {
             riding(&mut flat, 220.0, 85.0);

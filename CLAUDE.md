@@ -338,6 +338,14 @@ writes `wattsup_engine::tcx::to_tcx` into the Downloads folder, positions from
 - A standing bike waits for the first pedal stroke (`pedalling()` in `session.rs`:
   cadence ≥ 20 rpm, or ≥ 20 W when the trainer sends no cadence). Without it the
   bike rolled off every downhill start by itself, trainer or not.
+- With virtual gears in SIM mode the bike's speed follows cadence × gear (`geared_speed` in
+  `session.rs`, ~0.8 s lag, never below coasting): the trainer resists for that speed, and
+  speed from power and mass trailed it by seconds (a slow start, late shifts; Robin's first
+  ride on the real KICKR, 2026-11-02). Power physics still moves the bike otherwise.
+- BLE commands are coalesced (`runner.rs`): only the newest is written, and slow writes are
+  logged. A FIFO of SIM grades can fall behind a trainer that confirms writes slowly.
+- One Click press is one event (`PressFilter`, shared by both pucks): presses shifted two
+  gears. Each press is logged with its puck. Ride samples carry `gear` and `sent_grade_pct`.
 - Roundabouts: `build_network.py` fits a circle to every OSM `junction=roundabout`
   ring (radius 6-80 m), snaps its nodes onto it and samples its pieces as arcs, at
   least 48 points round, heights a straight ramp between the junctions; each piece

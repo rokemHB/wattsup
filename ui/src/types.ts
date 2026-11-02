@@ -78,6 +78,9 @@ export interface RideSample {
   heart_rate_bpm: number | null;
   /** Route x, z of the sample (null in rides stored before positions were kept). */
   xz: [number, number] | null;
+  /** Virtual gear and the grade sent to the trainer (absent in older rides). */
+  gear?: number | null;
+  sent_grade_pct?: number | null;
 }
 
 /** A stored ride as the list shows it (crates/engine/src/rides.rs). */

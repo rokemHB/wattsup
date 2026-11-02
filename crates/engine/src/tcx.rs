@@ -207,6 +207,8 @@ mod tests {
             power_w: Some(201.4),
             cadence_rpm: Some(88.0),
             heart_rate_bpm: Some(140.0),
+            gear: None,
+            sent_grade_pct: None,
             xz: Some([100.0 * t, -50.0 * t]),
         };
         let record = RideRecord {
