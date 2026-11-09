@@ -66,7 +66,13 @@ pub struct RouteInfo {
     /// Flown by the electric plane, not ridden.
     #[serde(default)]
     pub flight: bool,
+    /// Elevations at [`PROFILE_POINTS`] even steps from start to end, for a route card.
+    #[serde(default)]
+    pub profile: Vec<f32>,
 }
+
+/// Points in [`RouteInfo::profile`].
+pub const PROFILE_POINTS: usize = 48;
 
 /// A hand-placed control point: ground position and elevation, in metres.
 #[derive(Clone, Copy, Debug)]
@@ -161,6 +167,9 @@ impl Route {
             closed: self.closed,
             world: self.world.clone(),
             flight: self.flight,
+            profile: (0..PROFILE_POINTS)
+                .map(|i| self.elevation_at(self.length_m() * i as f64 / (PROFILE_POINTS - 1) as f64) as f32)
+                .collect(),
         }
     }
 

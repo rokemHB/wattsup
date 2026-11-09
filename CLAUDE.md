@@ -253,6 +253,17 @@ result too. The finish screen and the Trainer's done view show it and save the F
 `wattsup.api.startWorkout({ name, ramp: true, steps })` and a last step the simulator
 cannot hold. It saves the FTP in the dev app's storage: set it back after.
 
+## Long rides and the main menu
+
+The ride in progress is filed every 60 s and when the window closes (`store_current` in
+`src-tauri/src/main.rs`, one id per ride, so the end-of-ride save replaces the same file);
+ride files and the index are written beside and renamed over. While riding (ride, pause,
+finish and trainer screens) `keep_awake` holds a Wayland idle inhibitor on the window
+(`src-tauri/src/idle.rs`; WebKit's wake lock is refused): Omarchy's screensaver and lock
+honour it (`hyprctl clients` shows `inhibitingIdle`). The main menu (`menu.ts`) has device
+tiles across the top (live watts, bpm, both pucks, battery), the rider's FTP and W/kg, the
+last seven days and an elevation profile per route card (`RouteInfo.profile`, 48 points).
+
 ## Route planner (map screen)
 
 `ui/src/map.ts` is the map screen (view, click menu, waypoints, side panel,

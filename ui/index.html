@@ -25,16 +25,17 @@
       <div class="menu-left">
         <div class="rider-card" id="menu-rider-card">
           <span class="avatar" id="menu-avatar">🚴</span>
-          <div><b id="menu-name">Rider</b><span class="hint" id="menu-devices">No devices connected</span></div>
+          <div><b id="menu-name">Rider</b><span class="hint" id="menu-rider-stats"></span></div>
         </div>
         <nav class="menu-nav">
-          <button id="menu-ride" class="primary">Ride</button>
-          <button id="menu-trainer">Trainer</button>
+          <button id="menu-ride" class="primary"><span>Ride</span><small id="menu-ride-route"></small></button>
+          <button id="menu-trainer">Trainer · ERG</button>
           <button id="menu-rides">Rides</button>
           <button id="menu-rider">Rider</button>
           <button id="menu-settings">Settings</button>
-          <button id="menu-quit">Quit</button>
         </nav>
+        <div id="menu-week" class="week-card"></div>
+        <button id="menu-quit" class="quiet">Quit WattsUp</button>
       </div>
       <div class="menu-right">
         <h2>Routes</h2>
@@ -43,6 +44,11 @@
         <div id="workout-list" class="route-list"></div>
         <button id="menu-new-workout" class="small">New workout</button>
       </div>
+      <!-- Last in the page, first on screen: the keyboard starts at Ride. -->
+      <header class="menu-top">
+        <div class="brand">Watts<b>Up</b></div>
+        <div id="menu-tiles" class="device-tiles"></div>
+      </header>
     </section>
 
     <!-- Trainer: ERG workouts without the 3D world, for training beside a video -->

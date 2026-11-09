@@ -299,6 +299,8 @@ export interface RouteInfo {
   closed: boolean;
   world: string | null;
   flight?: boolean;
+  /** Elevations at even steps along the route, for its card. */
+  profile?: number[];
 }
 
 export interface StartupInfo {

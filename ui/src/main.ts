@@ -20,6 +20,7 @@ import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } fr
 import { World } from "./world/world";
 import { type Action, loadMapping, mappingRows } from "./controls";
 import { MenuMusic, musicVolume } from "./music";
+import { buildDeviceTiles, profileSvg, renderDeviceTiles, renderWeek } from "./menu";
 
 type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "trainer" | "ride" | "pause" | "finish";
 
@@ -111,6 +112,8 @@ function show(next: Screen) {
   if (next === "settings" || next === "rider" || next === "workout" || next === "map" || next === "rides") cameFrom = screen === "pause" || screen === "trainer" ? screen : "menu";
   if (next === "rider") draft = { ...profile };
   screen = next;
+  // Riding gives the desktop no input: keep its screensaver and lock away meanwhile.
+  api.keepAwake(next === "ride" || next === "pause" || next === "finish" || next === "trainer").catch(console.error);
   // Settings opened from a paused ride or the trainer stay quiet.
   music.setPlaying(!compactWindow && MUSIC_SCREENS.has(next) && (next !== "settings" || cameFrom === "menu"));
   for (const s of ["start", "menu", "rider", "settings", "workout", "map", "rides", "trainer", "pause", "finish"]) $(`screen-${s}`).hidden = s !== next;
@@ -129,7 +132,10 @@ function show(next: Screen) {
     buildWorld().catch(showError);
   }
   if (next === "pause") $("pause-end-workout").hidden = !activeWorkout;
-  if (next === "menu") fillWorkoutList();
+  if (next === "menu") {
+    fillWorkoutList();
+    fillMenuDashboard();
+  }
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
   if (next === "rider") fillRiderScreen();
   world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? (startupCamera ?? remembered(CAMERA_KEY) ?? "chase") : "orbit");
@@ -219,6 +225,18 @@ function fillWorkoutList() {
     ...workouts.map((w, i) => card(w, () => openWorkout(w, i), true)),
     ...PRESETS.map((p) => card(fromPreset(p, ftp), () => openWorkout(fromPreset(p, ftp), -1), false)),
   );
+}
+
+/** The menu's rider numbers, chosen route, device tiles and the last seven days. */
+function fillMenuDashboard() {
+  const kg = profile.weightKg;
+  $("menu-rider-stats").textContent = `FTP ${ftp} W · ${kg} kg · ${(ftp / kg).toFixed(1)} W/kg`;
+  $("menu-ride-route").textContent = selectedRoute === NETWORK_WORLD ? "Mallorca, free ride" : (routes.find((r) => r.id === selectedRoute)?.name ?? "");
+  if (latest) renderDeviceTiles(latest);
+  api
+    .rides()
+    .then((rides) => renderWeek($("menu-week"), rides))
+    .catch(console.error);
 }
 
 function openWorkout(w: Workout, index: number) {
@@ -534,18 +552,19 @@ function turnKey(dir: -1 | 1) {
 // --- routes and the world -----------------------------------------------------
 
 function fillRouteList() {
+  const tag = (text: string, kind = "") => el("span", { className: `tag ${kind}` }, text);
   const island = el(
     "div",
     { className: "route-card", tabIndex: 0 },
     el("b", {}, "Mallorca · Serra de Tramuntana"),
     el("button", { className: "primary", textContent: "Map" }),
-    el("span", { className: "meta" }, "plan a route on the map or ride free · every road of the range, the Ma-10 included"),
+    el("span", { className: "meta" }, tag("Open world", "world"), "plan a route or ride free on every road of the range"),
   );
   island.onclick = () => openMap().catch(showError);
   const plans = loadPlans()
     .filter((p) => p.world === NETWORK_WORLD)
     .map((p) => {
-      const card = el("div", { className: "route-card", tabIndex: 0 }, el("b", {}, p.name), el("button", { className: "primary", textContent: "Map" }), el("span", { className: "meta" }, `${(p.length_m / 1000).toFixed(1)} km · planned on the map`));
+      const card = el("div", { className: "route-card", tabIndex: 0 }, el("b", {}, p.name), el("button", { className: "primary", textContent: "Map" }), el("span", { className: "meta" }, tag("Planned"), `${(p.length_m / 1000).toFixed(1)} km`));
       card.onclick = () => openMap(p).catch(showError);
       return card;
     });
@@ -554,12 +573,15 @@ function fillRouteList() {
     ...plans,
     ...routes.map((r) => {
       const km = (r.length_m / 1000).toFixed(1);
+      // What kind of ride it is, at a glance: loops never end (the pick for a long session).
+      const kind = r.flight ? tag("Plane", "plane") : r.closed ? tag("Loop · no end", "loop") : tag(r.climb_m > 300 ? "Climb" : "A → B", "climb");
       const card = el(
         "div",
-        { className: `route-card${r.id === selectedRoute ? " selected" : ""}`, tabIndex: 0 },
+        { className: `route-card with-profile${r.id === selectedRoute ? " selected" : ""}`, tabIndex: 0 },
         el("b", {}, r.name),
-        el("button", { className: "primary", textContent: "Ride" }),
-        el("span", { className: "meta" }, r.flight ? `${km} km · electric plane over the Serra de Tramuntana · your watts fly it` : `${km} km · ${Math.round(r.climb_m)} m climbing · ${r.closed ? "loop" : "climb"}${r.world ? " · real terrain" : ""}`),
+        profileSvg(r.profile ?? []),
+        el("button", { className: "primary", textContent: r.flight ? "Fly" : "Ride" }),
+        el("span", { className: "meta" }, kind, r.world && !r.flight ? tag("Real terrain") : "", `${km} km · ${Math.round(r.climb_m)} m up`),
       );
       card.onclick = () => startRide(r.id).catch(showError);
       return card;
@@ -681,6 +703,7 @@ function handleButtons(snap: EngineSnapshot) {
 
 function onSnapshot(snap: EngineSnapshot) {
   renderDebug(snap);
+  if (screen === "menu") renderDeviceTiles(snap);
   handleButtons(snap);
   world?.update(snap);
   if (world && snap.route_version !== routeVersion && routeVersion >= 0) {
@@ -758,6 +781,7 @@ function showFinish(snap: EngineSnapshot) {
 // --- wiring --------------------------------------------------------------------
 
 function wire() {
+  buildDeviceTiles($("menu-tiles"), () => show("settings"));
   const volume = $<HTMLInputElement>("settings-music");
   const volumeText = () => ($("settings-music-value").textContent = `${volume.value} %`);
   volume.value = String(musicVolume());

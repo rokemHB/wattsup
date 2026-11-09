@@ -188,15 +188,6 @@ function renderSlots(devices: DeviceStatus[]) {
   );
   const controller = devices.find((d) => d.kind === "controller");
   $("sim-click-row").hidden = !(controller?.id?.startsWith("sim:") && controller.state.state === "connected");
-  // The menu shows a one-line summary.
-  const connected = devices
-    .filter((d) => d.state.state === "connected")
-    .map((d) => {
-      const pucks = puckParts(d).filter((p) => p.state.state === "connected");
-      const label = KIND_LABEL[d.kind].toLowerCase();
-      return pucks.length ? `${label} (${pucks.map((p) => p.part).join(" + ")} puck)` : label;
-    });
-  $("menu-devices").textContent = connected.length ? `Connected: ${connected.join(", ")}` : "No devices connected";
 }
 
 /** The pucks of a pair, both of them, a puck that never answered marked not found. */
