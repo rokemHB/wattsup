@@ -216,6 +216,13 @@
         <h3>Controller buttons</h3>
         <p class="hint">The shift buttons shift by themselves (right harder, left easier). The other buttons do what you pick. A Click v2's right puck keeps working without the Zwift app, so it carries the essentials by default. Last pressed: <b id="controls-last">–</b></p>
         <div id="controls-mapping" class="controls-mapping"></div>
+        <h3>Graphics</h3>
+        <label class="field">Quality <select id="settings-graphics">
+          <option value="high">High: full shadows, trees to 1 km</option>
+          <option value="balanced">Balanced: lighter shadows, trees to 750 m</option>
+          <option value="performance">Performance: no shadows, trees to 550 m, lower resolution</option>
+        </select></label>
+        <p class="hint">Lower levels give more frames a second on a busy or hot laptop. Antialiasing changes with the next ride.</p>
         <h3>Sound</h3>
         <label class="field">Menu music <input id="settings-music" type="range" min="0" max="100" step="5" /> <span id="settings-music-value"></span></label>
         <h3>Trainer</h3>

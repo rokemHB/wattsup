@@ -20,6 +20,7 @@ import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } fr
 import { World } from "./world/world";
 import { type Action, loadMapping, mappingRows } from "./controls";
 import { MenuMusic, musicVolume } from "./music";
+import { type Quality, quality, setQuality } from "./graphics";
 import { buildDeviceTiles, profileSvg, renderDeviceTiles, renderWeek } from "./menu";
 
 type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "trainer" | "ride" | "pause" | "finish";
@@ -812,6 +813,12 @@ function wire() {
     volumeText();
   };
   for (const ev of ["pointerdown", "keydown"]) window.addEventListener(ev, () => music.unlock());
+  const graphics = $<HTMLSelectElement>("settings-graphics");
+  graphics.value = quality();
+  graphics.onchange = () => {
+    setQuality(graphics.value as Quality);
+    world?.applyQuality();
+  };
   $("controls-mapping").replaceChildren(...mappingRows((m) => (buttonMap = m)));
   wireDebug();
   $("start-go").onclick = () => show("menu");

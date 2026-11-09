@@ -1,6 +1,7 @@
 // The live 3D view: renders the static world, moves the rider from engine
 // snapshots and runs the chase camera.
 import * as THREE from "three";
+import { qualityParams } from "../graphics";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
 import type { EngineSnapshot, Route } from "../types";
 import { HALF_WHEELBASE, Rider, TYRE_BULGE } from "./rider";
@@ -123,12 +124,13 @@ export class World {
     this.sampler = new RouteSampler(route);
     this.flight = !!route.flight;
     if (this.flight) this.rider = new Plane();
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    const q = qualityParams();
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q.antialias, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.debug.onShaderError = (gl, _program, vs, fs) => {
       console.warn(`shader error: vertex: ${gl.getShaderInfoLog(vs)} fragment: ${gl.getShaderInfoLog(fs)}`);
     };
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // Neutral, not ACES: ACES pulls every colour toward grey-beige, which turned the
@@ -181,8 +183,8 @@ export class World {
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 30000);
     this.scene.add(new THREE.HemisphereLight("#bcd6f5", "#6f7f5a", 1.25));
     this.sun = new THREE.DirectionalLight("#fff1d6", 3.0);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1536, 1536);
+    this.sun.castShadow = q.shadows;
+    this.sun.shadow.mapSize.set(q.shadowMapSize, q.shadowMapSize);
     const s = 110;
     Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 900 });
     this.sun.shadow.bias = -0.0002;
@@ -403,7 +405,7 @@ export class World {
     const median = sorted[sorted.length >> 1];
     const p75 = sorted[Math.floor(sorted.length * 0.75)];
     this.frameTimes = [];
-    const max = Math.min(window.devicePixelRatio, 1.5);
+    const max = Math.min(window.devicePixelRatio, qualityParams().maxPixelRatio);
     let next = this.pixelRatio;
     // The display caps frames at its refresh rate (16.7 ms at 60 Hz), so "fast" means sitting on that cap, not below it.
     // A step up needs clear headroom; a step down a clear shortfall; in between nothing changes.
@@ -414,6 +416,25 @@ export class World {
       this.renderer.setPixelRatio(next);
       this.resize();
       localStorage.setItem("wattsup.pixelRatio", next.toFixed(2));
+    }
+  }
+
+  /** A new graphics quality: shadows and the render scale cap now (antialiasing with the next world). */
+  applyQuality() {
+    const q = qualityParams();
+    if (this.renderer.shadowMap.enabled !== q.shadows) {
+      this.renderer.shadowMap.enabled = q.shadows;
+      this.sun.castShadow = q.shadows;
+      // Every lit material compiles shadow sampling in or out.
+      this.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material;
+        if (m) for (const x of Array.isArray(m) ? m : [m]) x.needsUpdate = true;
+      });
+    }
+    if (this.pixelRatio > q.maxPixelRatio) {
+      this.pixelRatio = q.maxPixelRatio;
+      this.renderer.setPixelRatio(this.pixelRatio);
+      this.resize();
     }
   }
 

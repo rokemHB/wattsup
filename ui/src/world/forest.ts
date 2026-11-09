@@ -3,6 +3,7 @@
 // with its measured height. Per 400 m cell, one instanced mesh per kind; cells far
 // from the rider are hidden (the aerial photo shows the forest there), cells at middle
 // distance use a lighter model, and only near cells cast shadows.
+import { qualityParams } from "../graphics";
 import * as THREE from "three";
 import { mulberry32 } from "./noise";
 import { CANOPY_SHADE, foliageDepthMaterial, foliageMaterial, treeGeometry, type TreeKind } from "./trees";
@@ -204,10 +205,11 @@ export function updateCell(c: ForestCell, x: number, z: number) {
   const dx = Math.max(0, Math.abs(c.cx - x) - c.half);
   const dz = Math.max(0, Math.abs(c.cz - z) - c.half);
   const d = Math.hypot(dx, dz);
-  const visible = d < FOREST_RADIUS_M;
-  const lite = d > LITE_RADIUS_M;
-  const cast = d < SHADOW_RADIUS_M;
-  const infill = d < INFILL_RADIUS_M;
+  const k = qualityParams().forest;
+  const visible = d < FOREST_RADIUS_M * k;
+  const lite = d > LITE_RADIUS_M * k;
+  const cast = d < SHADOW_RADIUS_M * k;
+  const infill = d < INFILL_RADIUS_M * k;
   const s = c.state;
   if (s.visible === visible && s.lite === lite && s.cast === cast && s.infill === infill) return;
   s.visible = visible;
@@ -241,7 +243,7 @@ export class RouteForest {
   ) {}
 
   update(x: number, z: number) {
-    const reach = FOREST_RADIUS_M + this.d.cell;
+    const reach = FOREST_RADIUS_M * qualityParams().forest + this.d.cell;
     const started = performance.now();
     for (const idx of cellsIn(this.d, x - reach, z - reach, x + reach, z + reach)) {
       if (this.cells.has(idx)) continue;

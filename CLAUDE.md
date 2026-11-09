@@ -263,6 +263,18 @@ finish and trainer screens) `keep_awake` holds a Wayland idle inhibitor on the w
 honour it (`hyprctl clients` shows `inhibitingIdle`). The main menu (`menu.ts`) has device
 tiles across the top (live watts, bpm, both pucks, battery), the rider's FTP and W/kg, the
 last seven days and an elevation profile per route card (`RouteInfo.profile`, 48 points).
+The menu renders every frame (its 15 fps cap read as stutter). Graphics quality (Settings,
+`graphics.ts`, localStorage `wattsup.graphics`): High as before; Balanced (1024 shadow map,
+render scale up to 1.2, trees to 75 %); Performance (no shadows, no antialiasing, scale up
+to 1.0, trees to 55 %): measured 161 -> 103 draw calls at the Sóller junction.
+Terrain is never fetched mid-ride: `worldUrls` lists every file a ride can ask for (tiles'
+elevation and imagery and the mid blocks' zoom-14 imagery, which "Download all terrain"
+missed), and at startup `ensureTerrain` asks `cache_missing` (existence only) and fetches the
+rest in the background. A network ride starts once every tile in reach is built
+(`whenSettled`, tiles built in 50 ms slices four at a time behind the loading screen).
+Measuring on 2026-11-09 evening was impossible: two Blender renders and Factorio from another
+project held the CPU and the shared GPU (load 25; GPU time per frame the same at render scale
+1.0 and 1.5). Check `uptime` before trusting a frame number.
 
 ## Route planner (map screen)
 
