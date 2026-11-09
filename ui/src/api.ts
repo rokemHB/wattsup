@@ -31,6 +31,8 @@ const COMPACT_H = 320;
 export const api = {
   startupInfo: () => invoke<StartupInfo>("startup_info"),
   snapshot: () => invoke<EngineSnapshot>("snapshot"),
+  /** Keeps the screen on (no screensaver or lock) while riding. */
+  keepAwake: (on: boolean) => invoke<void>("keep_awake", { on }),
   route: () => invoke<Route | null>("route"),
   routes: () => invoke<RouteInfo[]>("routes"),
   setRoute: (id: string) => invoke<void>("set_route", { id }),

@@ -62,7 +62,11 @@ impl RideStore {
             samples: report.samples,
         };
         let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-        std::fs::write(self.path(&summary.id), json).map_err(|e| format!("writing the ride: {e}"))?;
+        // Written beside and renamed over: a crash mid-write never leaves half a ride.
+        let path = self.path(&summary.id);
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json).map_err(|e| format!("writing the ride: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("writing the ride: {e}"))?;
         let mut index: Vec<RideSummary> = self.list().into_iter().filter(|r| r.id != summary.id).collect();
         index.push(summary.clone());
         self.write_index(&index)?;
@@ -98,7 +102,9 @@ impl RideStore {
 
     fn write_index(&self, index: &[RideSummary]) -> Result<(), String> {
         let json = serde_json::to_string(index).map_err(|e| e.to_string())?;
-        std::fs::write(self.dir.join(INDEX), json).map_err(|e| format!("writing the ride index: {e}"))
+        let tmp = self.dir.join("index.json.tmp");
+        std::fs::write(&tmp, json).map_err(|e| format!("writing the ride index: {e}"))?;
+        std::fs::rename(&tmp, self.dir.join(INDEX)).map_err(|e| format!("writing the ride index: {e}"))
     }
 
     /// The index from the ride files, for a missing or broken index.

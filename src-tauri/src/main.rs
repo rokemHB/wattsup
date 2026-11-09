@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod idle;
 mod tiles;
 
 use std::time::Duration;
@@ -25,9 +26,44 @@ struct AppState {
     startup: StartupInfo,
     /// Rides on disk: `<app data dir>/rides`.
     rides: RideStore,
-    /// Start time of the ride last stored, so two windows (main and the trainer's small one)
-    /// never file the same ride twice.
-    last_saved_ms: std::sync::Mutex<u64>,
+    /// The ride being filed: its start time (its id) and ride time when last stored. Every
+    /// store of the same ride (each minute, on close, at its end, from either window) replaces
+    /// that one file.
+    current: std::sync::Mutex<Option<(u64, f64)>>,
+}
+
+/// Seconds between stores of the ride in progress, so a crash or a closed window loses
+/// at most this much of it.
+const AUTOSAVE_S: u64 = 60;
+
+/// Stores the ride so far under its own id. `only_real`: not before 500 m and a minute of
+/// moving (the UI's rule for keeping a ride).
+fn store_current(state: &AppState, only_real: bool) -> Result<Option<RideSummary>, String> {
+    let report = state.engine.ride_report();
+    if only_real && (report.stats.distance_m < 500.0 || report.stats.moving_s < 60.0) {
+        return Ok(None);
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let started_at_ms = {
+        let mut current = state.current.lock().unwrap();
+        let start = match *current {
+            // The same ride as before (its clock has not gone back): the same file.
+            Some((start, elapsed)) if report.elapsed_s + 1.0 >= elapsed => start,
+            _ => now_ms.saturating_sub((report.elapsed_s * 1000.0) as u64),
+        };
+        *current = Some((start, report.elapsed_s));
+        start
+    };
+    state.rides.save(report, started_at_ms).map(Some)
+}
+
+/// Keeps the screen on while riding (see idle.rs).
+#[tauri::command]
+fn keep_awake(window: tauri::WebviewWindow, on: bool) {
+    idle::keep_awake(&window, on);
 }
 
 /// How the app was started, shown on the debug screen.
@@ -180,27 +216,7 @@ async fn turn_around(state: State<'_, AppState>) -> CmdResult<bool> {
 /// Stores the ride so far (its totals and one-second samples) and answers its summary.
 #[tauri::command]
 fn save_ride(state: State<'_, AppState>) -> CmdResult<RideSummary> {
-    let report = state.engine.ride_report();
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let started_at_ms = now_ms.saturating_sub((report.elapsed_s * 1000.0) as u64);
-    let mut last = state.last_saved_ms.lock().unwrap();
-    if started_at_ms.abs_diff(*last) < 2_000 {
-        // The same ride, stored already (by the other window): hand back its record.
-        if let Some(existing) = state
-            .rides
-            .list()
-            .into_iter()
-            .find(|r| r.started_at_ms.abs_diff(*last) < 2_000)
-        {
-            return Ok(existing);
-        }
-    }
-    let saved = state.rides.save(report, started_at_ms)?;
-    *last = started_at_ms;
-    Ok(saved)
+    store_current(&state, false).map(|s| s.expect("always stored"))
 }
 
 #[tauri::command]
@@ -385,12 +401,32 @@ fn main() {
                 engine,
                 startup: startup.clone(),
                 rides: RideStore::new(rides),
-                last_saved_ms: std::sync::Mutex::new(0),
+                current: std::sync::Mutex::new(None),
+            });
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(AUTOSAVE_S)).await;
+                    if let Err(e) = store_current(&handle.state::<AppState>(), true) {
+                        log::warn!("storing the ride in progress: {e}");
+                    }
+                }
             });
             app.manage(tiles::Tiles::new(app.handle()));
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Closing the window ends the app: keep the ride first.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.try_state::<AppState>() {
+                    if let Err(e) = store_current(&state, true) {
+                        log::warn!("storing the ride on close: {e}");
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            keep_awake,
             startup_info,
             snapshot,
             route,
