@@ -62,6 +62,8 @@ export const api = {
   fetchCached: (url: string) => invoke<ArrayBuffer>("fetch_cached", { url }),
   /** Downloads a map data URL into the disk cache without sending it to the UI; answers its size in bytes. */
   cacheFetch: (url: string) => invoke<number>("cache_fetch", { url }),
+  /** The URLs not in the terrain cache yet. */
+  cacheMissing: (urls: string[]) => invoke<string[]>("cache_missing", { urls }),
   stopWorkout: () => invoke<void>("stop_workout"),
   /** Makes the running workout `watts` harder or easier from now on. */
   setWorkoutBias: (watts: number) => invoke<void>("set_workout_bias", { watts }),

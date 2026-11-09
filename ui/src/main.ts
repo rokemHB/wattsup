@@ -14,7 +14,7 @@ import { ACCENTS, AVATARS, BIKES, JERSEYS, loadProfile, type Profile, saveProfil
 import { Router, type PlannedPath } from "./routing";
 import type { EngineSnapshot, Junction, Navigation, Route, RouteInfo, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
-import { Frame, prefetchWorld, worldDownloadEstimate } from "./world/streaming";
+import { Frame, prefetchUrls, prefetchWorld, worldDownloadEstimate, worldUrls } from "./world/streaming";
 import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
@@ -139,7 +139,6 @@ function show(next: Screen) {
   $("hud").hidden = !(next === "ride" || next === "pause" || next === "finish");
   if (next === "rider") fillRiderScreen();
   world?.setCamera(next === "ride" || next === "pause" || next === "finish" ? (startupCamera ?? remembered(CAMERA_KEY) ?? "chase") : "orbit");
-  world?.setIdle(next !== "ride");
   // A menu opened from the keyboard (Esc) can be worked from it straight away.
   if (MENU_SCREENS.has(next)) requestAnimationFrame(() => menuTargets()[0]?.focus({ preventScroll: true }));
 }
@@ -176,6 +175,7 @@ function saveDraft() {
   saveProfile(profile);
   applyProfile(profile);
   $<HTMLButtonElement>("rider-save").disabled = true;
+  back();
 }
 
 function choices(id: string, options: string[], current: string, pick: (v: string) => void, swatch: boolean) {
@@ -463,6 +463,23 @@ async function downloadTerrain() {
   text.textContent = cancelled ? "Download stopped. Click again to continue; what is already here stays." : failed ? `Done, but ${failed} files could not be fetched. Click again to retry them.` : "All terrain is on disk. Rides in this region work offline now.";
 }
 
+/**
+ * Rides never wait on the internet: at startup every terrain file of the island that is not
+ * on disk yet is fetched in the background (the menu shows it), so all rides run from disk.
+ */
+async function ensureTerrain() {
+  if (compactWindow || !(await ensureNetwork())) return;
+  const missing = await api.cacheMissing(worldUrls(network!, networkWorld!));
+  const note = $("menu-terrain");
+  if (!missing.length) {
+    note.textContent = "All terrain on disk";
+    return;
+  }
+  note.hidden = false;
+  const failed = await prefetchUrls(missing, (done, total) => (note.textContent = `Downloading terrain: ${done} of ${total}`), { cancelled: false });
+  note.textContent = failed ? `Terrain: ${failed} files could not be fetched (retried next start)` : "All terrain on disk";
+}
+
 /** Keeps the ride on disk if it was one: 500 m and a minute of moving at least. Called before a ride is over or replaced. */
 async function storeRide() {
   if (!rideOpen) return;
@@ -507,7 +524,11 @@ async function beginNetworkRide(at: { x: number; z: number }) {
     const ticker = setInterval(() => {
       $("loading-text").textContent = tiles.pending ? `Loading the terrain around you… ${tiles.pending} tile${tiles.pending === 1 ? "" : "s"} to go` : "Loading the terrain around you…";
     }, 300);
+    // All the ground within reach, not just the tile underfoot: nothing pops in once riding.
+    tiles.fast = true;
     await tiles.whenReady(start?.x ?? at.x, start?.z ?? at.z, 30000);
+    await tiles.whenSettled(20000);
+    tiles.fast = false;
     clearInterval(ticker);
     $("loading").hidden = true;
   }
@@ -991,6 +1012,8 @@ async function start() {
   if (wanted !== "trainer") await buildWorld();
   if (startup.camera && world) world.setCamera(startup.camera);
   scan(true).catch(showError);
+  // After the first picture is up: the network loads and the cache is checked meanwhile.
+  setTimeout(() => ensureTerrain().catch(console.error), 3000);
   if (startup.screen === "island") {
     // For looking at the island: start at a given lat,lon (toward the edge's end unless ",back"), else on the Ma-10.
     if (await ensureNetwork()) {

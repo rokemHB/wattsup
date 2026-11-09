@@ -100,6 +100,15 @@ impl Tiles {
     }
 }
 
+/// The URLs of `urls` that are not in the disk cache yet (existence only: nothing is read).
+#[tauri::command]
+pub fn cache_missing(app: AppHandle, urls: Vec<String>) -> Vec<String> {
+    let tiles = app.state::<Tiles>();
+    urls.into_iter()
+        .filter(|u| std::fs::metadata(tiles.path_for(u)).map_or(true, |m| m.len() == 0))
+        .collect()
+}
+
 /// Fetches a map data URL into the cache (for downloading a region ahead of
 /// time) and answers with its size, so nothing is copied to the web view.
 #[tauri::command]

@@ -452,6 +452,7 @@ fn main() {
             export_ride,
             tiles::fetch_cached,
             tiles::cache_fetch,
+            tiles::cache_missing,
             scan,
             connect,
             disconnect,

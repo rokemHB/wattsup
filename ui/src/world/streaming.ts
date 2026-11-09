@@ -150,6 +150,66 @@ export function tileUrls(meta: NetworkWorldMeta, i: number, j: number): string[]
   return urls;
 }
 
+/** The imagery tiles at `zoom` covering a lat/lon box (as `fetchOrtho` mosaics them). */
+function orthoTiles(lat0: number, lat1: number, lon0: number, lon1: number, zoom: number): [number, number][] {
+  const [mx0, my0] = mercator(lat1, lon0, zoom);
+  const [mx1, my1] = mercator(lat0, lon1, zoom);
+  const out: [number, number][] = [];
+  for (let ty = Math.floor(my0); ty <= Math.floor(my1); ty++) for (let tx = Math.floor(mx0); tx <= Math.floor(mx1); tx++) out.push([tx, ty]);
+  return out;
+}
+
+/** A mid block's bounds: the WMTS zoom-13 tile (tx, ty), in degrees and local metres. */
+function midBlockBounds(frame: Frame, tx: number, ty: number) {
+  const n = 2 ** MID_ZOOM;
+  const lon0 = (tx / n) * 360 - 180;
+  const lon1 = ((tx + 1) / n) * 360 - 180;
+  const latOf = (y: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+  const lat1 = latOf(ty);
+  const lat0 = latOf(ty + 1);
+  const [x0, z0] = frame.toXZ(lat1, lon0);
+  const [x1, z1] = frame.toXZ(lat0, lon1);
+  return { lat0, lat1, lon0, lon1, x0, z0, x1, z1 };
+}
+
+/** Whether a box overlaps the mid grid's data. */
+function overMid(g: Grid, x0: number, z0: number, x1: number, z1: number) {
+  return !(x1 < g.x0 || z1 < g.z0 || x0 > g.x0 + (g.cols - 1) * g.spacing || z0 > g.z0 + (g.rows - 1) * (g.spacingZ ?? g.spacing));
+}
+
+/**
+ * Every file a network world can ask for on a ride: each terrain tile's elevation and
+ * imagery, and the imagery of every mid block within reach of a road (zoom 14, which the
+ * tiles' list missed: those came from the internet mid-ride).
+ */
+export function worldUrls(net: RoadNetwork, meta: NetworkWorldMeta & { mid?: Grid | null }): string[] {
+  const urls = new Set(worldTiles(net, meta).flatMap((t) => tileUrls(meta, t.i, t.j)));
+  const g = meta.mid;
+  if (g) {
+    const frame = new Frame(meta.origin.lat, meta.origin.lon);
+    const blocks = new Set<string>();
+    for (let p = 0; p < net.points; p += 10) {
+      const x = net.xyz[p * 3];
+      const z = net.xyz[p * 3 + 2];
+      const [lat, lon] = frame.toLatLon(x, z);
+      const [mx, my] = mercator(lat, lon, MID_ZOOM);
+      for (let ty = Math.floor(my) - 3; ty <= Math.floor(my) + 3; ty++) {
+        for (let tx = Math.floor(mx) - 3; tx <= Math.floor(mx) + 3; tx++) {
+          const key = `${tx}_${ty}`;
+          if (blocks.has(key)) continue;
+          const b = midBlockBounds(frame, tx, ty);
+          if (Math.hypot((b.x0 + b.x1) / 2 - x, (b.z0 + b.z1) / 2 - z) > MID_RADIUS_M || !overMid(g, b.x0, b.z0, b.x1, b.z1)) continue;
+          blocks.add(key);
+          for (const [ox, oy] of orthoTiles(b.lat0, b.lat1, b.lon0, b.lon1, MID_ORTHO_ZOOM)) {
+            urls.add(meta.tiles.ortho.replace("{z}", String(MID_ORTHO_ZOOM)).replace("{x}", String(ox)).replace("{y}", String(oy)));
+          }
+        }
+      }
+    }
+  }
+  return [...urls];
+}
+
 /** Rough size of a whole world's terrain, from typical tile sizes (elevation ~490 KB, an imagery tile ~17 KB). */
 export function worldDownloadEstimate(net: RoadNetwork, meta: NetworkWorldMeta): { files: number; bytes: number } {
   let files = 0;
@@ -167,10 +227,14 @@ export function worldDownloadEstimate(net: RoadNetwork, meta: NetworkWorldMeta):
  * time, so rides work offline afterwards. Files already cached are quick.
  * Resolves with the number of files that could not be fetched.
  */
-export async function prefetchWorld(net: RoadNetwork, meta: NetworkWorldMeta, onProgress: (done: number, total: number, bytes: number) => void, cancel: { cancelled: boolean }): Promise<number> {
-  const urls = worldTiles(net, meta).flatMap((t) => tileUrls(meta, t.i, t.j));
-  const seen = new Set<string>();
-  const queue = urls.filter((u) => !seen.has(u) && seen.add(u));
+export async function prefetchWorld(net: RoadNetwork, meta: NetworkWorldMeta & { mid?: Grid | null }, onProgress: (done: number, total: number, bytes: number) => void, cancel: { cancelled: boolean }): Promise<number> {
+  return prefetchUrls(worldUrls(net, meta), onProgress, cancel);
+}
+
+/** Fetches `urls` into the disk cache, four at a time; resolves with how many failed. */
+export async function prefetchUrls(urls: string[], onProgress: (done: number, total: number, bytes: number) => void, cancel: { cancelled: boolean }): Promise<number> {
+  const queue = [...urls];
+  const total = urls.length;
   let done = 0;
   let bytes = 0;
   let failed = 0;
@@ -184,7 +248,7 @@ export async function prefetchWorld(net: RoadNetwork, meta: NetworkWorldMeta, on
         console.warn(`prefetch ${url}: ${e}`);
       }
       done++;
-      onProgress(done, seen.size, bytes);
+      onProgress(done, total, bytes);
     }
   };
   await Promise.all([worker(), worker(), worker(), worker()]);
@@ -506,7 +570,7 @@ export class TileManager {
       const z = g.z0 + iz * sz;
       for (let ix = -1; ix <= cols; ix++) heights[(iz + 1) * ringCols + ix + 1] = skirted(g.x0 + ix * sx, z);
       // A few milliseconds per frame, then the frame gets drawn.
-      if (performance.now() - sliceStart > BUILD_BUDGET_MS) {
+      if (performance.now() - sliceStart > this.budgetMs) {
         await nextFrame();
         if (!this.tiles.has(t.key)) return null;
         sliceStart = performance.now();
@@ -557,7 +621,7 @@ export class TileManager {
         for (const m of cell.meshes) t.group.add(m.mesh);
         t.forest.push(cell);
       }
-      if (performance.now() - budget > BUILD_BUDGET_MS) {
+      if (performance.now() - budget > this.budgetMs) {
         await nextFrame();
         if (!this.tiles.has(t.key)) return;
         budget = performance.now();
@@ -568,6 +632,25 @@ export class TileManager {
   /** How many tiles are still being built; the HUD shows it. */
   get pending(): number {
     return this.queue.length + this.loading;
+  }
+
+  /** Behind a loading screen no frame needs keeping smooth: build in big slices, four at a time. */
+  fast = false;
+
+  private get budgetMs() {
+    return this.fast ? 50 : BUILD_BUDGET_MS;
+  }
+
+  /** Resolves once nothing is left to build around the rider, or after `timeoutMs`. */
+  whenSettled(timeoutMs: number): Promise<void> {
+    const started = performance.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (this.pending === 0 || performance.now() - started > timeoutMs) resolve();
+        else setTimeout(check, 200);
+      };
+      check();
+    });
   }
 
   /** Resolves once the tile under `(x, z)` is built (or failed), or after `timeoutMs`. */
@@ -584,7 +667,7 @@ export class TileManager {
   }
 
   private pump() {
-    while (this.loading < 2 && this.queue.length) {
+    while (this.loading < (this.fast ? 4 : 2) && this.queue.length) {
       const t = this.queue.shift()!;
       if (!this.tiles.has(t.key)) continue;
       this.loading++;
@@ -700,23 +783,14 @@ export class TileManager {
     const [mx, my] = mercator(lat, lon, MID_ZOOM);
     const tx0 = Math.floor(mx);
     const ty0 = Math.floor(my);
-    const n = 2 ** MID_ZOOM;
     for (let ty = ty0 - 3; ty <= ty0 + 3; ty++) {
       for (let tx = tx0 - 3; tx <= tx0 + 3; tx++) {
         const key = `${tx}_${ty}`;
         if (this.mids.has(key)) continue;
-        // The tile's bounds: lon from x, lat from the inverse Mercator of y.
-        const lon0 = (tx / n) * 360 - 180;
-        const lon1 = ((tx + 1) / n) * 360 - 180;
-        const latOf = (y: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
-        const lat1 = latOf(ty);
-        const lat0 = latOf(ty + 1);
-        const [x0, z0] = this.frame.toXZ(lat1, lon0);
-        const [x1, z1] = this.frame.toXZ(lat0, lon1);
+        const { lat0, lat1, lon0, lon1, x0, z0, x1, z1 } = midBlockBounds(this.frame, tx, ty);
         if (Math.hypot((x0 + x1) / 2 - x, (z0 + z1) / 2 - z) > MID_RADIUS_M) continue;
         // Only where the mid grid has data.
-        const g = this.mid;
-        if (x1 < g.x0 || z1 < g.z0 || x0 > g.x0 + (g.cols - 1) * g.spacing || z0 > g.z0 + (g.rows - 1) * (g.spacingZ ?? g.spacing)) continue;
+        if (!overMid(this.mid, x0, z0, x1, z1)) continue;
         this.mids.set(key, { key, box: { x0, z0, x1, z1 }, lat0, lat1, lon0, lon1, mesh: null, base: null, state: "loading" });
       }
     }
@@ -897,7 +971,7 @@ export class TileManager {
       }
       await flush();
       if (!this.tiles.has(t.key)) return;
-      if (performance.now() - budget > BUILD_BUDGET_MS) {
+      if (performance.now() - budget > this.budgetMs) {
         await nextFrame();
         if (!this.tiles.has(t.key)) return;
         budget = performance.now();

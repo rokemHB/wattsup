@@ -368,7 +368,6 @@ export class World {
   }
 
   /** Every two seconds: lower the render scale when frames are slow, raise it when there is headroom. */
-  private idle = false;
   private lastRender = 0;
   private perfTimes: number[] = [];
   private perfAt = 0;
@@ -376,11 +375,6 @@ export class World {
   private cpuTimes: number[] = [];
   private frameStart = 0;
   private bucket = [0, 0, 0];
-
-  /** Menus: render at a low rate; the world is only a backdrop there. */
-  setIdle(idle: boolean) {
-    this.idle = idle;
-  }
 
   private perfStats(dt: number) {
     this.perfTimes.push(dt * 1000);
@@ -426,12 +420,6 @@ export class World {
   private frame() {
     if (!this.running) return;
     const now = performance.now();
-    // Behind the menus 15 frames a second are plenty, and the frames in between do
-    // no work at all (tiles, camera, physics smoothing): the rest is for the UI.
-    if (this.idle && now - this.lastRender < 66) {
-      requestAnimationFrame(() => this.frame());
-      return;
-    }
     const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
     this.lastFrame = now;
     this.frameStart = now;
@@ -593,7 +581,7 @@ export class World {
     this.renderer.render(this.scene, this.camera);
     this.bucket[2] += performance.now() - tR;
     this.cpuTimes.push(performance.now() - this.frameStart);
-    if (!this.idle) this.adaptResolution(renderDt);
+    this.adaptResolution(renderDt);
     requestAnimationFrame(() => this.frame());
   }
 }
