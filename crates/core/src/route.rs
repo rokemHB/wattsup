@@ -323,6 +323,95 @@ fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
+/// A single route ridden with U-turns. Past the last turn, ride distance `d` lies at
+/// `offset + sign * d` on the base route (round the lap on a loop). A turn keeps the road behind
+/// the rider as it was, so every distance already ridden still means the same place.
+#[derive(Clone, Debug)]
+pub struct TurnableRoute {
+    base: Route,
+    offset: f64,
+    sign: f64,
+}
+
+impl TurnableRoute {
+    pub fn new(base: Route) -> Self {
+        Self {
+            base,
+            offset: 0.0,
+            sign: 1.0,
+        }
+    }
+
+    pub fn base(&self) -> &Route {
+        &self.base
+    }
+
+    /// Some turn has been taken: the route ridden is no longer the base.
+    pub fn turned(&self) -> bool {
+        self.sign < 0.0 || self.offset != 0.0
+    }
+
+    /// Turns round at ride distance `at_m` on `current` (the route ridden now: the base, or the
+    /// last route this returned). An open route then leads back the way it came and ends at
+    /// the base's start or end; a loop is ridden the other way round for good. `None` (and no
+    /// change) when there is no road behind to turn onto.
+    pub fn turn(&mut self, current: &Route, at_m: f64) -> Option<Route> {
+        let len = self.base.length_m();
+        let spacing = self.base.points.get(1)?.distance_m;
+        if len <= 0.0 || spacing <= 0.0 {
+            return None;
+        }
+        let at = if self.base.closed {
+            at_m.max(0.0)
+        } else {
+            at_m.clamp(0.0, current.length_m())
+        };
+        // Where the rider is on the base stays put; the direction flips.
+        let offset = self.offset + 2.0 * self.sign * at;
+        let sign = -self.sign;
+        let point = |d: f64, b: f64| {
+            let (x, y, z) = self.base.position_at(b);
+            RoutePoint { distance_m: d, x, y, z }
+        };
+        let points: Vec<RoutePoint> = if self.base.closed {
+            (0..self.base.points.len())
+                .map(|k| {
+                    let d = k as f64 * spacing;
+                    point(d, (offset + sign * d).rem_euclid(len))
+                })
+                .collect()
+        } else {
+            let mut points: Vec<RoutePoint> = current
+                .points
+                .iter()
+                .take_while(|p| p.distance_m <= at)
+                .copied()
+                .collect();
+            for k in points.len().. {
+                let d = k as f64 * spacing;
+                let b = offset + sign * d;
+                if !(-1e-6..=len + 1e-6).contains(&b) {
+                    break;
+                }
+                points.push(point(d, b.clamp(0.0, len)));
+            }
+            points
+        };
+        if points.len() < 2 || (!self.base.closed && points.last()?.distance_m <= at + 1e-6) {
+            return None;
+        }
+        self.offset = offset;
+        self.sign = sign;
+        Some(Route {
+            name: self.base.name.clone(),
+            points,
+            closed: self.base.closed,
+            world: self.base.world.clone(),
+            flight: self.base.flight,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +465,61 @@ mod tests {
         );
         let end = r.points.last().unwrap().y;
         assert!(end > 380.0 && end < 450.0, "Riogordo at {end} m");
+    }
+
+    #[test]
+    fn a_u_turn_rides_back_to_the_start_and_a_second_one_goes_on_ahead() {
+        let base = Route::builtin("sa-calobra").unwrap();
+        let mut t = TurnableRoute::new(base.clone());
+        let back = t.turn(&base, 3000.0).unwrap();
+        // The road behind is untouched, the rider stays where they are.
+        assert_eq!(&back.points[..601], &base.points[..601]);
+        let (x0, y0, z0) = base.position_at(3000.0);
+        let (x1, y1, z1) = back.position_at(3000.0);
+        assert!((x0 - x1).abs() + (y0 - y1).abs() + (z0 - z1).abs() < 0.5);
+        // Ahead lies the road just ridden, the other way: 1 km on is 1 km back down.
+        let (x, _, z) = back.position_at(4000.0);
+        let (bx, _, bz) = base.position_at(2000.0);
+        assert!((x - bx).abs() + (z - bz).abs() < 0.5);
+        assert!(
+            (back.grade_at(4000.0) + base.grade_at(2000.0)).abs() < 0.5,
+            "climbs become descents"
+        );
+        // It ends where the climb starts.
+        assert!((back.length_m() - 6000.0).abs() <= 5.0, "{}", back.length_m());
+        let (ex, _, ez) = back.position_at(back.length_m());
+        let p0 = base.points[0];
+        assert!((ex - p0.x).abs() + (ez - p0.z).abs() < 6.0);
+        // Turning again heads up the climb once more, past the first turn and on to the top.
+        let again = t.turn(&back, 4500.0).unwrap();
+        let (x, _, z) = again.position_at(4500.0 + 3000.0);
+        let (bx, _, bz) = base.position_at(1500.0 + 3000.0);
+        assert!((x - bx).abs() + (z - bz).abs() < 0.5);
+        assert!((again.length_m() - (4500.0 + base.length_m() - 1500.0)).abs() <= 5.0);
+        assert!(t.turned());
+    }
+
+    #[test]
+    fn a_u_turn_at_the_start_has_nowhere_to_go() {
+        let base = Route::builtin("sa-calobra").unwrap();
+        let mut t = TurnableRoute::new(base.clone());
+        assert!(t.turn(&base, 0.0).is_none());
+        assert!(!t.turned());
+    }
+
+    #[test]
+    fn a_loop_turned_round_keeps_lapping_the_other_way() {
+        let base = Route::demo();
+        let len = base.length_m();
+        let mut t = TurnableRoute::new(base.clone());
+        let at = 1.5 * len + 100.0;
+        let back = t.turn(&base, at).unwrap();
+        assert!(back.closed);
+        let here = |r: &Route, d: f64| r.position_at(d);
+        let (a, b) = (here(&base, at), here(&back, at));
+        assert!((a.0 - b.0).abs() + (a.2 - b.2).abs() < 0.5, "{a:?} {b:?}");
+        let (a, b) = (here(&base, at - 400.0), here(&back, at + 400.0));
+        assert!((a.0 - b.0).abs() + (a.2 - b.2).abs() < 0.5, "{a:?} {b:?}");
     }
 
     #[test]

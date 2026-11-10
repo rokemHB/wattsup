@@ -711,7 +711,7 @@ function handleButtons(snap: EngineSnapshot) {
         turnKey(1);
         break;
       case "u_turn":
-        api.turnAround().catch(showError);
+        uTurn();
         break;
       case "auto_shift":
         api.setAutoShift(!(latest?.session.auto_shift ?? false)).catch(showError);
@@ -721,6 +721,18 @@ function handleButtons(snap: EngineSnapshot) {
         break;
     }
   }
+}
+
+/** Turns the rider round (U, the HUD button, a controller button) and says what happened. */
+function uTurn() {
+  api
+    .turnAround()
+    .then((ok) => {
+      if (!ok) hud?.notice("Nothing behind to turn onto yet", 4);
+      else if (!latest?.navigation) hud?.notice(route?.closed ? "Turned round · lapping the other way" : "Turned round · back to the start", 5);
+      else hud?.notice("Turned round", 4);
+    })
+    .catch(showError);
 }
 
 function onSnapshot(snap: EngineSnapshot) {
@@ -831,7 +843,7 @@ function wire() {
     storeRide()
       .catch(showError)
       .finally(() => api.quit().catch(showError));
-  $("hud-uturn").onclick = () => api.turnAround().catch(showError);
+  $("hud-uturn").onclick = uTurn;
   // Back buttons: delegated at the document, so they work whatever else happens to the panels.
   document.addEventListener("click", (e) => {
     if ((e.target as Element | null)?.closest?.("[data-back]")) {
@@ -929,7 +941,7 @@ function wire() {
       return;
     }
     if (screen === "ride" && (e.key === "u" || e.key === "U")) {
-      api.turnAround().catch(showError);
+      uTurn();
       return;
     }
     if (screen === "trainer" && trainerScreen.key(e.key)) {

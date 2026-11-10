@@ -17,7 +17,7 @@ use wattsup_core::gearing::ShiftDirection;
 use wattsup_core::network::{Junction, Maneuver, Navigator, Network, NetworkInfo, PlannedLeg};
 use wattsup_core::physics::{steady_speed_for_power, RiderParams};
 use wattsup_core::protocol::zwift::Button;
-use wattsup_core::route::{Route, RouteInfo};
+use wattsup_core::route::{Route, RouteInfo, TurnableRoute};
 use wattsup_core::session::{ControlMode, RideReport, RideSession, SessionConfig, SessionSnapshot, Workout};
 use wattsup_devices::sim::{SimConfig, SimProvider};
 use wattsup_devices::{
@@ -165,6 +165,8 @@ struct Inner {
     events: EventSender,
     snapshots: watch::Sender<EngineSnapshot>,
     navigator: Mutex<Option<Navigator>>,
+    /// A single route (not a network) and the U-turns taken on it.
+    turnable: Mutex<Option<TurnableRoute>>,
     junction: Mutex<Option<Junction>>,
     navigation: Mutex<Option<Navigation>>,
     route_version: AtomicU64,
@@ -238,6 +240,7 @@ impl Engine {
             events,
             snapshots: watch::channel(first).0,
             navigator: Mutex::new(None),
+            turnable: Mutex::new(None),
             junction: Mutex::new(None),
             navigation: Mutex::new(None),
             route_version: AtomicU64::new(0),
@@ -272,6 +275,7 @@ impl Engine {
     /// Switches to a built-in route and starts a fresh ride on it.
     pub async fn set_route(&self, id: &str) -> Result<(), String> {
         let route = Route::builtin(id).ok_or_else(|| format!("unknown route {id}"))?;
+        *self.inner.turnable.lock().unwrap() = Some(TurnableRoute::new(route.clone()));
         *self.inner.navigator.lock().unwrap() = None;
         *self.inner.junction.lock().unwrap() = None;
         *self.inner.navigation.lock().unwrap() = None;
@@ -299,6 +303,7 @@ impl Engine {
         let (edge, index) = net.nearest(x, z).ok_or("empty network")?;
         let nav = Navigator::start(world, net, edge, index, forward);
         let route = nav.route(net);
+        *self.inner.turnable.lock().unwrap() = None;
         *self.inner.navigator.lock().unwrap() = Some(nav);
         self.inner.session.lock().unwrap().set_route(Some(route));
         self.inner.route_version.fetch_add(1, Ordering::Relaxed);
@@ -326,6 +331,7 @@ impl Engine {
         let net = Network::builtin(world).ok_or_else(|| format!("no road network for {world}"))?;
         let nav = Navigator::planned(world, net, name, legs)?;
         let route = nav.route(net);
+        *self.inner.turnable.lock().unwrap() = None;
         *self.inner.navigator.lock().unwrap() = Some(nav);
         self.inner.session.lock().unwrap().set_route(Some(route));
         self.inner.route_version.fetch_add(1, Ordering::Relaxed);
@@ -392,9 +398,14 @@ impl Engine {
         self.inner.navigate();
     }
 
-    /// Turns the rider around on a road network: the road behind becomes the road ahead.
-    /// On a planned route this ends the plan. Returns false when not on a network.
+    /// Turns the rider around: the road behind becomes the road ahead. On a network a planned
+    /// route ends; a single route leads back to its start (a loop is lapped the other way).
+    /// Returns false when there is nowhere to turn (no route, or at the very start).
     pub async fn turn_around(&self) -> bool {
+        let on_network = self.inner.navigator.lock().unwrap().is_some();
+        if !on_network {
+            return self.turn_single().await;
+        }
         {
             let mut nav = self.inner.navigator.lock().unwrap();
             let Some(nav) = nav.as_mut() else { return false };
@@ -408,6 +419,25 @@ impl Engine {
         }
         self.inner.route_version.fetch_add(1, Ordering::Relaxed);
         self.inner.navigate();
+        self.inner.send_now().await;
+        true
+    }
+
+    async fn turn_single(&self) -> bool {
+        {
+            let mut turnable = self.inner.turnable.lock().unwrap();
+            let Some(t) = turnable.as_mut() else { return false };
+            let mut session = self.inner.session.lock().unwrap();
+            let Some(current) = session.route().cloned() else {
+                return false;
+            };
+            let at = session.snapshot().distance_m;
+            let Some(route) = t.turn(&current, at) else {
+                return false;
+            };
+            session.replace_route(route);
+        }
+        self.inner.route_version.fetch_add(1, Ordering::Relaxed);
         self.inner.send_now().await;
         true
     }
@@ -442,6 +472,21 @@ impl Engine {
 
     /// Back to the start of the current route.
     pub async fn reset_ride(&self) {
+        // A single route turned round goes back to its own direction.
+        let base = {
+            let mut turnable = self.inner.turnable.lock().unwrap();
+            match turnable.as_mut() {
+                Some(t) if t.turned() => {
+                    *t = TurnableRoute::new(t.base().clone());
+                    Some(t.base().clone())
+                }
+                _ => None,
+            }
+        };
+        if let Some(base) = base {
+            self.inner.session.lock().unwrap().replace_route(base);
+            self.inner.route_version.fetch_add(1, Ordering::Relaxed);
+        }
         self.inner.session.lock().unwrap().reset_ride();
         self.inner.send_now().await;
     }
@@ -922,6 +967,38 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn turns_round_on_a_single_route_and_rides_back_to_the_start() {
+        let engine = sim_engine();
+        engine
+            .connect(&DeviceId::new("sim", "trainer"), DeviceKind::Trainer)
+            .await
+            .unwrap();
+        engine.set_route("malaga-colmenar").await.unwrap();
+        assert!(!engine.turn_around().await, "nothing behind at the start");
+        ride(120).await;
+        let here = engine.snapshot().session.distance_m;
+        assert!(here > 200.0, "{here}");
+        let version = engine.snapshot().route_version;
+        assert!(engine.turn_around().await);
+        let s = engine.snapshot();
+        assert!(s.route_version > version);
+        let route = engine.route().unwrap();
+        assert!(
+            (route.length_m() - 2.0 * here).abs() < 10.0,
+            "{} {here}",
+            route.length_m()
+        );
+        ride(600).await;
+        assert!(
+            engine.snapshot().session.finished,
+            "back at the start, the ride is over"
+        );
+        // A new ride on the route rides it the right way again.
+        engine.reset_ride().await;
+        assert!(engine.route().unwrap().length_m() > 40_000.0);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn rides_the_road_network_and_takes_turns() {
         let engine = sim_engine();
         engine
@@ -1019,7 +1096,12 @@ mod tests {
         );
         assert!(engine.start_planned_ride("mallorca", "x", &[]).await.is_err());
         engine.set_route("flat").await.unwrap();
-        assert!(!engine.turn_around().await, "not on a network after set_route");
+        assert!(
+            engine.snapshot().navigation.is_none(),
+            "not on a network after set_route"
+        );
+        assert!(engine.turn_around().await, "a loop is lapped the other way");
+        assert!(engine.route().unwrap().closed);
     }
 
     #[tokio::test(start_paused = true)]

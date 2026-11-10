@@ -682,7 +682,9 @@ impl RideSession {
     /// Back to the start: distance, speed and the ride clock. Devices and
     /// settings (gear, mode, auto-shift) stay as they are.
     pub fn reset_ride(&mut self) {
-        self.distance_m = 0.0;
+        // The configured start (0 but for the dev start offset, `WATTSUP_START_M`): the UI resets
+        // the ride as it starts one, which had thrown the offset away.
+        self.distance_m = self.config.start_distance_m.max(0.0);
         self.virtual_speed_mps = 0.0;
         self.ride_start_s = self.clock_s;
         self.held_s = 0.0;
@@ -690,7 +692,7 @@ impl RideSession {
         self.totals = Totals::default();
         self.samples.clear();
         if let Some(route) = &self.config.route {
-            self.road_grade_pct = route.grade_at(0.0);
+            self.road_grade_pct = route.grade_at(self.distance_m);
         }
         self.urgent = true;
     }
