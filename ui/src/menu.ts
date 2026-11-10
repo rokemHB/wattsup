@@ -53,12 +53,25 @@ export function renderDeviceTiles(snap: EngineSnapshot) {
     t.root.classList.toggle("ready", d.state.state === "connected");
     set(t.value, tileValue(d, snap));
     const battery = d.battery_percent === null ? "" : ` · ${d.battery_percent} %`;
-    set(t.sub, d.state.state === "disconnected" ? "not connected · click to pair" : `${d.name ?? d.id ?? ""}${battery}`);
+    // A lost link's reason is a sentence: it goes in the small line (cut to fit) and the tooltip.
+    const detail = d.state.state === "failed" || d.state.state === "reconnecting" ? d.state.detail : "";
+    set(t.sub, d.state.state === "disconnected" ? "not connected · click to pair" : detail || `${d.name ?? d.id ?? ""}${battery}`);
+    const title = detail ? `${d.name ?? d.id ?? ""}: ${detail}` : "Devices";
+    if (t.root.title !== title) t.root.title = title;
   }
 }
 
+/** A word or two that fits the tile; the details go underneath. */
+const SHORT_STATE: Record<DeviceStatus["state"]["state"], string> = {
+  connected: "ready",
+  connecting: "connecting…",
+  reconnecting: "reconnecting…",
+  failed: "lost",
+  disconnected: "–",
+};
+
 function tileValue(d: DeviceStatus, snap: EngineSnapshot): string {
-  if (d.state.state !== "connected") return d.state.state === "disconnected" ? "–" : stateLabel(d.state).label;
+  if (d.state.state !== "connected") return SHORT_STATE[d.state.state];
   const s = snap.session;
   if (d.kind === "trainer") return s.power_w === null ? "ready" : `${Math.round(s.power_w)} W`;
   if (d.kind === "heart_rate") return s.heart_rate_bpm === null ? "no reading" : `${Math.round(s.heart_rate_bpm)} bpm`;
