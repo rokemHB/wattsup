@@ -25,6 +25,8 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; }
 .tile { background: rgba(15, 18, 27, 0.8); border-radius: 12px; padding: 10px 16px; min-width: 120px; display: flex; flex-direction: column; }
 .tile label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
 .tile b { font-size: 40px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.tile.time.paused b { color: var(--busy); }
+.tile.time.paused small { color: var(--busy); }
 .tile small { color: var(--muted); font-size: 12px; }
 .tile.gear b { color: var(--accent); }
 .hud-route-row { margin-top: 10px; display: flex; align-items: center; gap: 10px; }

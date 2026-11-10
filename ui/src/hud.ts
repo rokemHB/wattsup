@@ -102,6 +102,12 @@ export class Hud {
     $("hud-cadence").textContent = num(s.cadence_rpm);
     $("hud-hr").textContent = num(s.heart_rate_bpm);
     $("hud-speed").textContent = num(s.virtual_speed_kmh, 1);
+    // Moving time: starts with the ride, stops by itself while the bike stands (the engine's
+    // `moving_s` counts only above 0.5 m/s), like a bike computer's auto-pause.
+    $("hud-time").textContent = duration(s.stats.moving_s);
+    const paused = s.virtual_speed_kmh < 1.8;
+    $("hud-time-state").textContent = paused ? "paused" : "moving";
+    $("hud-time").closest(".tile")!.classList.toggle("paused", paused);
     $("hud-gear").textContent = String(s.gear);
     $("hud-gear-ratio").textContent = `of ${s.gear_count}`;
     $("hud-lap").textContent = String(s.lap + 1);
