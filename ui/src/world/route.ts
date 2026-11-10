@@ -62,6 +62,22 @@ export class RouteSampler {
     };
   }
 
+  private climbed: Float64Array | null = null;
+
+  /** Metres of climbing from `distance` to the end of the route (an open route; a loop: to the lap's end). */
+  climbAhead(distance: number): number {
+    const pts = this.route.points;
+    if (pts.length < 2) return 0;
+    if (!this.climbed) {
+      // Running total of every rise from the start, built once.
+      this.climbed = new Float64Array(pts.length);
+      for (let i = 1; i < pts.length; i++) this.climbed[i] = this.climbed[i - 1] + Math.max(0, pts[i].y - pts[i - 1].y);
+    }
+    const [i, t] = this.index(distance);
+    const at = this.climbed[i] + Math.max(0, pts[i + 1].y - pts[i].y) * t;
+    return this.climbed[pts.length - 1] - at;
+  }
+
   /** Elevation profile resampled to `n` columns, 0..1 of the height range. */
   profile(n: number): number[] {
     const span = this.maxY - this.minY || 1;

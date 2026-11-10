@@ -260,17 +260,19 @@
     <!-- Ride HUD -->
     <div id="hud" hidden>
       <div class="hud-top">
-        <div class="tile"><label>Power</label><b id="hud-power">–</b><small>W</small></div>
-        <div class="tile"><label>Cadence</label><b id="hud-cadence">–</b><small>rpm</small></div>
-        <div class="tile"><label>Heart rate</label><b id="hud-hr">–</b><small>bpm</small></div>
-        <div class="tile"><label>Speed</label><b id="hud-speed">–</b><small>km/h</small></div>
-        <div class="tile time"><label>Time</label><b id="hud-time">00:00</b><small id="hud-time-state">moving</small></div>
-        <div class="tile gear"><label>Gear</label><b id="hud-gear">–</b><small id="hud-gear-ratio"></small></div>
+        <div class="tile power"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 4.5 13.5h6.5L9.5 22l9-12h-6.5z"/></svg>Power</label><b id="hud-power">–</b><small>W</small></div>
+        <div class="tile cadence"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5h-2.6A5.9 5.9 0 1 1 12 6.1v2.6l4.3-3.9L12 1z"/><circle cx="12" cy="12" r="2.2"/></svg>Cadence</label><b id="hud-cadence">–</b><small>rpm</small></div>
+        <div class="tile hr"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.2s-7.6-4.7-9.6-9.4C.9 8.2 3.3 4.2 7.1 4.2c2 0 3.6 1.1 4.9 3 1.3-1.9 2.9-3 4.9-3 3.8 0 6.2 4 4.7 7.6-2 4.7-9.6 9.4-9.6 9.4z"/></svg>Heart</label><b id="hud-hr">–</b><small>bpm</small></div>
+        <div class="tile speed"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5A10 10 0 0 0 3.4 19.5h17.2A10 10 0 0 0 12 4.5zm1.5 11.2a2.1 2.1 0 1 1-3-3l6.6-4.9z"/></svg>Speed</label><b id="hud-speed">–</b><small>km/h</small></div>
+        <div class="tile time"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19zm0 2.6a6.9 6.9 0 1 0 0 13.8 6.9 6.9 0 0 0 0-13.8zM11 7h2v4.6l3.2 2.3-1.2 1.6L11 12.6z"/></svg>Time</label><b id="hud-time">00:00</b><small id="hud-time-state">moving</small></div>
+        <div class="tile distance"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 22V3h12.5l-2.2 4.5 2.2 4.5H7.4v10z"/></svg>Distance</label><b id="hud-distance">0.0</b><small id="hud-distance-sub">km</small></div>
+        <div class="tile elevation"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M1.5 20.5 8.5 8l3.8 6.4 3-4.3 7.2 10.4z"/></svg>Climbed</label><b id="hud-ascent">0</b><small id="hud-altitude">m</small><small id="hud-climb-left" class="climb-left" hidden></small></div>
+        <div class="tile gear"><label><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="m13.4 2 .5 2.6a7.6 7.6 0 0 1 2 .9l2.2-1.5 2 2-1.5 2.2c.4.6.7 1.3.9 2l2.6.5v2.8l-2.6.5a7.6 7.6 0 0 1-.9 2l1.5 2.2-2 2-2.2-1.5a7.6 7.6 0 0 1-2 .9l-.5 2.6h-2.8l-.5-2.6a7.6 7.6 0 0 1-2-.9l-2.2 1.5-2-2 1.5-2.2a7.6 7.6 0 0 1-.9-2L2 13.4v-2.8l2.6-.5c.2-.7.5-1.4.9-2L4 5.9l2-2 2.2 1.5c.6-.4 1.3-.7 2-.9l.5-2.6zM12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z"/></svg>Gear</label><b id="hud-gear">–</b><small id="hud-gear-ratio"></small></div>
         <div class="tile rider-badge"><span class="avatar" id="hud-avatar">🚴</span><b id="hud-name">Rider</b></div>
       </div>
       <div class="hud-route-row">
         <div class="hud-route">
-          <b id="hud-route-name"></b><span class="lap"> · lap <span id="hud-lap">1</span></span> · <span id="hud-dist"></span> · <span id="hud-grade">0.0 %</span>
+          <b id="hud-route-name"></b><span class="lap"> · lap <span id="hud-lap">1</span></span> · <span id="hud-grade">0.0 %</span>
         </div>
         <button id="hud-uturn" class="uturn" title="Turn around (U)" hidden><span class="arrow"></span>Turn around</button>
         <span id="hud-notice" class="hud-notice" hidden></span>
@@ -301,7 +303,11 @@
       </div>
       <div class="hud-bottom">
         <canvas id="minimap" class="minimap"></canvas>
-        <div class="hud-profile"><canvas id="profile"></canvas></div>
+        <div class="hud-profile">
+          <div class="profile-head"><span id="profile-title">Next 2 km</span><span id="profile-range" class="hint"></span></div>
+          <canvas id="profile"></canvas>
+          <canvas id="profile-overview" title="The whole ride: the lit box is the stretch shown above"></canvas>
+        </div>
       </div>
       <div class="hud-hints">
         <span>Esc menu · ↑ ↓ shift · ← → turn · U turn around · C camera · F11 fullscreen · <span id="fps"></span> <span id="hud-tiles" class="hint"></span><br /><span id="attribution" class="attribution"></span></span>

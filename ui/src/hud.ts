@@ -1,4 +1,5 @@
-// The ride overlay: live numbers and the elevation profile with the rider's position.
+// The ride overlay: live numbers and the elevation profile with the rider's position: the next
+// two kilometres large, graded in colour, and the whole ride small underneath.
 import { duration, num } from "./format";
 import { clockAfter, maneuverIcon, shortDistance, shortDuration } from "./nav";
 import type { EngineSnapshot, Workout } from "./types";
@@ -6,10 +7,37 @@ import type { RouteSampler } from "./world/route";
 
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 
+/** What the detailed profile shows around the rider: a little behind, two kilometres ahead. */
+const DETAIL_BEHIND_M = 150;
+const DETAIL_AHEAD_M = 2000;
+/** A flight covers ground five times as fast. */
+const FLIGHT_BEHIND_M = 500;
+const FLIGHT_AHEAD_M = 10000;
+
+/** Colour of a stretch by its grade: blue down, grey-green flat, then yellow to red as it steepens. */
+export function gradeColor(grade: number): string {
+  if (grade < -2) return "#40c8ff";
+  if (grade < 2) return "#7fcf9a";
+  if (grade < 4) return "#ffd84d";
+  if (grade < 6) return "#ffb020";
+  if (grade < 8) return "#ff8a3d";
+  if (grade < 10) return "#ff5c5c";
+  return "#d6336c";
+}
+
+/** What is left to the end of the ride, when it has one. */
+export interface Goal {
+  left_m: number;
+  climb_m: number | null;
+}
+
 export class Hud {
-  private profile: number[];
   private canvas = $("profile") as HTMLCanvasElement;
+  private overview = $("profile-overview") as HTMLCanvasElement;
+  /** The whole route's heights for the overview strip, 0..1 of its range. */
+  private profile: number[];
   private lastKey = "";
+  private overviewKey = "";
   private frames = 0;
   private fpsAt = performance.now();
 
@@ -23,22 +51,38 @@ export class Hud {
     this.windowed = windowed;
     this.flight = !!sampler.route.flight;
     $("hud-route-name").textContent = sampler.route.name;
-    this.profile = sampler.profile(400);
-    window.addEventListener("resize", () => (this.lastKey = ""));
+    $("profile-title").textContent = this.flight ? "Next 10 km" : "Next 2 km";
+    this.profile = sampler.profile(300);
+    window.addEventListener("resize", () => {
+      this.lastKey = "";
+      this.overviewKey = "";
+    });
   }
 
   setSampler(sampler: RouteSampler) {
     this.sampler = sampler;
     $("hud-route-name").textContent = sampler.route.name;
-    this.profile = sampler.profile(400);
+    this.profile = sampler.profile(300);
+    this.lastKey = "";
+    this.overviewKey = "";
+  }
+
+  /** Windowed: a free ride with no end (no distance or climbing to go, no lap counter). */
+  setWindowed(on: boolean) {
+    this.windowed = on;
     this.lastKey = "";
   }
 
-  /** Windowed: the profile shows the road ahead instead of the whole route (free rides). */
-  setWindowed(on: boolean) {
-    this.windowed = on;
-    if (!on) this.profile = this.sampler.profile(400);
-    this.lastKey = "";
+  /** Distance and climbing to the end: a planned ride's destination, or the end of an open route. */
+  private goal(snap: EngineSnapshot): Goal | null {
+    const s = snap.session;
+    const nav = snap.navigation;
+    if (nav?.planned && nav.remaining_m !== null) return { left_m: nav.remaining_m, climb_m: nav.remaining_climb_m };
+    if (this.windowed || this.sampler.route.closed) return null;
+    return {
+      left_m: Math.max(0, this.sampler.length - s.route_position_m),
+      climb_m: this.flight ? null : this.sampler.climbAhead(s.route_position_m),
+    };
   }
 
   private noticeUntil = 0;
@@ -55,7 +99,8 @@ export class Hud {
   private updateNavigation(snap: EngineSnapshot) {
     const nav = snap.navigation;
     const s = snap.session;
-    $("hud-uturn").hidden = !nav;
+    // Any ride can turn round: a network ride takes the road back, a single route leads back to its start.
+    $("hud-uturn").hidden = false;
     $("hud-notice").hidden = performance.now() > this.noticeUntil;
     const box = $("hud-nav");
     if (!nav?.planned) {
@@ -112,38 +157,32 @@ export class Hud {
     $("hud-gear-ratio").textContent = `of ${s.gear_count}`;
     $("hud-lap").textContent = String(s.lap + 1);
     // The lap counter hides on a free ride and a flight (the CSS keys on the strip, not the counter's own span).
-    ($("hud-lap").closest(".hud-route") as HTMLElement).classList.toggle("windowed", this.windowed || this.flight);
+    ($("hud-lap").closest(".hud-route") as HTMLElement).classList.toggle("windowed", this.windowed || this.flight || !this.sampler.route.closed);
+
+    // Distance ridden, and what is left when the ride has an end.
+    const goal = this.goal(snap);
+    const km = s.stats.distance_m / 1000;
+    $("hud-distance").textContent = km.toFixed(km < 100 ? 2 : 1);
+    $("hud-distance-sub").textContent = goal ? `km · ${shortDistance(goal.left_m)} to go` : this.flight ? "km flown" : "km ridden";
+    // Climbing: since the start, the height above the sea here, and what is left to climb.
+    const altitude = this.sampler.pose(s.distance_m).y;
+    $("hud-ascent").textContent = `${Math.round(s.stats.ascent_m)}`;
+    $("hud-altitude").textContent = `m · ${Math.round(altitude)} m above sea`;
+    const left = $("hud-climb-left");
+    left.hidden = goal?.climb_m == null;
+    if (goal?.climb_m != null) left.textContent = `${Math.round(goal.climb_m)} m left to climb`;
+
     const grade = $("hud-grade");
     if (this.flight) {
-      // A flight: how far along, and the plane's altitude (the route's height is it).
-      $("hud-dist").textContent = `${(s.route_position_m / 1000).toFixed(1)} / ${(this.sampler.length / 1000).toFixed(1)} km flown`;
-      grade.textContent = `${Math.round(this.sampler.pose(s.route_position_m).y)} m up`;
+      grade.textContent = `${Math.round(altitude)} m up`;
       grade.className = "";
     } else {
-      $("hud-dist").textContent = this.windowed ? `${(s.distance_m / 1000).toFixed(2)} km ridden` : `${(s.route_position_m / 1000).toFixed(2)} / ${(this.sampler.length / 1000).toFixed(1)} km`;
       const g = s.road_grade_pct;
       grade.textContent = `${g >= 0 ? "+" : ""}${g.toFixed(1)} %`;
       grade.className = g > 3 ? "climb" : g < -3 ? "descent" : "";
     }
-    if (this.windowed) {
-      // The profile of the road from 300 m behind to 4.7 km ahead (a flight: 1 km behind, 19 ahead).
-      const from = Math.max(0, s.distance_m - (this.flight ? 1000 : 300));
-      const span = this.flight ? 20000 : 5000;
-      const n = 200;
-      let lo = Infinity;
-      let hi = -Infinity;
-      const ys = Array.from({ length: n }, (_, k) => this.sampler.pose(Math.min(this.sampler.length, from + (k / (n - 1)) * span)).y);
-      for (const y of ys) {
-        lo = Math.min(lo, y);
-        hi = Math.max(hi, y);
-      }
-      const range = Math.max(hi - lo, 60);
-      this.profile = ys.map((y) => (y - lo) / range);
-      this.lastKey = "";
-      this.drawProfile((s.distance_m - from) / span);
-      return;
-    }
-    this.drawProfile(s.route_position_m / this.sampler.length);
+    this.drawDetail(s.distance_m, goal);
+    this.drawOverview(this.sampler.route.closed ? s.route_position_m : s.distance_m);
   }
 
   private updateWorkout(snap: EngineSnapshot) {
@@ -175,48 +214,182 @@ export class Hud {
     }
   }
 
-  private drawProfile(fraction: number) {
-    const c = this.canvas;
+  /** Sets a canvas's backing size to its CSS size (at most 2x) and returns its 2D context, or null when hidden. */
+  private static context(c: HTMLCanvasElement): [CanvasRenderingContext2D, number, number] | null {
     const w = c.clientWidth;
     const h = c.clientHeight;
-    const key = `${w}x${h}:${fraction.toFixed(4)}`;
-    if (key === this.lastKey || w === 0) return;
-    this.lastKey = key;
+    if (!w || !h) return null;
     const dpr = Math.min(window.devicePixelRatio, 2);
-    if (c.width !== w * dpr || c.height !== h * dpr) {
-      c.width = w * dpr;
-      c.height = h * dpr;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
     }
     const ctx = c.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const n = this.profile.length;
-    const y = (v: number) => h - 6 - v * (h - 14);
+    return [ctx, w, h];
+  }
+
+  /**
+   * The road from a little behind the rider to two kilometres ahead, at a height scale fine
+   * enough to read a ramp: each stretch coloured by its grade, the grade written over each
+   * steeper quarter kilometre, a tick every 500 m, the finish if it is in sight.
+   */
+  private drawDetail(d: number, goal: Goal | null) {
+    const behind = this.flight ? FLIGHT_BEHIND_M : DETAIL_BEHIND_M;
+    const span = behind + (this.flight ? FLIGHT_AHEAD_M : DETAIL_AHEAD_M);
+    const key = `${this.canvas.clientWidth}x${this.canvas.clientHeight}:${Math.round(d)}`;
+    if (key === this.lastKey) return;
+    this.lastKey = key;
+    const got = Hud.context(this.canvas);
+    if (!got) return;
+    const [ctx, w, h] = got;
+    const closed = this.sampler.route.closed;
+    const length = this.sampler.length;
+    const from = closed ? d - behind : Math.max(0, d - behind);
+    // The last distance with road: an open route ends.
+    const last = closed ? from + span : Math.min(from + span, length);
+    const n = 221;
+    const step = span / (n - 1);
+    const ds: number[] = [];
+    for (let k = 0; k < n && from + k * step <= last + 1e-6; k++) ds.push(from + k * step);
+    if (ds.length < 2) return;
+    const ys = ds.map((x) => this.sampler.pose(x).y);
+    let lo = Math.min(...ys);
+    let hi = Math.max(...ys);
+    // At least 20 m of height on the scale: a flat road stays flat, a 3 % ramp shows.
+    const pad = Math.max(0, 20 - (hi - lo)) / 2;
+    lo -= pad;
+    hi += pad;
+    const top = 16;
+    const bottom = h - 15;
+    const X = (x: number) => ((x - from) / span) * w;
+    const Y = (y: number) => top + (1 - (y - lo) / (hi - lo)) * (bottom - top);
+    // Colour by the grade of whole 50 m blocks (100 m on a flight): solid bands, not stripes.
+    const block = this.flight ? 250 : 50;
+    const gradeAt = (x: number) => {
+      const a = Math.floor(x / block) * block;
+      return ((this.sampler.pose(a + block).y - this.sampler.pose(a).y) / block) * 100;
+    };
+
+    // Coloured columns under the line, the stretch behind the rider dimmed.
+    for (let k = 0; k + 1 < ds.length; k++) {
+      const mid = (ds[k] + ds[k + 1]) / 2;
+      ctx.globalAlpha = mid < d ? 0.3 : 0.8;
+      ctx.fillStyle = gradeColor(gradeAt(mid));
+      ctx.beginPath();
+      ctx.moveTo(X(ds[k]), Y(ys[k]));
+      ctx.lineTo(X(ds[k + 1]) + 0.5, Y(ys[k + 1]));
+      ctx.lineTo(X(ds[k + 1]) + 0.5, bottom);
+      ctx.lineTo(X(ds[k]), bottom);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
     ctx.beginPath();
-    ctx.moveTo(0, h);
-    this.profile.forEach((v, i) => ctx.lineTo((i / (n - 1)) * w, y(v)));
-    ctx.lineTo(w, h);
-    ctx.closePath();
-    const fill = ctx.createLinearGradient(0, 0, 0, h);
-    fill.addColorStop(0, "rgba(255,196,0,0.55)");
-    fill.addColorStop(1, "rgba(255,196,0,0.08)");
-    ctx.fillStyle = fill;
-    ctx.fill();
-    ctx.beginPath();
-    this.profile.forEach((v, i) => (i ? ctx.lineTo((i / (n - 1)) * w, y(v)) : ctx.moveTo(0, y(v))));
-    ctx.strokeStyle = "#ffc400";
+    ds.forEach((x, k) => (k ? ctx.lineTo(X(x), Y(ys[k])) : ctx.moveTo(X(x), Y(ys[k]))));
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    // Rider marker.
-    const x = fraction * w;
-    const i = Math.min(n - 1, Math.round(fraction * (n - 1)));
+
+    ctx.font = "600 11px Inter, system-ui, sans-serif";
+    ctx.textBaseline = "alphabetic";
+    // Ticks every 500 m ahead of the rider (2 km on a flight), labelled underneath.
+    const tick = this.flight ? 2000 : 500;
+    ctx.fillStyle = "rgba(232,236,245,0.7)";
+    ctx.textAlign = "center";
+    for (let m = tick; d + m <= from + span; m += tick) {
+      const x = X(d + m);
+      ctx.fillRect(Math.round(x), bottom, 1, 4);
+      const label = m < 1000 ? `${m} m` : `${m / 1000} km`;
+      if (d + m <= last) ctx.fillText(label, Math.min(w - 18, x), h - 2);
+    }
+    // The grade over each 250 m ahead (500 m on a flight) where it matters.
+    const bin = this.flight ? 1000 : 250;
+    let steepest = -Infinity;
+    for (let a = d; a + bin <= last + 1; a += bin) {
+      const g = ((this.sampler.pose(a + bin).y - this.sampler.pose(a).y) / bin) * 100;
+      steepest = Math.max(steepest, g);
+      if (Math.abs(g) < 2) continue;
+      const cx = X(a + bin / 2);
+      const cy = Math.min(Y(this.sampler.pose(a + bin / 2).y), Y(this.sampler.pose(a + bin * 0.25).y), Y(this.sampler.pose(a + bin * 0.75).y)) - 5;
+      const text = `${g > 0 ? "" : "−"}${Math.abs(g).toFixed(Math.abs(g) < 10 ? 1 : 0)}%`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(15,18,27,0.85)";
+      ctx.strokeText(text, cx, Math.max(12, cy));
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(text, cx, Math.max(12, cy));
+    }
+    $("profile-range").textContent = Number.isFinite(steepest) && steepest >= 1 ? `steepest ${steepest.toFixed(1)} % · ${Math.round(hi - pad)} m top` : `${Math.round(hi - pad)} m top`;
+    // The finish, when it is in sight.
+    if (goal && !closed && length <= from + span) {
+      const x = X(length);
+      for (let k = 0; k < 6; k++) {
+        ctx.fillStyle = k % 2 ? "#0f121b" : "#ffffff";
+        ctx.fillRect(x - 1, top + k * 6, 3, 6);
+      }
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = x > w - 40 ? "right" : "left";
+      ctx.fillText("finish", x + (x > w - 40 ? -5 : 5), top + 10);
+    }
+    // Height scale at the left edge.
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(232,236,245,0.75)";
+    ctx.fillText(`${Math.round(hi - pad)} m`, 4, top - 4);
+    // The rider.
+    const rx = X(d);
+    const ry = Y(this.sampler.pose(d).y);
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.fillRect(Math.round(rx), ry, 1, bottom - ry);
     ctx.beginPath();
-    ctx.arc(x, y(this.profile[i]), 5, 0, Math.PI * 2);
+    ctx.arc(rx, ry, 5.5, 0, Math.PI * 2);
     ctx.fillStyle = "#ffffff";
     ctx.fill();
     ctx.strokeStyle = "#0f121b";
     ctx.lineWidth = 2;
     ctx.stroke();
+  }
+
+  /** The whole ride, small: ridden part lit, the detailed stretch boxed, the rider a dot. */
+  private drawOverview(position: number) {
+    const length = this.sampler.length || 1;
+    const fraction = Math.min(1, Math.max(0, position / length));
+    const key = `${this.overview.clientWidth}x${this.overview.clientHeight}:${fraction.toFixed(4)}`;
+    if (key === this.overviewKey) return;
+    this.overviewKey = key;
+    const got = Hud.context(this.overview);
+    if (!got) return;
+    const [ctx, w, h] = got;
+    const n = this.profile.length;
+    const Y = (v: number) => h - 2 - v * (h - 5);
+    const area = new Path2D();
+    area.moveTo(0, h);
+    this.profile.forEach((v, i) => area.lineTo((i / (n - 1)) * w, Y(v)));
+    area.lineTo(w, h);
+    area.closePath();
+    const rx = fraction * w;
+    ctx.fillStyle = "rgba(232,236,245,0.3)";
+    ctx.fill(area);
+    // Ridden: lit up to the rider.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, rx, h);
+    ctx.clip();
+    ctx.fillStyle = "rgba(255,196,0,0.55)";
+    ctx.fill(area);
+    ctx.restore();
+    // The stretch the large profile shows.
+    const behind = this.flight ? FLIGHT_BEHIND_M : DETAIL_BEHIND_M;
+    const ahead = this.flight ? FLIGHT_AHEAD_M : DETAIL_AHEAD_M;
+    const x0 = Math.max(0, ((position - behind) / length) * w);
+    const x1 = Math.min(w, ((position + ahead) / length) * w);
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x0 + 0.5, 0.5, Math.max(2, x1 - x0 - 1), h - 1);
+    const i = Math.min(n - 1, Math.round(fraction * (n - 1)));
+    ctx.beginPath();
+    ctx.arc(rx, Y(this.profile[i]), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
   }
 }
 

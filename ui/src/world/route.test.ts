@@ -18,6 +18,12 @@ function square(): Route {
 describe("RouteSampler", () => {
   const s = new RouteSampler(square());
 
+  it("counts the climbing left", () => {
+    expect(s.climbAhead(0)).toBeCloseTo(5);
+    expect(s.climbAhead(45)).toBeCloseTo(2.75);
+    expect(s.climbAhead(150)).toBeCloseTo(0);
+  });
+
   it("knows its length and wraps laps", () => {
     expect(s.length).toBe(400);
     expect(s.wrap(450)).toBe(50);
