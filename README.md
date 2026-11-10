@@ -322,7 +322,7 @@ curl -o dem.tif https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_1
 # the A-7204 to Riogordo comes from a second query (ref A-7204) merged into the same JSON
 .venv/bin/python tools/build_route.py --osm malaga_riogordo.json --dem dem.tif --dem-fine ign5_A.tif ign5_B.tif ign5_C.tif ign5_D.tif ign5_E.tif ign5_F.tif \
   --id malaga-colmenar --name "Málaga → Riogordo" --from 36.7337,-4.4158 --to 36.9167,-4.2917 \
-  --lead-in 5000 --lead-in-bearing 250 --urban "0,5600,3,7;5600,7200,2,4" \
+  --lead-in 5000 --lead-in-bearing 250 --urban "0,5200,3,7;5550,6700,1,3;34550,35650,1,3;36050,36650,1,3;42350,43160,1,3" \
   --smooth 5 --near-spacing 20 --band-spacing 10 --ortho --ortho-blocks 6 --ortho-zoom 15
 ```
 
@@ -332,6 +332,9 @@ points in order, `--merge` collapses split carriageways. `--lead-in` adds a
 flat, straight, made-up stretch before the start, arriving from
 `--lead-in-bearing`, with the ground within 250 m levelled to it; `--urban`
 marks stretches (metres along the final route) that get houses on both sides.
+Málaga's come from OSM buildings within 50 m of the road (andalucia.osm.pbf, 2026-11-10: the
+city ends 2.6 km up the A-7000, then only hamlets at 11.6 and 17.6 km until Colmenar); the
+three villages get `"style": "village"` by hand in the world json.
 
 `--ortho` fetches about 300 map tiles (cached under `~/.cache/wattsup/tiles`)
 and writes 16 photo textures of 1024 px for the near grid plus one for the

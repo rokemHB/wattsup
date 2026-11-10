@@ -272,6 +272,18 @@ elevation and imagery and the mid blocks' zoom-14 imagery, which "Download all t
 missed), and at startup `ensureTerrain` asks `cache_missing` (existence only) and fetches the
 rest in the background. A network ride starts once every tile in reach is built
 (`whenSettled`, tiles built in 50 ms slices four at a time behind the loading screen).
+The ride HUD (`hud.ts`, after Robin's first real ride, 2026-11-10): one colour and icon per value
+(power yellow, cadence blue, heart red, speed green, distance violet, climbing orange), Distance
+ridden with "to go" when the ride has an end (a planned ride's destination or an open route's end;
+loops and free rides have none), Climbed (`stats.ascent_m`) with the height above the sea and the
+climbing left (`RouteSampler.climbAhead`, or `navigation.remaining_climb_m`). The profile shows
+150 m behind to 2 km ahead (a flight: 10 km) coloured by the grade of 50 m blocks, the grade over
+each 250 m written on it, and the whole ride as a strip underneath with that stretch boxed.
+U turns round on single routes too (`TurnableRoute` in `route.rs`, kept by the engine since
+`set_route`): the road behind stays, the road ahead is the way back, and the ride finishes at the
+start; a loop laps the other way. `reset_ride` puts the route back. The trainer's cadence is the
+KICKR's own smoothed figure: when pedalling stops it holds for 1-2 s, then drops to 0, and the
+rider's legs follow it exactly. Málaga's houses come from OSM buildings (README, "Single routes").
 Measuring on 2026-11-09 evening was impossible: two Blender renders and Factorio from another
 project held the CPU and the shared GPU (load 25; GPU time per frame the same at render scale
 1.0 and 1.5). Check `uptime` before trusting a frame number.
