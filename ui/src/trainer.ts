@@ -35,6 +35,13 @@ export function quickBlock(minutes: number, watts: number, warmMin: number, cool
   return { name: `${minutes} min at ${watts} W`, steps };
 }
 
+/** The line under the live numbers: ridden time and distance (and energy, where there is room: not in the small window). */
+function elapsedLine(s: EngineSnapshot["session"]): string {
+  const km = `${(s.stats.distance_m / 1000).toFixed(1)} km`;
+  if (document.body.classList.contains("compact")) return `${km} · ${duration(s.elapsed_s)}`;
+  return `${duration(s.elapsed_s)} · ${km} · ${Math.round(s.stats.energy_kj)} kJ`;
+}
+
 export class TrainerScreen {
   private phase: Phase = "setup";
   private workout: Workout | null = null;
@@ -237,7 +244,7 @@ export class TrainerScreen {
     $("trainer-next").textContent = w.next_watts === null ? "last interval" : `next ${Math.round(w.next_watts)} W`;
     $("trainer-total").textContent = `${duration(Math.max(0, w.total_seconds - w.elapsed_s))} left of ${duration(w.total_seconds)}`;
     $("trainer-paused").hidden = !w.paused;
-    $("trainer-elapsed").textContent = `${duration(s.elapsed_s)} · ${(s.stats.distance_m / 1000).toFixed(1)} km · ${Math.round(s.stats.energy_kj)} kJ`;
+    $("trainer-elapsed").textContent = elapsedLine(s);
     const bar = $<HTMLCanvasElement>("trainer-bar");
     const key = `${bar.clientWidth}:${w.elapsed_s.toFixed(0)}:${w.name}`;
     if (key !== this.barKey) {
@@ -263,7 +270,7 @@ export class TrainerScreen {
     power.className = s.power_w === null ? "" : Math.abs(s.power_w - target) <= Math.max(10, target * 0.08) ? "on" : "off";
     $("trainer-cadence").textContent = num(s.cadence_rpm);
     $("trainer-hr").textContent = num(s.heart_rate_bpm);
-    $("trainer-elapsed").textContent = `${duration(s.elapsed_s)} · ${(s.stats.distance_m / 1000).toFixed(1)} km · ${Math.round(s.stats.energy_kj)} kJ`;
+    $("trainer-elapsed").textContent = elapsedLine(s);
   }
 
   /** A workout started elsewhere: the bar needs its steps, which the snapshot does not carry; use the saved one by name. */
