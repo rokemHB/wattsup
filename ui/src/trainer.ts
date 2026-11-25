@@ -6,7 +6,7 @@ import { $, el } from "./dom";
 import { duration, num } from "./format";
 import { drawWorkout } from "./hud";
 import type { EngineSnapshot, Workout } from "./types";
-import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp } from "./workouts";
+import { currentWorkout, describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp } from "./workouts";
 
 export interface TrainerCallbacks {
   /** Starts `w` in ERG mode on the flat road, with no world. */
@@ -273,10 +273,12 @@ export class TrainerScreen {
     $("trainer-elapsed").textContent = elapsedLine(s);
   }
 
-  /** A workout started elsewhere: the bar needs its steps, which the snapshot does not carry; use the saved one by name. */
+  /** A workout started elsewhere: the bar needs its steps, which the snapshot does not carry; the one last started, else a saved one, by name. */
   private rebuild(snap: EngineSnapshot): Workout | null {
     const name = snap.session.workout?.name;
-    const found = loadWorkouts().find((w) => w.name === name) ?? PRESETS.filter((p) => p.name === name).map((p) => fromPreset(p, this.ftp))[0];
+    const last = currentWorkout();
+    const found = (last?.name === name ? last : undefined) ??
+      loadWorkouts().find((w) => w.name === name) ?? PRESETS.filter((p) => p.name === name).map((p) => fromPreset(p, this.ftp))[0];
     if (found) this.workout = found;
     return found ?? null;
   }

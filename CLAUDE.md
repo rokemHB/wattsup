@@ -321,10 +321,22 @@ rebuilds it). The session has `set_workout_bias` (+/− watts on every step)
 and `skip_workout_step`; the snapshot's `WorkoutSnapshot.bias_w` shows it.
 "Free ERG" is a target with no workout (`set_mode erg` + `set_erg_target`;
 `TrainerScreen.free`). "Small window" opens a second Tauri window (label
-`compact`, `index.html?compact`, fixed 440×320, always on top; permissions in
+`compact`, `index.html?compact`, 440 wide, always on top; permissions in
 `src-tauri/capabilities/default.json`) and hides the main one until it closes:
-a fixed size is what Hyprland floats at map time, a live resize of a tiled
-window does nothing. The small window runs the same UI in `compactWindow`
+a fixed size (min = max) is what Hyprland floats at map time, a live resize of a tiled
+window does nothing. Never `resizable: false`: GTK then holds the first size and
+neither the app nor Hyprland can change it. `fitCompactWindow` (`main.ts`) makes it
+as tall as the view it shows (free ERG 182, a workout 246, setup capped at 360) and
+puts it in the top right corner of the work area: Windows, macOS and X11 from the
+Tauri API; on Wayland the app may not size, place or raise itself, so on Hyprland
+`pin_overlay` (`src-tauri/src/overlay.rs`, `hyprctl`, Lua dispatchers with the
+classic ones as fallback) resizes, pins (a pinned float shows above fullscreen
+windows: checked 2026-11-25 with a fullscreen terminal) and moves it, putting the top
+back after Hyprland's resize about the centre unless the rider dragged it. macOS:
+`visibleOnAllWorkspaces` only (unverified); above another app's fullscreen Space would
+need `NSWindowCollectionBehaviorFullScreenAuxiliary`. The interval bar of a workout the
+main window started comes from `currentWorkout()` (localStorage, shared by both windows).
+The small window runs the same UI in `compactWindow`
 mode (trainer screen only, no world, no scan); `save_ride` dedups by start
 time so both windows can end and store the same ride. Keep the live view
 cheap: no canvas but the interval bar, redrawn once a second.

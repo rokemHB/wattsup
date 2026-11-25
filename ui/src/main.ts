@@ -15,7 +15,7 @@ import { Router, type PlannedPath } from "./routing";
 import type { EngineSnapshot, Junction, Navigation, Route, RouteInfo, Workout } from "./types";
 import { loadNetwork, NetworkIndex, type RoadNetwork } from "./world/network";
 import { Frame, prefetchUrls, prefetchWorld, worldDownloadEstimate, worldUrls } from "./world/streaming";
-import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, saveFtp, saveWorkouts, validStep } from "./workouts";
+import { describe, fromPreset, loadFtp, loadWorkouts, PRESETS, rampOutcome, rememberCurrentWorkout, saveFtp, saveWorkouts, validStep } from "./workouts";
 import { loadNetworkWorld, loadWorld, type NetworkWorldData, type WorldData } from "./world/terrain";
 import { World } from "./world/world";
 import { type Action, loadMapping, mappingRows } from "./controls";
@@ -101,6 +101,7 @@ async function startTrainerWorkout(w: Workout) {
     fillRouteList();
   }
   await api.resetRide();
+  rememberCurrentWorkout(w);
   await api.startWorkout(w);
   activeWorkout = w;
   finishShown = false;
@@ -998,6 +999,44 @@ function toggleDebug() {
   drawer.hidden = !drawer.hidden;
 }
 
+/** The small window never grows past this: the setup list scrolls inside it. */
+const COMPACT_MAX_H = 360;
+
+/**
+ * The small window: as tall as the view it shows (setup, live numbers or done), so no empty band
+ * stays under the numbers, refitted whenever that view changes size; after the first fit it goes
+ * into the top right corner, above other windows.
+ */
+function fitCompactWindow() {
+  const screen = $("screen-trainer");
+  const body = screen.querySelector<HTMLElement>(".panel-body");
+  const views = ["trainer-setup", "trainer-live", "trainer-done"].map((id) => $(id));
+  if (!body) return;
+  const padding = (e: Element) => parseFloat(getComputedStyle(e).paddingBottom) || 0;
+  let fitted = 0;
+  let placed = false;
+  let timer = 0;
+  const fit = () => {
+    const shown = views.find((v) => !v.hidden);
+    if (!shown) return;
+    const bottom = shown.getBoundingClientRect().bottom + body.scrollTop - screen.getBoundingClientRect().top;
+    const height = Math.min(COMPACT_MAX_H, Math.ceil(bottom + padding(body) + padding(screen)));
+    if (Math.abs(height - fitted) < 2) return;
+    fitted = height;
+    const place = !placed;
+    placed = true;
+    api
+      .fitCompactWindow(height, place)
+      .then((done) => console.warn(`small window: ${height} px high, ${done}`))
+      .catch((e) => console.warn("small window: no fit", e));
+  };
+  const observer = new ResizeObserver(() => {
+    clearTimeout(timer);
+    timer = window.setTimeout(fit, 120);
+  });
+  for (const v of views) observer.observe(v);
+}
+
 async function start() {
   if (!insideTauri()) {
     $("not-tauri").hidden = false;
@@ -1022,6 +1061,7 @@ async function start() {
   if (compactWindow) {
     trainerScreen.setCompactUi(true);
     show("trainer");
+    fitCompactWindow();
     return;
   }
   const wanted = startup.screen ?? (startup.start_m > 0 ? "ride" : "start");

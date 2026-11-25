@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod idle;
+mod overlay;
 mod tiles;
 
 use std::time::Duration;
@@ -58,6 +59,20 @@ fn store_current(state: &AppState, only_real: bool) -> Result<Option<RideSummary
         start
     };
     state.rides.save(report, started_at_ms).map(Some)
+}
+
+/// The trainer's small window on Hyprland, where the app cannot do this itself (see overlay.rs):
+/// sized to its content, pinned above everything (fullscreen video too), in the top right corner.
+#[tauri::command]
+async fn pin_overlay(width: u32, height: u32, place: bool) -> String {
+    let done = tauri::async_runtime::spawn_blocking(move || overlay::pin(width, height, place)).await;
+    let message = match done {
+        Ok(Ok(m)) => m,
+        Ok(Err(e)) => e,
+        Err(e) => e.to_string(),
+    };
+    log::info!("small window: {message}");
+    message
 }
 
 /// Keeps the screen on while riding (see idle.rs).
@@ -427,6 +442,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             keep_awake,
+            pin_overlay,
             startup_info,
             snapshot,
             route,

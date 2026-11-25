@@ -1,7 +1,8 @@
 // Typed wrappers around the Tauri commands in src-tauri/src/main.rs.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { PlannedLeg } from "./routing";
 import type {
@@ -22,9 +23,7 @@ import type {
 
 export const insideTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
-/** The window size before compact mode, to restore it. */
-
-/** The trainer's small window, in logical pixels. */
+/** The trainer's small window, in logical pixels: its width, and its height until it fits its content. */
 const COMPACT_W = 440;
 const COMPACT_H = 320;
 
@@ -104,7 +103,7 @@ export const api = {
       minHeight: COMPACT_H,
       maxHeight: COMPACT_H,
       alwaysOnTop: true,
-      resizable: false,
+      visibleOnAllWorkspaces: true,
     });
     await new Promise<void>((resolve, reject) => {
       win.once("tauri://created", () => resolve());
@@ -119,6 +118,38 @@ export const api = {
       await main.show();
       await main.setFocus();
     }, 700);
+  },
+  /**
+   * From the small window: exactly as tall as what it shows, in the top right corner of its
+   * screen's work area, above other windows. The size is held by min = max (a fixed size is what
+   * Hyprland floats; `resizable: false` would pin GTK to the first size). Windows, macOS and X11
+   * take size and position from here; on Wayland neither is the app's to set, so on Hyprland the
+   * compositor is asked to resize, pin and move it (`pin_overlay`), which also keeps it above a
+   * fullscreen video. `place` moves it to the corner (the first fit); later fits keep its place.
+   */
+  fitCompactWindow: async (height: number, place: boolean): Promise<string> => {
+    const win = getCurrentWindow();
+    const h = Math.round(height);
+    const size = new LogicalSize(COMPACT_W, h);
+    await win.setMinSize(null);
+    await win.setMaxSize(null);
+    await win.setSize(size);
+    await win.setMinSize(size);
+    await win.setMaxSize(size);
+    if (place) {
+      try {
+        const monitor = await currentMonitor();
+        if (monitor) {
+          const outer = await win.outerSize();
+          const area = monitor.workArea;
+          await win.setPosition(new PhysicalPosition(area.position.x + area.size.width - outer.width, area.position.y));
+        }
+      } catch (e) {
+        console.warn("small window: no position", e);
+      }
+      await win.setAlwaysOnTop(true).catch(() => {});
+    }
+    return invoke<string>("pin_overlay", { width: COMPACT_W, height: h, place });
   },
   /** From the small window: bring the main window back and close this one. */
   closeCompactWindow: async () => {

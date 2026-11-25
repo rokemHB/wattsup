@@ -105,3 +105,27 @@ export function saveFtp(ftp: number) {
 export function validStep(s: WorkoutStep): boolean {
   return Number.isFinite(s.watts) && s.watts >= 0 && s.watts <= 1500 && Number.isFinite(s.seconds) && s.seconds > 0;
 }
+
+/**
+ * The workout the trainer was last started with (localStorage `wattsup.currentWorkout`): the
+ * snapshot carries no steps, and the small window, which did not start it, draws its interval
+ * bar from this (a quick block is in no saved list).
+ */
+const CURRENT_KEY = "wattsup.currentWorkout";
+
+export function rememberCurrentWorkout(w: Workout) {
+  try {
+    localStorage.setItem(CURRENT_KEY, JSON.stringify(w));
+  } catch {
+    // storage refused: the small window shows no bar
+  }
+}
+
+export function currentWorkout(): Workout | null {
+  try {
+    const raw = localStorage.getItem(CURRENT_KEY);
+    return raw ? (JSON.parse(raw) as Workout) : null;
+  } catch {
+    return null;
+  }
+}
