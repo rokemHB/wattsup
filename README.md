@@ -10,18 +10,22 @@ start screen, menu, rider profile and settings. See
 [HARDWARE_TESTING.md](HARDWARE_TESTING.md) for checking it against real
 hardware and [TODO.md](TODO.md) for what is next.
 
-![Sa Calobra from the road](docs/screenshots/sa-calobra.jpg)
+![Climbing out of Málaga on the A-7000 through the pines, with the ride HUD](docs/screenshots/malaga-climb.jpg)
 
 | | |
 | --- | --- |
-| ![The hairpins of Sa Calobra from above](docs/screenshots/hairpins.jpg) | ![Looking back at the Port de Sa Calobra](docs/screenshots/port.jpg) |
+| ![The Ma-10 near Monnàber from above, through pine woods](docs/screenshots/ma10-drone.jpg) | ![The hairpins of Sa Calobra from above](docs/screenshots/sa-calobra-knot.jpg) |
+| ![The electric plane along the Tramuntana coast](docs/screenshots/flight.jpg) | ![The trainer's small window on top of a fullscreen video](docs/screenshots/small-window.jpg) |
 | ![Start screen](docs/screenshots/start.jpg) | ![Main menu with routes and workouts](docs/screenshots/menu.jpg) |
 
 The terrain is Spain's 5 m elevation model with the PNOA aerial photo draped
-over it, the road is OpenStreetMap's Ma-2141 cut into it with stone
-parapets where the ground drops away, and close-up surfaces are patches of
-the same imagery at 10 cm per pixel. Everything in the pictures is built
-from open data by `tools/build_route.py`; no hand-made assets yet.
+over it, the roads are OpenStreetMap's cut into it with stone parapets where
+the ground drops away, close-up surfaces are patches of the same imagery at
+10 cm per pixel, and the trees stand where Meta and WRI's canopy height map
+has them. Everything in the pictures is built from open data by the tools in
+`tools/`; no hand-made assets yet. The video behind the small window is
+[Big Buck Bunny](https://peach.blender.org/) (© Blender Foundation,
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)).
 
 Beyond the single climb, the Serra de Tramuntana is rideable: the Ma-10 and
 the well-known climbs (Sa Calobra, Puig Major, Coll de Sóller, Coll de sa
