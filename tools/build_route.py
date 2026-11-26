@@ -5,7 +5,7 @@ Inputs:
   --osm       Overpass JSON (`out geom;`) with the road's ways
   --dem       Copernicus GLO-30 COG GeoTIFF covering the wide area (1 arcsec, pixel-is-point)
   --dem-fine  optional finer GeoTIFF in EPSG:4326 for the route and the near grid, e.g.
-              Spain's IGN 5 m model from the IDEE WCS (see README)
+              Spain's IGN 5 m model from the IDEE WCS (see docs/DEVELOPMENT.md)
   --ortho     also fetch aerial imagery (Spain's PNOA through the IGN WMTS) as
               textures aligned to the terrain grids
 Outputs (in the repo):

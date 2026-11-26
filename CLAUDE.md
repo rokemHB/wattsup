@@ -3,8 +3,8 @@
 WattsUp is Robin's gamified indoor cycling app (Zwift-like, no subscription): a
 Rust workspace (`crates/core` pure logic, `crates/devices` BLE + simulator,
 `crates/engine` orchestrator, `crates/cli`), a Tauri v2 shell (`src-tauri`) and
-a Vite/TypeScript + Three.js front end (`ui/`). README.md explains the product
-and the data pipelines; TODO.md is the backlog; HARDWARE_TESTING.md the checks
+a Vite/TypeScript + Three.js front end (`ui/`). README.md pitches the product
+(docs/DEVELOPMENT.md has the internals and data pipelines); TODO.md is the backlog; HARDWARE_TESTING.md the checks
 that still need the real trainer.
 
 ## Rules Robin has set
@@ -74,7 +74,7 @@ Source data lives outside the repo in `~/wattsup-data/`: `tramuntana_osm.json`
 chunks, lattice starting at the bbox origin), `dem_n39_e00[23].tif` (Copernicus
 30 m), `tiles/` (pipeline WMTS cache) and `refs.txt` (the road whitelist). A
 Python venv with `tools/requirements.txt` + `osmium` + `Pillow` is needed.
-The exact build commands are in README.md ("The island", "Single routes").
+The exact build commands are in docs/DEVELOPMENT.md ("The island", "Single routes").
 Outputs are committed: `crates/core/worlds/mallorca/network.{json,bin}`
 (include_bytes in `network.rs`) and `ui/public/worlds/`.
 
@@ -159,7 +159,7 @@ so shadows follow the cut-out. Geometry, atlas and materials are shared and
 marked `userData.shared`, which `TileManager.unload` leaves alone.
 
 Island tiles get real trees from `ui/public/worlds/mallorca-trees.bin.gz`
-(`tools/build_trees.py`, see README): `forest.ts` builds them per 400 m cell
+(`tools/build_trees.py`, see docs/DEVELOPMENT.md): `forest.ts` builds them per 400 m cell
 in `TileManager.plantForest`, one instanced mesh per kind (pine above 7 m,
 round crown below) plus infill near the rider, two-card models beyond 320 m,
 nothing beyond 1 km, shadows within 260 m; scattered pines and oaks are then
@@ -283,7 +283,7 @@ U turns round on single routes too (`TurnableRoute` in `route.rs`, kept by the e
 `set_route`): the road behind stays, the road ahead is the way back, and the ride finishes at the
 start; a loop laps the other way. `reset_ride` puts the route back. The trainer's cadence is the
 KICKR's own smoothed figure: when pedalling stops it holds for 1-2 s, then drops to 0, and the
-rider's legs follow it exactly. Málaga's houses come from OSM buildings (README, "Single routes").
+rider's legs follow it exactly. Málaga's houses come from OSM buildings (docs/DEVELOPMENT.md, "Single routes").
 Measuring on 2026-11-09 evening was impossible: two Blender renders and Factorio from another
 project held the CPU and the shared GPU (load 25; GPU time per frame the same at render scale
 1.0 and 1.5). Check `uptime` before trusting a frame number.

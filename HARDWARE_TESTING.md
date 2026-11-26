@@ -12,7 +12,7 @@ own with the terminal tool first (`wattsup-cli`), because its `--raw` output
 is the only way to see what the device really sends. The desktop app comes
 last.
 
-Everything below assumes the repo builds and the checks in the README pass:
+Everything below assumes the repo builds and the checks in docs/DEVELOPMENT.md pass:
 
 ```sh
 cargo build --workspace
