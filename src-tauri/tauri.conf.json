@@ -28,10 +28,20 @@
     "active": true,
     "targets": "all",
     "category": "SportsGame",
-    "shortDescription": "Gamified indoor cycling",
+    "shortDescription": "Ride real climbs on your smart trainer",
+    "longDescription": "Indoor cycling on real roads with gradients from official terrain data. Drives a Zwift Cog and Click without a subscription, and has ERG workouts in a small always-on-top window.",
+    "publisher": "WattsUp",
+    "copyright": "MIT licensed",
+    "license": "MIT",
+    "homepage": "https://github.com/rokemHB/wattsup",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    },
     "linux": {
-      "deb": { "depends": ["bluez"] }
+      "deb": { "depends": ["bluez"] },
+      "rpm": { "depends": ["bluez"] }
     }
   }
 }

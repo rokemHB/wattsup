@@ -36,6 +36,7 @@
         </nav>
         <div id="menu-week" class="week-card"></div>
         <span id="menu-terrain" class="hint terrain-note"></span>
+        <button id="menu-update" class="update-note" hidden></button>
         <button id="menu-quit" class="quiet">Quit WattsUp</button>
       </div>
       <div class="menu-right">
@@ -227,6 +228,9 @@
         <label class="field">Menu music <input id="settings-music" type="range" min="0" max="100" step="5" /> <span id="settings-music-value"></span></label>
         <h3>Trainer</h3>
         <p class="hint">Virtual gearing uses the trainer's simulation mode. See HARDWARE_TESTING.md for the calibration steps; the debug drawer (D while riding) shows what is sent.</p>
+        <h3>About</h3>
+        <p class="hint">WattsUp <b id="settings-version">–</b>, free and open source (MIT).</p>
+        <label class="check"><input type="checkbox" id="settings-update-check" checked /> Check for a new version at startup (one request to GitHub)</label>
       </div>
     </section>
 

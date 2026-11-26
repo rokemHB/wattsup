@@ -303,6 +303,13 @@ export interface RouteInfo {
   profile?: number[];
 }
 
+/** `check_update`: this build's version and, when GitHub has a newer release, its version and page. */
+export interface UpdateInfo {
+  current: string;
+  newer: string | null;
+  url: string | null;
+}
+
 export interface StartupInfo {
   ble: boolean;
   sim: boolean;

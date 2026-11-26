@@ -78,8 +78,15 @@ puck handles shifting in both directions.
 
 ## Getting it
 
-WattsUp is early but rideable, and there are no ready-made downloads yet. To
-build it you need Rust and Node.js (the full list per platform is in
+**[Download the latest release](https://github.com/rokemHB/wattsup/releases/latest)**
+for Windows, macOS (Apple Silicon and Intel) or Linux (AppImage, .deb, .rpm).
+It's free and stays free.
+
+WattsUp is early but rideable. The builds aren't signed with a paid certificate, so
+Windows and macOS ask once before they open it; the release page says what to
+click. What changed between versions is in [CHANGELOG.md](CHANGELOG.md).
+
+To build it yourself you need Rust and Node.js (the full list per platform is in
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites)):
 
 ```sh

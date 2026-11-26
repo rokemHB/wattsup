@@ -1,0 +1,104 @@
+name: Release
+
+# Pushing a tag vX.Y.Z builds the app for Linux, Windows and macOS and publishes a GitHub
+# Release with the installers attached. The notes come from that version's section in
+# CHANGELOG.md. See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Draft release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions match the tag
+        run: tools/release/check-version.sh "${GITHUB_REF_NAME}"
+      - name: Notes from CHANGELOG.md
+        run: tools/release/notes.sh "${GITHUB_REF_NAME#v}" > notes.md && cat notes.md
+      - name: Draft the release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # A re-run of the workflow reuses the draft it made the first time.
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            pre=""
+            case "$tag" in *-*) pre="--prerelease" ;; esac
+            gh release create "$tag" --draft $pre --verify-tag --title "WattsUp ${tag#v}" --notes-file notes.md
+          fi
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --jq ".[] | select(.tag_name == \"$tag\") | .id" | head -1)
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 rather than the newest Ubuntu: an AppImage runs on systems with the glibc it
+          # was built against or newer.
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            args: ""
+          - name: Linux ARM64
+            os: ubuntu-22.04-arm
+            args: ""
+          - name: Windows x64
+            os: windows-latest
+            args: ""
+          # One app for Apple Silicon and Intel Macs.
+          - name: macOS universal
+            os: macos-latest
+            args: "--target universal-apple-darwin"
+            rust_targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libdbus-1-dev librsvg2-dev \
+            libayatana-appindicator3-dev libgtk-3-dev pkg-config patchelf libfuse2 file
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.os }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  publish:
+    name: Publish release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Undraft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

@@ -22,6 +22,7 @@ import { type Action, loadMapping, mappingRows } from "./controls";
 import { MenuMusic, musicVolume } from "./music";
 import { type Quality, quality, setQuality } from "./graphics";
 import { buildDeviceTiles, profileSvg, renderDeviceTiles, renderWeek } from "./menu";
+import { wireUpdate } from "./update";
 
 type Screen = "start" | "menu" | "rider" | "settings" | "workout" | "map" | "rides" | "trainer" | "ride" | "pause" | "finish";
 
@@ -833,6 +834,7 @@ function wire() {
     world?.applyQuality();
   };
   $("controls-mapping").replaceChildren(...mappingRows((m) => (buttonMap = m)));
+  if (!compactWindow) wireUpdate();
   wireDebug();
   $("start-go").onclick = () => show("menu");
   $("menu-ride").onclick = () => startRide(selectedRoute || routes[0]?.id).catch(showError);

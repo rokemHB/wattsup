@@ -7,6 +7,7 @@
 mod idle;
 mod overlay;
 mod tiles;
+mod update;
 
 use std::time::Duration;
 
@@ -137,6 +138,17 @@ fn startup_from_env() -> StartupInfo {
 }
 
 type CmdResult<T> = Result<T, String>;
+
+/// This build's version and whether a newer release is out (one request to GitHub).
+#[tauri::command]
+async fn check_update() -> CmdResult<update::UpdateInfo> {
+    update::check().await
+}
+
+#[tauri::command]
+fn open_release_page(url: String) -> CmdResult<()> {
+    update::open(&url)
+}
 
 #[tauri::command]
 fn startup_info(state: State<'_, AppState>) -> StartupInfo {
@@ -481,7 +493,9 @@ fn main() {
             set_auto_shift,
             set_target_cadence,
             set_virtual_gearing,
-            press_button
+            press_button,
+            check_update,
+            open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running WattsUp");

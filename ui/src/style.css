@@ -193,6 +193,8 @@ button.big { font-size: 20px; padding: 14px 36px; }
 .week-stat span { font-size: 12px; color: var(--muted); }
 button.quiet { background: none; border: none; color: var(--muted); padding: 6px 2px; align-self: flex-start; font-size: 14px; }
 button.quiet:hover { color: var(--text); }
+button.update-note { align-self: flex-start; background: rgba(255, 196, 0, 0.12); border: 1px solid var(--accent); color: var(--accent); border-radius: 10px; padding: 8px 12px; font-size: 14px; font-weight: 600; }
+button.update-note:hover { background: rgba(255, 196, 0, 0.22); }
 .panel { display: flex; flex-direction: column; background: rgba(8, 10, 16, 0.55); }
 .panel[hidden] { display: none; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; max-width: 760px; width: 100%; margin: 0 auto 12px; }

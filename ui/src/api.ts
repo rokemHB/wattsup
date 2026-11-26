@@ -18,6 +18,7 @@ import type {
   ScanResult,
   ShiftDirection,
   StartupInfo,
+  UpdateInfo,
   Workout,
 } from "./types";
 
@@ -29,6 +30,9 @@ const COMPACT_H = 320;
 
 export const api = {
   startupInfo: () => invoke<StartupInfo>("startup_info"),
+  /** This build's version and a newer release, if GitHub has one. */
+  checkUpdate: () => invoke<UpdateInfo>("check_update"),
+  openReleasePage: (url: string) => invoke<void>("open_release_page", { url }),
   snapshot: () => invoke<EngineSnapshot>("snapshot"),
   /** Keeps the screen on (no screensaver or lock) while riding. */
   keepAwake: (on: boolean) => invoke<void>("keep_awake", { on }),
