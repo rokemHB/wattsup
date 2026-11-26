@@ -1,12 +1,14 @@
 name: Release
 
-# Pushing a tag vX.Y.Z builds the app for Linux, Windows and macOS and publishes a GitHub
-# Release with the installers attached. The notes come from that version's section in
-# CHANGELOG.md. See docs/RELEASING.md.
+# A tag vX.Y.Z builds the app for Linux, Windows and macOS and publishes a GitHub Release with
+# the installers attached; the notes come from that version's section in CHANGELOG.md.
+# A push to a release branch (release/X.Y) runs the same builds as a dress rehearsal: the
+# installers become workflow artifacts and nothing is published. See docs/RELEASING.md.
 
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+    branches: ["release/**"]
 
 permissions:
   contents: write
@@ -16,18 +18,22 @@ env:
 
 jobs:
   prepare:
-    name: Draft release
+    name: Check version${{ github.ref_type == 'tag' && ', draft release' || '' }}
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.draft.outputs.release_id }}
     steps:
       - uses: actions/checkout@v4
-      - name: Versions match the tag
-        run: tools/release/check-version.sh "${GITHUB_REF_NAME}"
-      - name: Notes from CHANGELOG.md
-        run: tools/release/notes.sh "${GITHUB_REF_NAME#v}" > notes.md && cat notes.md
+      - name: Versions agree (with the tag, if this is one)
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then tag="${GITHUB_REF_NAME}"
+          else tag="v$(node -p 'require("./package.json").version')"; fi
+          tools/release/check-version.sh "$tag"
+          tools/release/notes.sh "${tag#v}" > notes.md
+          cat notes.md
       - name: Draft the release
         id: draft
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -53,17 +59,21 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-22.04
             args: ""
+            artifact: linux-x86_64
           - name: Linux ARM64
             os: ubuntu-22.04-arm
             args: ""
+            artifact: linux-arm64
           - name: Windows x64
             os: windows-latest
             args: ""
+            artifact: windows-x64
           # One app for Apple Silicon and Intel Macs.
           - name: macOS universal
             os: macos-latest
             args: "--target universal-apple-darwin"
             rust_targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            artifact: macos-universal
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -85,16 +95,33 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Build and upload
+      # With a release id the installers are uploaded to that draft; without one (a release
+      # branch) tauri-action only builds them.
+      - name: Build${{ github.ref_type == 'tag' && ' and upload' || '' }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
+      - name: Keep the installers (dress rehearsal)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wattsup-${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            target/**/release/bundle/appimage/*.AppImage
+            target/**/release/bundle/deb/*.deb
+            target/**/release/bundle/rpm/*.rpm
+            target/**/release/bundle/dmg/*.dmg
+            target/**/release/bundle/msi/*.msi
+            target/**/release/bundle/nsis/*.exe
 
   publish:
     name: Publish release
+    if: github.ref_type == 'tag'
     needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:

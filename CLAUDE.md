@@ -35,7 +35,7 @@ that still need the real trainer.
 
 Downloads are GitHub Releases, built by `.github/workflows/release.yml` when a tag `vX.Y.Z`
 is pushed (Linux x86_64/ARM64 on Ubuntu 22.04, Windows, one universal macOS dmg, ad-hoc
-signed). `tools/release/bump.sh X.Y.Z` sets the version in all five places and the
+signed); pushes to `release/X.Y` run the same builds without publishing. `tools/release/bump.sh X.Y.Z` sets the version in all five places and the
 changelog heading; `check-version.sh` is what the workflow runs. Patch lines live on
 `release/X.Y` branches. Never move a published tag. Whole procedure: docs/RELEASING.md.
 User-facing changes go into `CHANGELOG.md` under Unreleased as they land. The menu's

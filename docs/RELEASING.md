@@ -27,13 +27,16 @@ them, or that has no section in `CHANGELOG.md`.
 - **master** is the trunk. It is always releasable: CI builds the app bundles for all three
   systems on every push.
 - **Feature branches** (`feat/...`, `fix/...`) are merged into master.
-- **Tags `vX.Y.Z`** mark releases. They are annotated tags on master, and pushing one starts
-  `.github/workflows/release.yml`. A published tag is never moved or deleted: if a release is
-  broken, the fix is a new patch release.
-- **Release branches `release/X.Y`** start at the tag `vX.Y.0` and carry the patch releases of
-  that line (`v0.1.1`, `v0.1.2`, ...). A fix lands on master first and is cherry-picked onto
-  the release branch, so it is never lost in the next minor release. Once `X.(Y+1).0` is out,
-  the old branch is kept for the record but no longer patched.
+- **Release branches `release/X.Y`** are cut from master when X.Y.0 is being prepared, and
+  then carry that line's patch releases (`0.1.1`, `0.1.2`, ...). Every push to one runs
+  `.github/workflows/release.yml` as a dress rehearsal: all four builds, with the installers
+  kept as workflow artifacts for 14 days and nothing published. A fix lands on master first
+  and is cherry-picked onto the release branch, so the next minor release never loses it.
+  Once `X.(Y+1).0` is out, the old branch stays for the record but is no longer patched.
+- **Tags `vX.Y.Z`** mark releases. They are annotated tags: on master for X.Y.0, on the
+  release branch for a patch. Pushing one runs the same workflow for real and publishes the
+  release. A published tag is never moved or deleted: if a release is broken, the fix is a new
+  patch release.
 
 ## Making a release
 
@@ -48,13 +51,15 @@ From master, or from `release/X.Y` for a patch:
    It moves the Unreleased notes under `## [0.2.0] - <today>`. Add the compare link at the
    bottom of the changelog
    (`[0.2.0]: https://github.com/rokemHB/wattsup/compare/v0.1.0...v0.2.0`).
-3. Run the five checks (see CLAUDE.md), commit (`Release 0.2.0`) and push.
-4. Tag and push the tag:
+3. Run the five checks (see CLAUDE.md), then commit (`Release 0.2.0`).
+4. Push the commit to the release branch (`git push origin HEAD:release/0.2`; for a new minor
+   version this creates the branch). Wait for the dress rehearsal under Actions → Release to
+   go green, and if you like, try its installers.
+5. For X.Y.0, merge that commit into master. Then tag the commit and push the tag:
    ```sh
    git tag -a v0.2.0 -m "WattsUp 0.2.0"
    git push origin v0.2.0
    ```
-5. For a minor release, start its release branch: `git push origin v0.2.0:refs/heads/release/0.2`.
 
 The workflow then:
 
