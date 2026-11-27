@@ -9,7 +9,10 @@ that still need the real trainer.
 
 ## Rules Robin has set
 
-- Feature work goes on a branch; Robin merges and decides. Never force-push.
+- Feature work goes on a branch, then to master. Merging and pushing master is part of
+  the work: the agent does it when the work is checked, as Robin would. "Robin decides"
+  means what other people contribute (their pull requests, issues), decided by Robin
+  together with the agent. Never force-push.
 - Before **every** commit run all five, in order, and fix what they report:
   `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, `./node_modules/.bin/tsc --noEmit`, `npx vitest run`.
