@@ -1,5 +1,8 @@
 # WattsUp
 
+[![Download](https://img.shields.io/github/v/release/rokemHB/wattsup?label=download&color=ffc400)](https://github.com/rokemHB/wattsup/releases/latest)
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/d7U8qynw7s)
+
 **Ride real climbs on your smart trainer. Use the Zwift Cog you paid for, with
 no subscription.**
 
@@ -85,6 +88,10 @@ It's free and stays free.
 WattsUp is early but rideable. The builds aren't signed with a paid certificate, so
 Windows and macOS ask once before they open it; the release page says what to
 click. What changed between versions is in [CHANGELOG.md](CHANGELOG.md).
+
+Questions, rides to show off, or something broken? Come to the
+**[WattsUp Discord](https://discord.gg/d7U8qynw7s)**. Bug reports are welcome there
+or as a [GitHub issue](https://github.com/rokemHB/wattsup/issues).
 
 To build it yourself you need Rust and Node.js (the full list per platform is in
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites)):
