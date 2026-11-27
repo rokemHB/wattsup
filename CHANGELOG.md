@@ -7,6 +7,10 @@ new features and a patch version (0.1.1) only fixes.
 
 ## [Unreleased]
 
+### Changed
+
+- A new app icon: the bolt inside a chainring.
+
 ## [0.1.0] - 2026-11-27
 
 The first public release: rideable, early, and built for a Zwift Cog and Click without a
